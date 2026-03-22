@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         default=None,
+        required=True,
         help="Optional output path. If omitted, keeps result in reducer temp dir.",
     )
     return parser

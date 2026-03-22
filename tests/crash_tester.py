@@ -17,15 +17,14 @@ def get_project_root():
 def get_fdp_header_dir():
     return os.path.join(get_project_root(), "include")
 
-CRASH_INPUT = os.getenv("CRASH_INPUT", None)
-EXTRA_FLAGS = os.getenv("EXTRA_FLAGS", None)
-FDP_TRACE = os.getenv("FDP_TRACE", None)
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
     parser.add_argument("crash_pattern", type=str, help="Regex pattern to identify the crash in the output")
+    parser.add_argument("--crash-input", type=str, default=None, help="Optional input to feed to the binary during execution")
+    parser.add_argument("--extra-flags", type=str, default=None, help="Optional extra compiler flags to use during compilation")
+    parser.add_argument("--fdp-trace", type=str, default=None, help="Optional path to write FDP trace logs during execution")  
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -35,8 +34,8 @@ def main() -> int:
     try:
         compile_cmd = [
             "clang++",
-            f"-I{get_fdp_header_dir()}",
-            "-DFDP_MIN_MODE_REPLAY",
+            f"-I{get_fdp_header_dir()}" if args.fdp_trace else "",
+            "-DFDP_MIN_MODE_REPLAY" if args.fdp_trace else "",
             "-fsanitize=address,fuzzer,undefined",
             "-g",
             "-O0",
@@ -44,8 +43,8 @@ def main() -> int:
             "-o",
             output_path
         ]
-        if EXTRA_FLAGS:
-            compile_cmd.extend(EXTRA_FLAGS.split())        
+        if args.extra_flags:
+            compile_cmd.extend(args.extra_flags.split())        
 
         compile_proc = subprocess.run(
             compile_cmd,
@@ -56,15 +55,16 @@ def main() -> int:
         )
         if compile_proc.returncode != 0:
             err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
-            print(f"Compilation failed: {err_msg}", file=sys.stderr)
+            print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
             return -1
 
         env = os.environ.copy()
         env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
         env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1"
-        env["FDP_TRACE_PATH"] = FDP_TRACE
+        if args.fdp_trace:
+            env["FDP_TRACE_PATH"] = args.fdp_trace
         
-        exec_cmd = [output_path, CRASH_INPUT] if CRASH_INPUT else [output_path]
+        exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
         run_proc = subprocess.run(
             exec_cmd,
             stdout=subprocess.PIPE,
@@ -87,6 +87,7 @@ def main() -> int:
             print(run_log)
             print("Crash behavior preserved.")
             return 77
+        print(f"Crash pattern did not match. Exit status: {status}\nExecution log:\n{run_log}")
         return 1
     finally:
         try:

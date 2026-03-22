@@ -5,7 +5,9 @@ from pathlib import Path
 
 from harnessreducer.fdp_transform import inline_source, inject_ids, load_trace
 from harnessreducer.reducer_runner import (
+    check_reducer_crash_pattern,
     check_tree_reducer,
+    check_harness_compilation,
     compile_dump_mode_harness,
     configure_work_dir,
     dump_fdp_trace,
@@ -39,7 +41,7 @@ def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> s
 
     tagged_harness_file = str(Path(get_work_dir()) / Path(harness_path).name)
     Path(tagged_harness_file).write_text(transformed, encoding="utf-8")
-    print(f"Injected {count} FDP callsite IDs into {harness_path}")
+    print(f"Injected {count} FDP callsite IDs into {tagged_harness_file}")
     return tagged_harness_file
 
 
@@ -54,6 +56,8 @@ def inline_literals_in_reduced_harness(reduced_harness_path: str, fdp_trace_file
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     check_tree_reducer()
+    check_harness_compilation(config.harness_path, config.extra_flags)
+    check_reducer_crash_pattern(config.harness_path, config.crash_pattern, config.crash_input, config.extra_flags)  
     tagged_harness_file = tag_harness_with_fdp_ids(
         config.harness_path,
         start_id=config.start_id,

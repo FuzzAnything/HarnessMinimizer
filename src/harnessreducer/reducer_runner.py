@@ -76,11 +76,46 @@ def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = 
 
 
 def check_tree_reducer() -> None:
+    print("[+] Checking for tree-reducer availability...")
     run_command(
         ["treereduce-c", "--help"],
         "tree-reducer is not available. Please ensure it is installed and in your PATH",
     )
+    print("[+] tree-reducer is available.")
 
+def check_harness_compilation(harness_path: str, extra_flags: str | None) -> None:
+    print("[+] Checking harness compilation...")
+    compile_cmd = [
+        "clang++",
+        "-fsanitize=address,fuzzer,undefined",
+        "-g",
+        "-O0",
+        harness_path,
+        "-o",
+        os.devnull,
+    ]
+    if extra_flags:
+        compile_cmd.extend(extra_flags.split())
+
+    run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
+    print("[+] Harness compiles successfully.")
+
+def check_reducer_crash_pattern(harness_path: str, crash_pattern: str, crash_input: str | None, extra_flags: str | None) -> None:
+    print("[+] Checking crash pattern validity...")
+    if not crash_pattern:
+        raise ValueError("Crash pattern cannot be empty.")
+    cmd = [
+        get_crash_tester_path(),
+        harness_path,
+        crash_pattern,
+        "--crash-input", crash_input or "",
+        "--extra-flags", extra_flags or "",
+    ]
+    proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
+    if proc.returncode != 77:
+        print("Tester command: " + " ".join(cmd))
+        raise ValueError(f"Crash pattern did not match the crash behavior. Tester output:\n{proc.stdout}\n{proc.stderr}")
+    print("[+] Crash pattern is valid.")
 
 def compile_dump_mode_harness(harness_path: str, extra_flags: str | None) -> str:
     tagged_harness_bin = os.path.join(get_work_dir(), "tagged_harness.out")
@@ -140,15 +175,13 @@ def run_treereducer(
         get_crash_tester_path(),
         "@@.cpp",
         crash_pattern,
+        "--crash-input", crash_input or "",
+        "--extra-flags", extra_args or "",
+        "--fdp-trace", fdp_trace_file,
     ]
-    env = os.environ.copy()
-    env["FDP_TRACE_PATH"] = fdp_trace_file
-    env["EXTRA_FLAGS"] = extra_args or ""
-    env["CRASH_INPUT"] = crash_input or ""
 
     proc = subprocess.run(
         cmd,
-        env=env,
         stderr=subprocess.STDOUT,
         text=True,
         check=False,
