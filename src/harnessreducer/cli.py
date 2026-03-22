@@ -36,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a fixed working directory instead of creating a temporary directory.",
     )
     parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Use LLM to perform final semantic minimization of the harness.",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         default=None,
@@ -55,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         extra_flags=args.extra_flags,
         crash_input=args.crash_input,
         work_dir=args.work_dir,
+        use_llm=args.llm,
     )
     result = reduce_with_config(config)
     reduced_harness = result.reduced_harness

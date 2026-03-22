@@ -5,6 +5,8 @@ from pathlib import Path
 
 from harnessreducer.fdp_transform import inline_source, inject_ids, load_trace
 from harnessreducer.reducer_runner import (
+    get_crash_tester_path,
+    run_command,
     check_reducer_crash_pattern,
     check_tree_reducer,
     check_harness_compilation,
@@ -26,6 +28,7 @@ class ReductionConfig:
     work_dir: str | None = None
     start_id: int = 100000
     marker: str = "FDP_ID"
+    use_llm: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,8 +77,15 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     )
     format_reduced_harness(reduced_harness)
     inline_literals_in_reduced_harness(reduced_harness, fdp_trace_file)
+    
+    if config.use_llm:
+        from harnessreducer.llm_reducer import apply_llm_reduction
+        final_harness = apply_llm_reduction(reduced_harness, config.crash_pattern, config.crash_input, config.extra_flags, fdp_trace_file)
+    else:
+        final_harness = reduced_harness
+
     return ReductionResult(
-        reduced_harness=reduced_harness,
+        reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
     )
@@ -87,6 +97,7 @@ def process(
     crash_pattern: str,
     crash_input: str | None,
     work_dir: str | None = None,
+    use_llm: bool = False,
 ) -> str:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -94,5 +105,7 @@ def process(
         extra_flags=extra_flags,
         crash_input=crash_input,
         work_dir=work_dir,
+        use_llm=use_llm,
     )
     return reduce_with_config(config).reduced_harness
+
