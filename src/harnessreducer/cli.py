@@ -31,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to crashing input file fed to the harness binary.",
     )
     parser.add_argument(
+        "--work-dir",
+        default=None,
+        help="Use a fixed working directory instead of creating a temporary directory.",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         default=None,
@@ -48,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         crash_pattern=args.crash_pattern,
         extra_flags=args.extra_flags,
         crash_input=args.crash_input,
+        work_dir=args.work_dir,
     )
     result = reduce_with_config(config)
     reduced_harness = result.reduced_harness

@@ -15,9 +15,7 @@ cargo install treereduce-c
 2. Use a Python 3.12+ environment and install project dependencies:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync
 ```
 
 3. Ensure `clang++` is available in `PATH`.
@@ -43,42 +41,12 @@ clang++ -std=c++17 -Iinclude -O0 -g \
 	-o /tmp/fdp_complex_demo.out
 ```
 
-### Run With A Crashing Input
-
-```bash
-python - <<'PY'
-from pathlib import Path
-data = b"FDPDEMO!" + bytes([0x42, 0x99, 0x00, 0x01, 0x01]) + b"A" * 16
-Path("/tmp/fdp_crash.bin").write_bytes(data)
-print("wrote /tmp/fdp_crash.bin")
-PY
-
-/tmp/fdp_complex_demo.out /tmp/fdp_crash.bin
-```
-
-Expected result: process exits non-zero due to the intentionally triggered crash.
-
-### Run With A Non-Crashing Input
-
-```bash
-python - <<'PY'
-from pathlib import Path
-data = b"FDPDEMO!" + bytes([0x41, 0x99, 0x00, 0x01, 0x01]) + b"B" * 16
-Path("/tmp/fdp_safe.bin").write_bytes(data)
-print("wrote /tmp/fdp_safe.bin")
-PY
-
-/tmp/fdp_complex_demo.out /tmp/fdp_safe.bin
-```
-
-Expected result: process exits `0`.
-
 ## Testing
 
 Run automated tests (compiles and executes the example):
 
 ```bash
-python -m unittest tests/test_fdp_complex_example.py -v
+uv run python -m unittest tests/test_fdp_complex_example.py -v
 ```
 
 ## CLI Usage
@@ -89,10 +57,16 @@ After installation, run:
 harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
 ```
 
+Use a fixed working directory (no temporary directory creation):
+
+```bash
+harnessreducer <harness.cpp> <crash_regex> --work-dir ./workdir
+```
+
 Equivalent module invocation:
 
 ```bash
-python -m harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
+uv run python -m harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
 ```
 
 ## Python API Usage
@@ -120,3 +94,4 @@ print(result.reduced_harness)
 	- `harnessreducer.fdp_transform`: FDP AST tagging + trace inlining
 	- `harnessreducer.reducer_runner`: compile/run/tree-reducer execution
 - Legacy compatibility entrypoint is still available at `python -m harnessreducer.main`.
+- Legacy compatibility entrypoint is still available at `uv run python -m harnessreducer.main`.

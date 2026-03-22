@@ -119,20 +119,3 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   return 0;
 }
-
-int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "Usage: " << argv[0] << " <input-file>" << std::endl;
-    return 2;
-  }
-
-  std::ifstream ifs(argv[1], std::ios::binary);
-  if (!ifs) {
-    std::cerr << "Failed to open input: " << argv[1] << std::endl;
-    return 2;
-  }
-
-  std::vector<uint8_t> data((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
-  return LLVMFuzzerTestOneInput(data.data(), data.size());
-}

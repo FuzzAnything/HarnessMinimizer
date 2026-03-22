@@ -10,12 +10,14 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.run_treereducer")
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
     @patch("harnessreducer.api.check_tree_reducer")
     def test_reduce_with_config_returns_result(
         self,
         mock_check,
         mock_tag,
+        mock_configure,
         mock_compile,
         mock_dump,
         mock_reduce,
@@ -32,6 +34,7 @@ class TestApiPipeline(unittest.TestCase):
             crash_pattern="AddressSanitizer",
             extra_flags="-std=c++17",
             crash_input="seed.bin",
+            work_dir="/tmp/workdir",
             start_id=123,
             marker="M",
         )
@@ -42,6 +45,7 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(result.tagged_harness, "/tmp/tagged.cpp")
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
+        mock_configure.assert_called_once_with("/tmp/workdir")
         mock_tag.assert_called_once_with("a.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17")
         mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin")

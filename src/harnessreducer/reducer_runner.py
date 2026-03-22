@@ -7,12 +7,18 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-TREEDUCER_DIR = tempfile.mkdtemp(prefix="harness_reducer_")
+TREEDUCER_DIR: str | None = None
+_IS_USER_WORK_DIR = False
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 
 
 def cleanup() -> None:
+    global TREEDUCER_DIR
+
+    if TREEDUCER_DIR is None or _IS_USER_WORK_DIR:
+        return
+
     try:
         shutil.rmtree(TREEDUCER_DIR, ignore_errors=True)
     except OSError:
@@ -34,7 +40,27 @@ def get_crash_tester_path() -> str:
     return str(get_project_root() / "tests" / "crash_tester.py")
 
 
-def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def configure_work_dir(work_dir: str | None) -> str:
+    global TREEDUCER_DIR, _IS_USER_WORK_DIR
+
+    if work_dir:
+        path = str(Path(work_dir).expanduser().resolve())
+        Path(path).mkdir(parents=True, exist_ok=True)
+        TREEDUCER_DIR = path
+        _IS_USER_WORK_DIR = True
+        return TREEDUCER_DIR
+
+    if TREEDUCER_DIR is None:
+        TREEDUCER_DIR = tempfile.mkdtemp(prefix="harness_reducer_")
+        _IS_USER_WORK_DIR = False
+    return TREEDUCER_DIR
+
+
+def get_work_dir() -> str:
+    return configure_work_dir(None)
+
+
+def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -43,7 +69,7 @@ def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = 
         env=env,
         check=False,
     )
-    if proc.returncode != 0:
+    if proc.returncode != 0 and not ignore_errors:
         err_msg = proc.stderr.strip() or proc.stdout.strip() or "Unknown error"
         raise RuntimeError(f"{error_prefix}: {err_msg}")
     return proc
@@ -51,13 +77,13 @@ def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = 
 
 def check_tree_reducer() -> None:
     run_command(
-        ["tree-reducer-c", "--help"],
+        ["treereduce-c", "--help"],
         "tree-reducer is not available. Please ensure it is installed and in your PATH",
     )
 
 
 def compile_dump_mode_harness(harness_path: str, extra_flags: str | None) -> str:
-    tagged_harness_bin = os.path.join(TREEDUCER_DIR, "tagged_harness.out")
+    tagged_harness_bin = os.path.join(get_work_dir(), "tagged_harness.out")
     compile_cmd = [
         "clang++",
         "-DFDP_MIN_MODE_DUMP",
@@ -77,12 +103,12 @@ def compile_dump_mode_harness(harness_path: str, extra_flags: str | None) -> str
 
 
 def dump_fdp_trace(harness_bin: str, crash_input: str | None) -> str:
-    fdp_trace_file = os.path.join(TREEDUCER_DIR, "fdp_trace.log")
+    fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
     env = os.environ.copy()
     env["FDP_TRACE_PATH"] = fdp_trace_file
 
     exec_cmd = [harness_bin, crash_input] if crash_input else [harness_bin]
-    run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env)
+    run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env, ignore_errors=True)
 
     if not os.path.exists(fdp_trace_file):
         raise RuntimeError("FDP trace file was not created as expected.")
@@ -96,9 +122,9 @@ def run_treereducer(
     extra_args: str | None,
     crash_input: str | None,
 ) -> str:
-    reduced_harness = os.path.join(TREEDUCER_DIR, "reduced_harness.cpp")
+    reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
-        "tree-reducer-c",
+        "treereduce-c",
         "-j",
         "60",
         "-s",
@@ -123,7 +149,6 @@ def run_treereducer(
     proc = subprocess.run(
         cmd,
         env=env,
-        stdout=subprocess.STDOUT,
         stderr=subprocess.STDOUT,
         text=True,
         check=False,

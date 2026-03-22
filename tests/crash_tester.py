@@ -62,8 +62,7 @@ def main() -> int:
         env = os.environ.copy()
         env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
         env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1"
-        if args.is_fdp_mode:
-            env["FDP_TRACE_PATH"] = FDP_TRACE
+        env["FDP_TRACE_PATH"] = FDP_TRACE
         
         exec_cmd = [output_path, CRASH_INPUT] if CRASH_INPUT else [output_path]
         run_proc = subprocess.run(
