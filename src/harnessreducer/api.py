@@ -9,6 +9,7 @@ from harnessreducer.reducer_runner import (
     run_command,
     check_reducer_crash_pattern,
     check_tree_reducer,
+    extract_crash_pattern_from_output,
     check_harness_compilation,
     compile_dump_mode_harness,
     configure_work_dir,
@@ -22,7 +23,6 @@ from harnessreducer.reducer_runner import (
 @dataclass(frozen=True)
 class ReductionConfig:
     harness_path: str
-    crash_pattern: str
     extra_flags: str | None = None
     crash_input: str | None = None
     work_dir: str | None = None
@@ -60,7 +60,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.extra_flags)
-    check_reducer_crash_pattern(config.harness_path, config.crash_pattern, config.crash_input, config.extra_flags)  
+    crash_pattern = extract_crash_pattern_from_output(config.crash_input)
+    print(f"[+] Extracted crash pattern: {crash_pattern}")
+    check_reducer_crash_pattern(config.harness_path, crash_pattern, config.crash_input, config.extra_flags)
     tagged_harness_file = tag_harness_with_fdp_ids(
         config.harness_path,
         start_id=config.start_id,
@@ -71,7 +73,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     reduced_harness = run_treereducer(
         tagged_harness_file,
         fdp_trace_file,
-        config.crash_pattern,
+        crash_pattern,
         config.extra_flags,
         config.crash_input,
     )
@@ -80,7 +82,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     
     if config.use_llm:
         from harnessreducer.llm_reducer import apply_llm_reduction
-        final_harness = apply_llm_reduction(reduced_harness, config.crash_pattern, config.crash_input, config.extra_flags, fdp_trace_file)
+        final_harness = apply_llm_reduction(reduced_harness, crash_pattern, config.crash_input, config.extra_flags, fdp_trace_file)
     else:
         final_harness = reduced_harness
 
@@ -94,14 +96,12 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 def process(
     harness_path: str,
     extra_flags: str | None,
-    crash_pattern: str,
     crash_input: str | None,
     work_dir: str | None = None,
     use_llm: bool = False,
 ) -> str:
     config = ReductionConfig(
         harness_path=harness_path,
-        crash_pattern=crash_pattern,
         extra_flags=extra_flags,
         crash_input=crash_input,
         work_dir=work_dir,

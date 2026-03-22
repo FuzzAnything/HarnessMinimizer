@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +28,13 @@ def cleanup() -> None:
 
 atexit.register(cleanup)
 
+ASAN_PATTERN = re.compile(r"(?:ERROR|SUMMARY):\s*AddressSanitizer:\s*[\w-]+")
+LEAK_PATTERN = re.compile(
+    r"SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\."
+)
+UBSAN_PATTERN = re.compile(
+    r"runtime error:\s.*"
+)
 
 def get_project_root() -> Path:
     return PROJECT_ROOT
@@ -85,6 +93,8 @@ def check_tree_reducer() -> None:
 
 def check_harness_compilation(harness_path: str, extra_flags: str | None) -> None:
     print("[+] Checking harness compilation...")
+    work_dir = get_work_dir()
+    output_bin = os.path.join(work_dir, "poc.out")
     compile_cmd = [
         "clang++",
         "-fsanitize=address,fuzzer,undefined",
@@ -92,13 +102,37 @@ def check_harness_compilation(harness_path: str, extra_flags: str | None) -> Non
         "-O0",
         harness_path,
         "-o",
-        os.devnull,
+        output_bin,
     ]
     if extra_flags:
         compile_cmd.extend(extra_flags.split())
 
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
+
+def extract_crash_pattern_from_output(crash_input: str | None) -> str:
+    work_dir = get_work_dir()
+    output_bin = os.path.join(work_dir, "poc.out")
+    cmd = [output_bin]
+    if crash_input:
+        cmd.append(crash_input)
+    proc = run_command(cmd, "Failed to execute harness for crash pattern extraction", ignore_errors=True)
+    output = proc.stdout + "\n" + proc.stderr
+
+    asan_match = ASAN_PATTERN.search(output)
+    if asan_match:
+        return asan_match.group(0)
+
+    leak_match = LEAK_PATTERN.search(output)
+    if leak_match:
+        return leak_match.group(0)
+
+    ubsan_match = UBSAN_PATTERN.search(output)
+    if ubsan_match:
+        return ubsan_match.group(0)
+
+    raise ValueError("Could not extract a crash pattern from the tester output: \n" + output)
+    
 
 def check_reducer_crash_pattern(harness_path: str, crash_pattern: str, crash_input: str | None, extra_flags: str | None) -> None:
     print("[+] Checking crash pattern validity...")
@@ -166,9 +200,10 @@ def run_treereducer(
         harness_path,
         "-o",
         reduced_harness,
-        "--stable",
-        "--min-reduction",
-        "1",
+        #"--stable",
+        #"--min-reduction",
+        #"1",
+        "--fast",
         "--interesting-exit-code",
         "77",
         "--",

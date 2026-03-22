@@ -17,10 +17,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
     parser.add_argument(
-        "crash_pattern",
-        help="Regex pattern used by crash tester to identify the target crash.",
-    )
-    parser.add_argument(
         "--extra-flags",
         default=None,
         help="Extra compiler flags passed to clang++ during build steps.",
@@ -56,7 +52,6 @@ def main(argv: list[str] | None = None) -> int:
 
     config = ReductionConfig(
         harness_path=args.harness,
-        crash_pattern=args.crash_pattern,
         extra_flags=args.extra_flags,
         crash_input=args.crash_input,
         work_dir=args.work_dir,

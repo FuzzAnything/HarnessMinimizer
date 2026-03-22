@@ -102,6 +102,7 @@ def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_inp
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     print("Applying LLM semantic reduction...")
     transformed = llm_semantic_reduce(source)
+    print(f"LLM reduced harness length: {len(transformed) if transformed else 0}\n")
     
     if not transformed:
         print("[-] LLM semantic reduction failed.")
@@ -128,6 +129,7 @@ def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_inp
         return llm_reduced_path
     else:
         print("[-] LLM reduction failed to preserve the crash. Falling back to earlier reduced version.")
+        print(f"LLM reduced version for reference: \n{transformed}")
         return reduced_harness_path
 
 if __name__ == "__main__":
