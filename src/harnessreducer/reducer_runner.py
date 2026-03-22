@@ -204,6 +204,8 @@ def run_treereducer(
         #"--min-reduction",
         #"1",
         "--fast",
+        "--timeout",
+        "300",
         "--interesting-exit-code",
         "77",
         "--",

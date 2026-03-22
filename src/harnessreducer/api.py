@@ -19,6 +19,13 @@ from harnessreducer.reducer_runner import (
     run_treereducer,
 )
 
+ADDITIONAL_HEADES = [
+    "#include <deque>",
+    "#include <fstream>",
+    "#include <map>",
+    "#include <mutex>",
+    "#include <sstream>"
+]
 
 @dataclass(frozen=True)
 class ReductionConfig:
@@ -86,6 +93,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     else:
         final_harness = reduced_harness
 
+    original_content = Path(final_harness).read_text(encoding="utf-8", errors="ignore")
+    headers_block = "\n".join(ADDITIONAL_HEADES) + "\n"
+    Path(final_harness).write_text(headers_block + original_content, encoding="utf-8")
     return ReductionResult(
         reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,
