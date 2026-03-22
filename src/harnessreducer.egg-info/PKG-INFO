@@ -1,3 +1,12 @@
+Metadata-Version: 2.4
+Name: harnessreducer
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: tree-sitter>=0.25.2
+Requires-Dist: tree-sitter-cpp>=0.23.4
+
 # HarnessReducer
 
 HarnessReducer is a reducer workflow for library fuzzing harnesses.
@@ -95,28 +104,8 @@ Equivalent module invocation:
 python -m harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
 ```
 
-## Python API Usage
-
-```python
-from harnessreducer import ReductionConfig, reduce_with_config
-
-config = ReductionConfig(
-	harness_path="examples/fdp_complex_crash_harness.cpp",
-	crash_pattern="AddressSanitizer|runtime error",
-	extra_flags="-std=c++17",
-	crash_input="seed.bin",
-)
-
-result = reduce_with_config(config)
-print(result.reduced_harness)
-```
-
 ## Notes
 
 - FDP header is expected at `include/fuzzer/FuzzedDataProvider.h`.
 - The reducer pipeline Python code is in `src/harnessreducer/`.
-- Internal layering:
-	- `harnessreducer.api`: orchestration/public API
-	- `harnessreducer.fdp_transform`: FDP AST tagging + trace inlining
-	- `harnessreducer.reducer_runner`: compile/run/tree-reducer execution
 - Legacy compatibility entrypoint is still available at `python -m harnessreducer.main`.
