@@ -20,6 +20,7 @@ from harnessreducer.reducer_runner import (
 )
 
 ADDITIONAL_HEADES = [
+    "#include <vector>",
     "#include <deque>",
     "#include <fstream>",
     "#include <map>",
@@ -55,12 +56,50 @@ def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> s
     return tagged_harness_file
 
 
-def inline_literals_in_reduced_harness(reduced_harness_path: str, fdp_trace_file: str) -> None:
+def _prepend_additional_headers(harness_path: str) -> None:
+    content = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
+    missing = [header for header in ADDITIONAL_HEADES if header not in content]
+    if not missing:
+        return
+    headers_block = "\n".join(missing) + "\n"
+    Path(harness_path).write_text(headers_block + content, encoding="utf-8")
+
+
+def inline_literals_in_reduced_harness(
+    reduced_harness_path: str,
+    fdp_trace_file: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    extra_flags: str | None,
+) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
     transformed, count = inline_source(source, streams)
-    Path(reduced_harness_path).write_text(transformed, encoding="utf-8")
-    print(f"Inlined {count} FDP calls into {reduced_harness_path}")
+    inline_harness_path = str(Path(reduced_harness_path).with_suffix(".inline.cpp"))
+    Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+    _prepend_additional_headers(inline_harness_path)
+    print(f"Inlined {count} FDP calls into {inline_harness_path}")
+
+    print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
+    cmd = [
+        get_crash_tester_path(),
+        inline_harness_path,
+        crash_pattern,
+        "--crash-input",
+        crash_input or "",
+        "--extra-flags",
+        extra_flags or "",
+        "--fdp-trace",
+        fdp_trace_file,
+    ]
+    proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
+    if proc.returncode == 77:
+        print("[+] Inline reduction preserved crash behavior.")
+        return inline_harness_path
+
+    print("[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness.")
+    _prepend_additional_headers(reduced_harness_path)
+    return reduced_harness_path
 
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
@@ -85,17 +124,26 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.crash_input,
     )
     format_reduced_harness(reduced_harness)
-    inline_literals_in_reduced_harness(reduced_harness, fdp_trace_file)
-    
+    post_inline_harness = inline_literals_in_reduced_harness(
+        reduced_harness,
+        fdp_trace_file,
+        crash_pattern,
+        config.crash_input,
+        config.extra_flags,
+    )
+
     if config.use_llm:
         from harnessreducer.llm_reducer import apply_llm_reduction
-        final_harness = apply_llm_reduction(reduced_harness, crash_pattern, config.crash_input, config.extra_flags, fdp_trace_file)
+        final_harness = apply_llm_reduction(
+            post_inline_harness,
+            crash_pattern,
+            config.crash_input,
+            config.extra_flags,
+            fdp_trace_file,
+        )
     else:
-        final_harness = reduced_harness
+        final_harness = post_inline_harness
 
-    original_content = Path(final_harness).read_text(encoding="utf-8", errors="ignore")
-    headers_block = "\n".join(ADDITIONAL_HEADES) + "\n"
-    Path(final_harness).write_text(headers_block + original_content, encoding="utf-8")
     return ReductionResult(
         reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,

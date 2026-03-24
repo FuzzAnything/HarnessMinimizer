@@ -79,15 +79,12 @@ def main() -> int:
         run_log = run_proc.stdout + run_proc.stderr
 
         # Some libFuzzer/ASAN crash paths print fatal markers but still exit 0.
-        if status == 77 and re.search(
-            args.crash_pattern,
-            run_log,
-        ):
+        if status == 77 and run_log.find(args.crash_pattern) != -1:
             print("execution log: ")
             print(run_log)
             print("Crash behavior preserved.")
             return 77
-        print(f"Crash pattern did not match. Exit status: {status}\nExecution log:\n{run_log}")
+        print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
         return 1
     finally:
         try:

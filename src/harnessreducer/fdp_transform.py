@@ -281,13 +281,16 @@ def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tu
         ):
             if record_type == "B":
                 hex_list = ", ".join(f"0x{b:02x}" for b in value)
-                literal = f"{{{hex_list}}}"
+                literal = f"std::vector<unsigned char>{{{hex_list}}}"
             else:
-                literal = "{}"
+                literal = "std::vector<unsigned char>{}"
         elif call.method == "ConsumeData":
             literal = str(len(value)) if record_type == "B" else "0"
         elif call.method == "remaining_bytes":
-            literal = str(value) if isinstance(value, int) else "0"
+            if isinstance(value, int):
+                literal = f"static_cast<size_t>({value})"
+            else:
+                literal = "static_cast<size_t>(0)"
         else:
             literal = str(value)
 
