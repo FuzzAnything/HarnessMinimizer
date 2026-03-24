@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from harnessreducer.fdp_transform import inline_source, inject_ids, load_trace
+from harnessreducer.fdp_transform import inline_source, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     get_crash_tester_path,
     run_command,
@@ -71,6 +71,7 @@ def inline_literals_in_reduced_harness(
     crash_pattern: str,
     crash_input: str | None,
     extra_flags: str | None,
+    start_id: int = 100000,
 ) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
@@ -98,6 +99,11 @@ def inline_literals_in_reduced_harness(
         return inline_harness_path
 
     print("[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness.")
+    fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
+    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
+    if removed:
+        Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
+        print(f"Removed {removed} injected FDP IDs from fallback harness.")
     _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
 
@@ -130,6 +136,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         crash_pattern,
         config.crash_input,
         config.extra_flags,
+        config.start_id,
     )
 
     if config.use_llm:

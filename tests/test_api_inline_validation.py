@@ -36,7 +36,10 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
 
 def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> None:
     reduced = tmp_path / "reduced.cpp"
-    reduced.write_text("int x = 0;\n", encoding="utf-8")
+    reduced.write_text(
+        "auto bytes = fdp->ConsumeBytes<uint8_t>(length, 100001);\n",
+        encoding="utf-8",
+    )
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
@@ -61,3 +64,5 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
     content = reduced.read_text(encoding="utf-8")
     for header in ADDITIONAL_HEADES:
         assert header in content
+    assert "ConsumeBytes<uint8_t>(length)" in content
+    assert "100001" not in content

@@ -305,3 +305,58 @@ def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tu
         output = output[:start] + literal + output[end:]
 
     return output, replaced
+
+
+def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
+    source_bytes = source.encode("utf-8")
+    tree = PARSER.parse(source_bytes)
+    replacements: list[tuple[int, int, str]] = []
+    removed = 0
+
+    for node in _iter_nodes(tree.root_node):
+        if node.type != "call_expression":
+            continue
+        if not _is_supported_fdp_call(node, source_bytes):
+            continue
+
+        args = node.child_by_field_name("arguments")
+        if args is None or args.type != "argument_list":
+            continue
+
+        arg_nodes = [child for child in args.named_children if child.type != "comment"]
+        if not arg_nodes:
+            continue
+
+        last = arg_nodes[-1]
+        last_value = _parse_int_literal(_node_text(source_bytes, last))
+        if last_value is None or last_value < start_id or last_value >= start_id + 100:
+            continue
+
+        arg_start = args.start_byte + 1
+        arg_end = args.end_byte - 1
+        if len(arg_nodes) == 1:
+            replacements.append((arg_start, arg_end, ""))
+            removed += 1
+            continue
+
+        prev = arg_nodes[-2]
+        remove_start = prev.end_byte
+        remove_end = last.end_byte
+
+        for child in args.children:
+            if child.type != ",":
+                continue
+            if child.start_byte >= prev.end_byte and child.end_byte <= last.start_byte:
+                remove_start = child.start_byte
+
+        replacements.append((remove_start, remove_end, ""))
+        removed += 1
+
+    if not replacements:
+        return source, 0
+
+    output = source
+    for start, end, replacement in sorted(replacements, key=lambda item: item[0], reverse=True):
+        output = output[:start] + replacement + output[end:]
+
+    return output, removed
