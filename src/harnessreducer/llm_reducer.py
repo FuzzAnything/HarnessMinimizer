@@ -119,8 +119,7 @@ def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_inp
         llm_reduced_path,
         crash_pattern,
         "--crash-input", crash_input or "",
-        "--extra-flags", extra_flags or "",
-        "--fdp-trace", fdp_trace_file
+        "--extra-flags", extra_flags or ""
     ]
     
     proc = run_command(cmd, "LLM reduction validation failed.", ignore_errors=True)
