@@ -110,16 +110,20 @@ def check_harness_compilation(harness_path: str, extra_flags: str | None) -> Non
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
 
-def extract_crash_pattern_from_output(crash_input: str | None) -> str:
+def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
     cmd = [output_bin]
     if crash_input:
         cmd.append(crash_input)
     env = os.environ.copy()
-    env["UBSAN_OPTIONS"] = "print_stacktrace=1:halt_on_error=1"
-    proc = run_command(cmd, "Failed to execute harness for crash pattern extraction", ignore_errors=True)
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:symbolize=0"
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
+    proc = run_command(cmd, env=env, error_prefix="Failed to execute harness for crash pattern extraction", ignore_errors=True)
     output = proc.stdout + "\n" + proc.stderr
+    if proc.returncode != 77:
+        print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
+        return None
 
     asan_match = ASAN_PATTERN.search(output)
     if asan_match:
@@ -133,8 +137,8 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str:
     if ubsan_match:
         return ubsan_match.group(0)
 
-    raise ValueError("Could not extract a crash pattern from the tester output: \n" + output)
-    
+    raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
+
 
 def check_reducer_crash_pattern(harness_path: str, crash_pattern: str, crash_input: str | None, extra_flags: str | None) -> None:
     print("[+] Checking crash pattern validity...")

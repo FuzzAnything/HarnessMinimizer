@@ -44,6 +44,7 @@ class ReductionResult:
     reduced_harness: str
     tagged_harness: str
     fdp_trace: str
+    success: bool = True
 
 
 def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> str:
@@ -113,6 +114,14 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.extra_flags)
     crash_pattern = extract_crash_pattern_from_output(config.crash_input)
+    if not crash_pattern:
+        return ReductionResult(
+            reduced_harness="",
+            tagged_harness="",
+            fdp_trace="",
+            success=False
+        )
+
     print(f"[+] Extracted crash pattern: {crash_pattern}")
     check_reducer_crash_pattern(config.harness_path, crash_pattern, config.crash_input, config.extra_flags)
     tagged_harness_file = tag_harness_with_fdp_ids(
@@ -155,6 +164,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
+        success=True
     )
 
 
@@ -164,7 +174,7 @@ def process(
     crash_input: str | None,
     work_dir: str | None = None,
     use_llm: bool = False,
-) -> str:
+) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
         extra_flags=extra_flags,
@@ -172,5 +182,6 @@ def process(
         work_dir=work_dir,
         use_llm=use_llm,
     )
-    return reduce_with_config(config).reduced_harness
+    result = reduce_with_config(config)
+    return result.reduced_harness if result.success else None
 

@@ -58,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
         use_llm=args.llm,
     )
     result = reduce_with_config(config)
+    if not result.success:
+        print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
+        return 0
     reduced_harness = result.reduced_harness
 
     if args.output:
