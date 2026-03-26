@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <limits>
+#include <iomanip>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -85,7 +87,15 @@ class TraceStore {
     std::ofstream out(GetTracePath(), std::ios::app);
     if (!out)
       return;
-    out << "S " << line << " " << value << "\n";
+    out << "S " << line << " ";
+    if (std::isfinite(value) && std::truncl(value) == value) {
+      // Preserve integral values exactly and avoid scientific notation.
+      out << std::fixed << std::setprecision(0) << value;
+    } else {
+      // Use long double round-trip precision for non-integral values.
+      out << std::setprecision(std::numeric_limits<long double>::max_digits10) << value;
+    }
+    out << "\n";
   }
 
   void DumpRemaining(int line, size_t value) {

@@ -230,7 +230,7 @@ def run_treereducer(
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout}")
+        raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

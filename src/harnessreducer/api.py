@@ -25,7 +25,9 @@ ADDITIONAL_HEADES = [
     "#include <fstream>",
     "#include <map>",
     "#include <mutex>",
-    "#include <sstream>"
+    "#include <sstream>",
+    "#include <cmath>",
+    "#include <iomanip>"
 ]
 
 @dataclass(frozen=True)

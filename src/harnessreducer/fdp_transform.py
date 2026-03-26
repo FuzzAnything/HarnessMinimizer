@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Deque
 
@@ -226,9 +227,21 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
 
         record_type = parts[0]
         if record_type == "S":
-            val: Any = float(parts[2])
-            if val.is_integer():
-                val = int(val)
+            # Parse via Decimal to preserve large integer precision even in scientific notation.
+            value_str = parts[2]
+            val: Any
+            try:
+                val = int(value_str, 0)
+            except ValueError:
+                try:
+                    dec = Decimal(value_str)
+                except (InvalidOperation, ValueError):
+                    val = float(value_str)
+                else:
+                    if dec == dec.to_integral_value():
+                        val = int(dec)
+                    else:
+                        val = float(dec)
             streams[key].append(("S", val))
         elif record_type == "R":
             streams[key].append(("R", int(parts[2], 0)))
