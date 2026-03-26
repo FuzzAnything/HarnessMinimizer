@@ -285,7 +285,7 @@ class FuzzedDataProvider {
 
 #define FDP_REPLAY_SCALAR(type) \
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    return fdp_min_internal::TraceStore::Instance().ReplayScalar<type>(line, 0); \
+    return fdp_min_internal::TraceStore::Instance().ReplayScalar<type>(line, static_cast<type>(0)); \
   }
 
 
