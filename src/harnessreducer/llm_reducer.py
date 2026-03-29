@@ -39,12 +39,13 @@ def llm_semantic_reduce(harness_code: str) -> str | None:
 The following code is a fuzzer harness returning a minimized PoC that has been reduced at the AST/syntax level.
 However, it still contains structural redundancies. Your task is to further minimize this code structures while COMPLETELY preserving its semantic behavior and EXACT logic.
 
-You should perform strict constant folding, dead code elimination, and control-flow flattening.
+You should perform strict constant folding, redundant statement elimination, and control-flow flattening.
 CRITICAL RULES for Constant Folding:
 1. You MUST accurately evaluate modulo (`%`), bitwise, and other arithmetic expressions (e.g., `153 % 12` is `9`, so evaluate it as `9`).
-2. ONLY remove switch/if statements AFTER evaluating the exact condition based on earlier constant definitions. Retain the branch that is actually taken!
-3. If a variable's value changes through an executed branch (e.g. `format = PNG_FORMAT_LINEAR_RGB_ALPHA;`), you MUST keep the updated value when replacing it. Do not carelessly use the initial value.
-4. If MUST make sure your any removal are accurate. If you are not 100% sure about the value of a variable at a certain point, DO NOT remove the conditional branch that leads to it. This is especially important for cases where the variable's value is determined by an if/switch statement. You can only remove the branch that is actually taken based on the evaluated conditions.
+2. Remove any redundant statements (unused variables or calls) that do not affect the final behavior. For example, if a variable is assigned a value that is never used, you can remove that assignment.
+3. ONLY remove switch/if statements AFTER evaluating the exact condition based on earlier constant definitions. Retain the branch that is actually taken!
+4. If a variable's value changes through an executed branch (e.g. `format = PNG_FORMAT_LINEAR_RGB_ALPHA;`), you MUST keep the updated value when replacing it. Do not carelessly use the initial value.
+5. If MUST make sure your any removal are accurate. If you are not 100% sure about the value of a variable at a certain point, DO NOT remove the conditional branch that leads to it. This is especially important for cases where the variable's value is determined by an if/switch statement. You can only remove the branch that is actually taken based on the evaluated conditions.
 
 For example:
 ```
