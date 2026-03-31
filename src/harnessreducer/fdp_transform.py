@@ -186,29 +186,30 @@ def inject_ids(src: str, start_id: int, marker: str) -> tuple[str, int]:
     if not arg_ranges:
         return src, 0
 
-    planned_inserts: list[tuple[int, str]] = []
+    planned_inserts: list[tuple[int, bytes]] = []
     next_id = start_id
+    marker_bytes = marker.encode("utf-8")
 
     # Assign IDs in source order for determinism, then insert from back to front
     # so nested argument ranges never invalidate each other.
     for start, end in sorted(arg_ranges, key=lambda item: item[0]):
-        args = src[start:end]
-        if marker in args:
+        args = source_bytes[start:end]
+        if marker_bytes in args:
             continue
 
-        id_payload = f"/*{marker}:{next_id}*/ {next_id}"
-        insert_text = f", {id_payload}" if args.strip() else id_payload
+        id_payload = f"/*{marker}:{next_id}*/ {next_id}".encode("utf-8")
+        insert_text = b", " + id_payload if args.strip() else id_payload
         planned_inserts.append((end, insert_text))
         next_id += 1
 
     if not planned_inserts:
         return src, 0
 
-    changed = src
+    changed = source_bytes
     for pos, insert_text in sorted(planned_inserts, key=lambda item: item[0], reverse=True):
         changed = changed[:pos] + insert_text + changed[pos:]
 
-    return changed, len(planned_inserts)
+    return changed.decode("utf-8"), len(planned_inserts)
 
 
 def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
