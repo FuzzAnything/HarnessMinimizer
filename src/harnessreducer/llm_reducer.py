@@ -102,7 +102,11 @@ Here is the reduced harness:
 def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_input: str | None, extra_flags: str | None, fdp_trace_file: str) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     print("Applying LLM semantic reduction...")
-    transformed = llm_semantic_reduce(source)
+    try:
+        transformed = llm_semantic_reduce(source)
+    except Exception as e:
+        print(f"[-] LLM reduction failed with error: {e}")
+        return reduced_harness_path
     print(f"LLM reduced harness length: {len(transformed) if transformed else 0}\n")
     
     if not transformed:
