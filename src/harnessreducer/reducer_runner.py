@@ -35,6 +35,10 @@ LEAK_PATTERN = re.compile(
 UBSAN_PATTERN = re.compile(
     r"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior\s+(\S+:\d+:\d+)"
 )
+# Captures source location as file:line from abort/assert lines.
+# Example line:
+# poc.out: /root/src/libaom/av1/encoder/intra_mode_search.c:358: ... Assertion `...` failed.
+ABORT_ASSERT_LOCATION_PATTERN = re.compile(r"((?:/[^\s:]+)+:\d+)")
 
 def get_project_root() -> Path:
     return PROJECT_ROOT
@@ -136,6 +140,12 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
         return ubsan_match.group(1)
+
+    for line in output.splitlines():
+        if "Assertion" in line and "failed." in line:
+            abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
+            if abort_assert_match:
+                return abort_assert_match.group(1)
 
     raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
 
