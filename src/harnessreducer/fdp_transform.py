@@ -41,6 +41,21 @@ class CallSite:
     fallback_keys: list[int]
 
 
+@dataclass(frozen=True)
+class InlineSkip:
+    key: int
+    method: str
+    reason: str
+    record_count: int
+
+
+@dataclass(frozen=True)
+class InlineResult:
+    source: str
+    replaced: int
+    skipped: tuple[InlineSkip, ...] = ()
+
+
 def _iter_nodes(root: Node) -> list[Node]:
     nodes: list[Node] = []
     stack = [root]
@@ -256,23 +271,38 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
     return streams
 
 
-def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tuple[str, int]:
+def inline_source_with_report(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> InlineResult:
     calls = _find_fdp_calls_for_inline(source)
     if not calls:
-        return source, 0
+        return InlineResult(source=source, replaced=0)
 
+    stream_lengths = {key: len(records) for key, records in streams.items()}
     replacements: list[tuple[int, int, str]] = []
+    skipped: list[InlineSkip] = []
     replaced = 0
 
     for call in calls:
         record = None
-        if call.key is not None and call.key in streams and streams[call.key]:
-            record = streams[call.key].popleft()
-        else:
-            for candidate in call.fallback_keys:
-                if candidate in streams and streams[candidate]:
-                    record = streams[candidate].popleft()
-                    break
+        candidate_keys: list[int] = []
+        if call.key is not None:
+            candidate_keys.append(call.key)
+        candidate_keys.extend(call.fallback_keys)
+
+        for candidate in candidate_keys:
+            if candidate not in streams or not streams[candidate]:
+                continue
+            if stream_lengths.get(candidate, 0) != 1:
+                skipped.append(
+                    InlineSkip(
+                        key=candidate,
+                        method=call.method,
+                        reason="repeated-trace-id",
+                        record_count=stream_lengths[candidate],
+                    )
+                )
+                break
+            record = streams[candidate].popleft()
+            break
 
         if record is None:
             continue
@@ -315,13 +345,18 @@ def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tu
         replaced += 1
 
     if not replacements:
-        return source, 0
+        return InlineResult(source=source, replaced=0, skipped=tuple(skipped))
 
     output = source
     for start, end, literal in sorted(replacements, key=lambda item: item[0], reverse=True):
         output = output[:start] + literal + output[end:]
 
-    return output, replaced
+    return InlineResult(source=output, replaced=replaced, skipped=tuple(skipped))
+
+
+def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tuple[str, int]:
+    result = inline_source_with_report(source, streams)
+    return result.source, result.replaced
 
 
 def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:

@@ -301,7 +301,7 @@ class FuzzedDataProvider {
 
 template <typename T>
 std::vector<T> FuzzedDataProvider::ConsumeBytes(size_t num_bytes, int line) {
-  FDP_REPLAY_BYTES(num_bytes);
+  FDP_REPLAY_BYTES((size_t)-1);
   num_bytes = std::min(num_bytes, remaining_bytes_);
   auto res = ConsumeBytesIter<T>(num_bytes, num_bytes);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
@@ -312,7 +312,7 @@ std::vector<T> FuzzedDataProvider::ConsumeBytes(size_t num_bytes, int line) {
 
 template <typename T>
 std::vector<T> FuzzedDataProvider::ConsumeBytesWithTerminator(size_t num_bytes, T terminator, int line) {
-  FDP_REPLAY_BYTES(num_bytes + 1);
+  FDP_REPLAY_BYTES((size_t)-1);
   num_bytes = std::min(num_bytes, remaining_bytes_);
   std::vector<T> result = ConsumeBytesIter<T>(num_bytes + 1, num_bytes);
   result.back() = terminator;
@@ -333,7 +333,7 @@ std::vector<T> FuzzedDataProvider::ConsumeRemainingBytes(int line) {
 }
 
 inline std::string FuzzedDataProvider::ConsumeBytesAsString(size_t num_bytes, int line) {
-  FDP_REPLAY_STR(num_bytes);
+  FDP_REPLAY_STR((size_t)-1);
   num_bytes = std::min(num_bytes, remaining_bytes_);
   std::string result(reinterpret_cast<const std::string::value_type *>(data_ptr_), num_bytes);
   Advance(num_bytes);
@@ -502,7 +502,7 @@ T FuzzedDataProvider::PickValueInArray(std::initializer_list<const T> list, int 
 
 inline size_t FuzzedDataProvider::ConsumeData(void *destination, size_t num_bytes, int line) {
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
-    auto bs = fdp_min_internal::TraceStore::Instance().ReplayBytes(line, num_bytes);
+    auto bs = fdp_min_internal::TraceStore::Instance().ReplayBytes(line, (size_t)-1);
     std::memcpy(destination, bs.data(), bs.size());
     return bs.size();
   }

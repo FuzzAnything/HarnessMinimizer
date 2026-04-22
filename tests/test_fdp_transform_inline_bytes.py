@@ -56,3 +56,39 @@ size_t g(size_t colormap_size, uint8_t* data, int size) {
 
     assert replaced == 1
     assert "std::min((size_t)colormap_size, static_cast<size_t>(6731))" in transformed
+
+
+def test_inline_repeated_bytes_id_keeps_call_for_replay() -> None:
+    source = """
+void f(uint8_t* data, int size, size_t length) {
+  FuzzedDataProvider fdp(data, size);
+  auto bytes = fdp.ConsumeBytes<uint8_t>(length, /*FDP_ID:100003*/ 100003);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100003].append(("B", [0x01, 0x02]))
+    streams[100003].append(("B", [0x03, 0x04]))
+
+    transformed, replaced = inline_source(source, streams)
+
+    assert replaced == 0
+    assert "ConsumeBytes<uint8_t>(length, /*FDP_ID:100003*/ 100003)" in transformed
+
+
+def test_inline_repeated_remaining_bytes_id_keeps_call_for_replay() -> None:
+    source = """
+size_t g(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  return fdp.remaining_bytes(/*FDP_ID:100004*/ 100004);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100004].append(("R", 128))
+    streams[100004].append(("R", 0))
+
+    transformed, replaced = inline_source(source, streams)
+
+    assert replaced == 0
+    assert "fdp.remaining_bytes(/*FDP_ID:100004*/ 100004)" in transformed
