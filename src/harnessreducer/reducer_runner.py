@@ -28,7 +28,8 @@ def cleanup() -> None:
 
 atexit.register(cleanup)
 
-ASAN_PATTERN = re.compile(r"(?:ERROR|SUMMARY):\s*AddressSanitizer:\s*[\w-]+")
+ASAN_SUMMARY_PATTERN = re.compile(r"SUMMARY:\s*AddressSanitizer:\s*([\w-]+)")
+ASAN_ERROR_PATTERN = re.compile(r"ERROR:\s*AddressSanitizer:\s*[\w-]+")
 LEAK_PATTERN = re.compile(
     r"SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\."
 )
@@ -129,9 +130,13 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
         return None
 
-    asan_match = ASAN_PATTERN.search(output)
-    if asan_match:
-        return asan_match.group(0)
+    asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
+    if asan_summary_match:
+        return asan_summary_match.group(1).strip()
+
+    asan_error_match = ASAN_ERROR_PATTERN.search(output)
+    if asan_error_match:
+        return asan_error_match.group(0)
 
     leak_match = LEAK_PATTERN.search(output)
     if leak_match:
@@ -208,6 +213,10 @@ def run_treereducer(
     crash_input: str | None,
     stable: bool = False,
 ) -> str:
+    # treereduce changes cwd to a temp dir when invoking the tester, so relative
+    # paths for crash_input would not be found.  Resolve to absolute here.
+    if crash_input:
+        crash_input = str(Path(crash_input).resolve())
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
         "treereduce-c",

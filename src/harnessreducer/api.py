@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from harnessreducer.fdp_transform import inline_source, inject_ids, load_trace, strip_injected_ids
+from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     get_crash_tester_path,
     run_command,
@@ -69,6 +69,34 @@ def _prepend_additional_headers(harness_path: str) -> None:
     Path(harness_path).write_text(headers_block + content, encoding="utf-8")
 
 
+def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
+    fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
+    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
+    if removed:
+        Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
+        print(f"Removed {removed} injected FDP IDs from fallback harness.")
+    _prepend_additional_headers(reduced_harness_path)
+    return reduced_harness_path
+
+
+def _write_inline_validation_failure_artifact(
+    inline_harness_path: str,
+    proc_returncode: int,
+    stdout: str,
+    stderr: str,
+) -> str:
+    artifact_path = f"{inline_harness_path}.validation.log"
+    artifact = (
+        f"returncode: {proc_returncode}\n"
+        "===== stdout =====\n"
+        f"{stdout}"
+        "\n===== stderr =====\n"
+        f"{stderr}"
+    )
+    Path(artifact_path).write_text(artifact, encoding="utf-8")
+    return artifact_path
+
+
 def inline_literals_in_reduced_harness(
     reduced_harness_path: str,
     fdp_trace_file: str,
@@ -79,11 +107,28 @@ def inline_literals_in_reduced_harness(
 ) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
-    transformed, count = inline_source(source, streams)
+    inline_result = inline_source_with_report(source, streams)
+    transformed, count = inline_result.source, inline_result.replaced
     inline_harness_path = str(Path(reduced_harness_path).with_suffix(".inline.cpp"))
     Path(inline_harness_path).write_text(transformed, encoding="utf-8")
     _prepend_additional_headers(inline_harness_path)
     print(f"Inlined {count} FDP calls into {inline_harness_path}")
+    repeated_skips = [skip for skip in inline_result.skipped if skip.reason == "repeated-trace-id"]
+    if repeated_skips:
+        repeated_ids = ", ".join(
+            f"{skip.key}({skip.method}, {skip.record_count} records)" for skip in repeated_skips
+        )
+        print(
+            "[!] Preserved FDP callsites for replay because their trace IDs were repeated: "
+            f"{repeated_ids}"
+        )
+
+    if count == 0:
+        print(
+            "[!] Skipping inline validation because no FDP callsites were inlined; "
+            "returning the tree-reduced harness."
+        )
+        return _finalize_fallback_harness(reduced_harness_path, start_id)
 
     print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
     cmd = [
@@ -102,14 +147,17 @@ def inline_literals_in_reduced_harness(
         print("[+] Inline reduction preserved crash behavior.")
         return inline_harness_path
 
-    print("[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness.")
-    fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
-    if removed:
-        Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
-        print(f"Removed {removed} injected FDP IDs from fallback harness.")
-    _prepend_additional_headers(reduced_harness_path)
-    return reduced_harness_path
+    artifact_path = _write_inline_validation_failure_artifact(
+        inline_harness_path,
+        proc.returncode,
+        proc.stdout,
+        proc.stderr,
+    )
+    print(
+        "[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness. "
+        f"Validation log: {artifact_path}"
+    )
+    return _finalize_fallback_harness(reduced_harness_path, start_id)
 
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
