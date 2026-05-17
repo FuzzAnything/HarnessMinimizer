@@ -145,6 +145,12 @@ def inline_literals_in_reduced_harness(
     proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
     if proc.returncode == 77:
         print("[+] Inline reduction preserved crash behavior.")
+        if repeated_skips:
+            inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
+            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
+            if removed:
+                Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
+                print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
         return inline_harness_path
 
     artifact_path = _write_inline_validation_failure_artifact(

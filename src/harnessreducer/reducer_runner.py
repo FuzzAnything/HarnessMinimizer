@@ -40,6 +40,14 @@ UBSAN_PATTERN = re.compile(
 # Example line:
 # poc.out: /root/src/libaom/av1/encoder/intra_mode_search.c:358: ... Assertion `...` failed.
 ABORT_ASSERT_LOCATION_PATTERN = re.compile(r"((?:/[^\s:]+)+:\d+)")
+# Captures the condition from absl CHECK failure lines.
+# Example line:
+# F0000 00:00:... Check failed: last_returned_size_ > 0 (0 vs. 0) BackUp() ...
+ABSL_CHECK_PATTERN = re.compile(r"Check failed:\s*(.+?)\s*\(")
+# Generic fallback for any libFuzzer-reported signal crash.
+# Example line:
+# SUMMARY: libFuzzer: deadly signal
+LIBFUZZER_SIGNAL_PATTERN = re.compile(r"SUMMARY:\s*libFuzzer:\s*([\w][\w\s-]*)")
 
 def get_project_root() -> Path:
     return PROJECT_ROOT
@@ -151,6 +159,14 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
             abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
             if abort_assert_match:
                 return abort_assert_match.group(1)
+
+    absl_check_match = ABSL_CHECK_PATTERN.search(output)
+    if absl_check_match:
+        return absl_check_match.group(1).strip()
+
+    libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
+    if libfuzzer_signal_match:
+        return libfuzzer_signal_match.group(1).strip()
 
     raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
 
