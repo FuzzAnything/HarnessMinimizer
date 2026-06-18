@@ -63,6 +63,7 @@ class CallSite:
     key: int | None
     fallback_keys: list[int]
     arg_texts: list[str]
+    template_arg: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,27 @@ def _extract_method_name(field_node: Node, source_bytes: bytes) -> str:
             if child.type == "field_identifier":
                 return _node_text(source_bytes, child)
     return ""
+
+
+def _normalize_type_text(type_text: str) -> str:
+    return " ".join(type_text.strip().split())
+
+
+def _extract_first_template_argument(field_node: Node, source_bytes: bytes) -> str | None:
+    if field_node.type != "template_method":
+        return None
+
+    for child in field_node.children:
+        if child.type != "template_argument_list":
+            continue
+        named_children = [named for named in child.named_children if named.type != "comment"]
+        if named_children:
+            return _normalize_type_text(_node_text(source_bytes, named_children[0]))
+
+        text = _node_text(source_bytes, child).strip()
+        if text.startswith("<") and text.endswith(">"):
+            return _normalize_type_text(text[1:-1])
+    return None
 
 
 def _is_supported_fdp_call(call_node: Node, source_bytes: bytes) -> bool:
@@ -194,6 +216,7 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
         method = _extract_method_name(field, source_bytes)
         if method not in SUPPORTED_FDP_APIS:
             continue
+        template_arg = _extract_first_template_argument(field, source_bytes)
 
         args = node.child_by_field_name("arguments")
         if args is None:
@@ -221,6 +244,7 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
                 key=key,
                 fallback_keys=fallback_keys,
                 arg_texts=original_arg_texts,
+                template_arg=template_arg,
             )
         )
 
@@ -346,7 +370,7 @@ def _cpp_string_literal(bytes_list: list[int]) -> str:
 def _cpp_byte_literal(value: int) -> str:
     b = value & 0xFF
     if b == ord("'"):
-        return "'\\\''"
+        return "'\\''"
     if b == ord("\\"):
         return "'\\\\'"
     if b == ord("\n"):
@@ -360,11 +384,40 @@ def _cpp_byte_literal(value: int) -> str:
     return f"0x{b:02x}"
 
 
-def _cpp_vector_literal(bytes_list: list[int]) -> str:
+def _vector_element_type_for_call(call: CallSite) -> str:
+    if call.method in _BYTES_METHODS and call.template_arg:
+        return _normalize_type_text(call.template_arg)
+    return "unsigned char"
+
+
+def _vector_type_includes(element_type: str) -> tuple[str, ...]:
+    normalized = _normalize_type_text(element_type)
+    if normalized in {"uint8_t", "int8_t"}:
+        return ("<stdint.h>",)
+    if "std::uint8_t" in normalized or "std::int8_t" in normalized:
+        return ("<cstdint>",)
+    if "std::byte" in normalized:
+        return ("<cstddef>",)
+    return ()
+
+
+def _cpp_byte_literal_for_type(value: int, element_type: str) -> str:
+    normalized = _normalize_type_text(element_type)
+    b = value & 0xFF
+
+    if normalized in {"char", "signed char", "int8_t", "std::int8_t"}:
+        return f"static_cast<{element_type}>(0x{b:02x})"
+    if normalized == "std::byte":
+        return f"std::byte{{0x{b:02x}}}"
+    return _cpp_byte_literal(b)
+
+
+def _cpp_vector_literal(bytes_list: list[int], element_type: str = "unsigned char") -> str:
+    vector_type = f"std::vector<{element_type}>"
     if not bytes_list:
-        return "std::vector<unsigned char>{}"
-    byte_text = ", ".join(_cpp_byte_literal(b) for b in bytes_list)
-    return f"std::vector<unsigned char>{{{byte_text}}}"
+        return f"{vector_type}{{}}"
+    byte_text = ", ".join(_cpp_byte_literal_for_type(b, element_type) for b in bytes_list)
+    return f"{vector_type}{{{byte_text}}}"
 
 
 def _format_cpp_number(value: Any) -> str:
@@ -399,7 +452,8 @@ def _needs_numeric_limits(values: list[Any]) -> bool:
     return any(isinstance(value, float) and not math.isfinite(value) for value in values)
 
 
-def _literal_for_single_record(method: str, record_type: str, value: Any) -> str | None:
+def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> str | None:
+    method = call.method
     if method == "ConsumeBool":
         return "true" if value != 0 else "false"
     if method in _STRING_METHODS:
@@ -407,9 +461,10 @@ def _literal_for_single_record(method: str, record_type: str, value: Any) -> str
             return f"std::string({_cpp_string_literal(value)}, {len(value)})"
         return 'std::string("")'
     if method in _BYTES_METHODS:
+        element_type = _vector_element_type_for_call(call)
         if record_type == "B":
-            return _cpp_vector_literal(value)
-        return "std::vector<unsigned char>{}"
+            return _cpp_vector_literal(value, element_type)
+        return f"std::vector<{element_type}>{{}}"
     if method == "ConsumeData":
         return str(len(value)) if record_type == "B" else "0"
     if method == "remaining_bytes":
@@ -478,15 +533,21 @@ def _make_string_header_entry(key: int, method: str, byte_values: list[list[int]
     return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=("<string>",))
 
 
-def _make_vector_header_entry(key: int, method: str, byte_values: list[list[int]]) -> ValuesHeaderEntry:
+def _make_vector_header_entry(
+    key: int,
+    method: str,
+    byte_values: list[list[int]],
+    element_type: str = "unsigned char",
+) -> ValuesHeaderEntry:
     values_name, index_name = _value_names(key)
-    entries = [f"    {_cpp_vector_literal(bytes_list)}" for bytes_list in byte_values]
+    entries = [f"    {_cpp_vector_literal(bytes_list, element_type)}" for bytes_list in byte_values]
     declaration = (
-        f"static const std::vector<unsigned char> {values_name}[] = {{\n"
+        f"static const std::vector<{element_type}> {values_name}[] = {{\n"
         + ",\n".join(entries)
         + f"\n}};\nstatic size_t {index_name} = 0;"
     )
-    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=("<vector>",))
+    includes = tuple(dict.fromkeys(("<vector>", *_vector_type_includes(element_type))))
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
 
 
 def _repeated_replacement_for_call(
@@ -513,7 +574,10 @@ def _repeated_replacement_for_call(
         byte_values = _extract_record_values(records, "B")
         if byte_values is None:
             return None
-        return indexed_value, _make_vector_header_entry(matched_key, call.method, byte_values)
+        element_type = _vector_element_type_for_call(call)
+        return indexed_value, _make_vector_header_entry(
+            matched_key, call.method, byte_values, element_type
+        )
 
     if call.method == "ConsumeData":
         byte_values = _extract_record_values(records, "B")
@@ -609,7 +673,7 @@ def inline_source_with_report(
         record_count = len(streams[matched_key])
         if record_count == 1:
             record_type, value = streams[matched_key].popleft()
-            literal = _literal_for_single_record(call.method, record_type, value)
+            literal = _literal_for_single_record(call, record_type, value)
             if literal is None:
                 continue
             replacements.append((call.start, call.end, literal))
