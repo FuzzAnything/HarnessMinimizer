@@ -520,12 +520,6 @@ def _repeated_replacement_for_call(
         if byte_values is None or not call.arg_texts:
             return None
         entry = _make_vector_header_entry(matched_key, call.method, byte_values)
-        entry = ValuesHeaderEntry(
-            key=entry.key,
-            method=entry.method,
-            declaration=entry.declaration,
-            includes=tuple(sorted(set(entry.includes + ("<cstring>",)))),
-        )
         destination = call.arg_texts[0]
         replacement = (
             f"(std::memcpy({destination}, {values_name}[{index_name}].data(), "
