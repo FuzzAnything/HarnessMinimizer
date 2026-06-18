@@ -3,3 +3,7 @@
 output/
 .env
 build/
+fdp_visible_recorder.h
+generate_reproducer.py
+mark_fdp_calls.py
+fdp_test_work
