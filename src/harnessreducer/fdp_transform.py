@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -30,6 +31,28 @@ SUPPORTED_FDP_APIS = {
 
 CPP_LANGUAGE = Language(ts_cpp.language())
 PARSER = Parser(CPP_LANGUAGE)
+VALUES_HEADER_NAME = "harness_values.h"
+
+_BOOL_METHODS = {"ConsumeBool"}
+_STRING_METHODS = {
+    "ConsumeBytesAsString",
+    "ConsumeRandomLengthString",
+    "ConsumeRemainingBytesAsString",
+}
+_BYTES_METHODS = {
+    "ConsumeBytes",
+    "ConsumeBytesWithTerminator",
+    "ConsumeRemainingBytes",
+}
+_SCALAR_METHODS = {
+    "ConsumeIntegral",
+    "ConsumeIntegralInRange",
+    "ConsumeFloatingPoint",
+    "ConsumeFloatingPointInRange",
+    "ConsumeProbability",
+    "ConsumeEnum",
+    "PickValueInArray",
+}
 
 
 @dataclass
@@ -39,6 +62,7 @@ class CallSite:
     method: str
     key: int | None
     fallback_keys: list[int]
+    arg_texts: list[str]
 
 
 @dataclass(frozen=True)
@@ -54,6 +78,17 @@ class InlineResult:
     source: str
     replaced: int
     skipped: tuple[InlineSkip, ...] = ()
+    header_name: str | None = None
+    header_source: str = ""
+    loop_replaced: int = 0
+
+
+@dataclass(frozen=True)
+class ValuesHeaderEntry:
+    key: int
+    method: str
+    declaration: str
+    includes: tuple[str, ...] = ()
 
 
 def _iter_nodes(root: Node) -> list[Node]:
@@ -122,6 +157,14 @@ def _extract_explicit_id(args_node: Node, source_bytes: bytes) -> int | None:
     return _parse_int_literal(_node_text(source_bytes, last))
 
 
+def _extract_call_arg_texts(args_node: Node, source_bytes: bytes) -> list[str]:
+    return [
+        _node_text(source_bytes, child).strip()
+        for child in args_node.named_children
+        if child.type != "comment"
+    ]
+
+
 def _default_site_id_candidates(call_node: Node, field_node: Node | None) -> list[int]:
     row0, col0 = call_node.start_point
     if field_node is not None:
@@ -156,7 +199,14 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
         if args is None:
             continue
 
+        arg_texts = _extract_call_arg_texts(args, source_bytes)
         key = _extract_explicit_id(args, source_bytes)
+        original_arg_texts = arg_texts
+        if key is not None and arg_texts:
+            last_arg_value = _parse_int_literal(arg_texts[-1])
+            if last_arg_value == key:
+                original_arg_texts = arg_texts[:-1]
+
         fallback_keys: list[int] = []
         if key is None:
             fallback_keys = _default_site_id_candidates(node, field)
@@ -170,6 +220,7 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
                 method=method,
                 key=key,
                 fallback_keys=fallback_keys,
+                arg_texts=original_arg_texts,
             )
         )
 
@@ -271,18 +322,282 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
     return streams
 
 
-def inline_source_with_report(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> InlineResult:
+def _cpp_string_literal(bytes_list: list[int]) -> str:
+    chars: list[str] = []
+    for value in bytes_list:
+        b = value & 0xFF
+        if b == ord('"'):
+            chars.append('\\"')
+        elif b == ord("\\"):
+            chars.append('\\\\')
+        elif b == ord("\n"):
+            chars.append('\\n')
+        elif b == ord("\r"):
+            chars.append('\\r')
+        elif b == ord("\t"):
+            chars.append('\\t')
+        elif 32 <= b <= 126:
+            chars.append(chr(b))
+        else:
+            chars.append(f"\\{b:03o}")
+    return '"' + "".join(chars) + '"'
+
+
+def _cpp_byte_literal(value: int) -> str:
+    b = value & 0xFF
+    if b == ord("'"):
+        return "'\\\''"
+    if b == ord("\\"):
+        return "'\\\\'"
+    if b == ord("\n"):
+        return "'\\n'"
+    if b == ord("\r"):
+        return "'\\r'"
+    if b == ord("\t"):
+        return "'\\t'"
+    if 32 <= b <= 126:
+        return f"'{chr(b)}'"
+    return f"0x{b:02x}"
+
+
+def _cpp_vector_literal(bytes_list: list[int]) -> str:
+    if not bytes_list:
+        return "std::vector<unsigned char>{}"
+    byte_text = ", ".join(_cpp_byte_literal(b) for b in bytes_list)
+    return f"std::vector<unsigned char>{{{byte_text}}}"
+
+
+def _format_cpp_number(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "std::numeric_limits<double>::quiet_NaN()"
+        if math.isinf(value):
+            prefix = "-" if value < 0 else ""
+            return f"{prefix}std::numeric_limits<double>::infinity()"
+        text = repr(value)
+        if "." not in text and "e" not in text.lower():
+            text += ".0"
+        return text
+    return str(int(value))
+
+
+def _numeric_array_type(values: list[Any]) -> str:
+    if any(isinstance(value, float) for value in values):
+        return "double"
+
+    ints = [int(value) for value in values]
+    if all(-(2**31) <= value <= 2**31 - 1 for value in ints):
+        return "int"
+    if all(value >= 0 for value in ints) and any(value > 2**63 - 1 for value in ints):
+        return "unsigned long long"
+    return "long long"
+
+
+def _needs_numeric_limits(values: list[Any]) -> bool:
+    return any(isinstance(value, float) and not math.isfinite(value) for value in values)
+
+
+def _literal_for_single_record(method: str, record_type: str, value: Any) -> str | None:
+    if method == "ConsumeBool":
+        return "true" if value != 0 else "false"
+    if method in _STRING_METHODS:
+        if record_type == "B":
+            return f"std::string({_cpp_string_literal(value)}, {len(value)})"
+        return 'std::string("")'
+    if method in _BYTES_METHODS:
+        if record_type == "B":
+            return _cpp_vector_literal(value)
+        return "std::vector<unsigned char>{}"
+    if method == "ConsumeData":
+        return str(len(value)) if record_type == "B" else "0"
+    if method == "remaining_bytes":
+        if isinstance(value, int):
+            return f"static_cast<size_t>({value})"
+        return "static_cast<size_t>(0)"
+    return _format_cpp_number(value)
+
+
+def _value_names(key: int) -> tuple[str, str]:
+    return f"hr_values_{key}", f"hr_index_{key}"
+
+
+def _extract_record_values(records: list[tuple[str, Any]], expected_type: str) -> list[Any] | None:
+    values: list[Any] = []
+    for record_type, value in records:
+        if record_type != expected_type:
+            return None
+        values.append(value)
+    return values
+
+
+def _make_bool_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    value_text = ", ".join("true" if value else "false" for value in values)
+    declaration = (
+        f"static const bool {values_name}[] = {{{value_text}}};\n"
+        f"static size_t {index_name} = 0;"
+    )
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration)
+
+
+def _make_numeric_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    value_type = _numeric_array_type(values)
+    value_text = ", ".join(_format_cpp_number(value) for value in values)
+    declaration = (
+        f"static const {value_type} {values_name}[] = {{{value_text}}};\n"
+        f"static size_t {index_name} = 0;"
+    )
+    includes = ("<limits>",) if _needs_numeric_limits(values) else ()
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+
+
+def _make_size_t_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    value_text = ", ".join(f"static_cast<size_t>({int(value)})" for value in values)
+    declaration = (
+        f"static const size_t {values_name}[] = {{{value_text}}};\n"
+        f"static size_t {index_name} = 0;"
+    )
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration)
+
+
+def _make_string_header_entry(key: int, method: str, byte_values: list[list[int]]) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    entries = [
+        f"    std::string({_cpp_string_literal(bytes_list)}, {len(bytes_list)})"
+        for bytes_list in byte_values
+    ]
+    declaration = (
+        f"static const std::string {values_name}[] = {{\n"
+        + ",\n".join(entries)
+        + f"\n}};\nstatic size_t {index_name} = 0;"
+    )
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=("<string>",))
+
+
+def _make_vector_header_entry(key: int, method: str, byte_values: list[list[int]]) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    entries = [f"    {_cpp_vector_literal(bytes_list)}" for bytes_list in byte_values]
+    declaration = (
+        f"static const std::vector<unsigned char> {values_name}[] = {{\n"
+        + ",\n".join(entries)
+        + f"\n}};\nstatic size_t {index_name} = 0;"
+    )
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=("<vector>",))
+
+
+def _repeated_replacement_for_call(
+    call: CallSite,
+    matched_key: int,
+    records: list[tuple[str, Any]],
+) -> tuple[str, ValuesHeaderEntry] | None:
+    values_name, index_name = _value_names(matched_key)
+    indexed_value = f"{values_name}[{index_name}++]"
+
+    if call.method in _BOOL_METHODS:
+        values = _extract_record_values(records, "S")
+        if values is None:
+            return None
+        return indexed_value, _make_bool_header_entry(matched_key, call.method, values)
+
+    if call.method in _STRING_METHODS:
+        byte_values = _extract_record_values(records, "B")
+        if byte_values is None:
+            return None
+        return indexed_value, _make_string_header_entry(matched_key, call.method, byte_values)
+
+    if call.method in _BYTES_METHODS:
+        byte_values = _extract_record_values(records, "B")
+        if byte_values is None:
+            return None
+        return indexed_value, _make_vector_header_entry(matched_key, call.method, byte_values)
+
+    if call.method == "ConsumeData":
+        byte_values = _extract_record_values(records, "B")
+        if byte_values is None or not call.arg_texts:
+            return None
+        entry = _make_vector_header_entry(matched_key, call.method, byte_values)
+        entry = ValuesHeaderEntry(
+            key=entry.key,
+            method=entry.method,
+            declaration=entry.declaration,
+            includes=tuple(sorted(set(entry.includes + ("<cstring>",)))),
+        )
+        destination = call.arg_texts[0]
+        replacement = (
+            f"(std::memcpy({destination}, {values_name}[{index_name}].data(), "
+            f"{values_name}[{index_name}].size()), "
+            f"{values_name}[{index_name}++].size())"
+        )
+        return replacement, entry
+
+    if call.method == "remaining_bytes":
+        values = _extract_record_values(records, "R")
+        if values is None:
+            return None
+        return indexed_value, _make_size_t_header_entry(matched_key, call.method, values)
+
+    if call.method in _SCALAR_METHODS:
+        values = _extract_record_values(records, "S")
+        if values is None:
+            return None
+        return indexed_value, _make_numeric_header_entry(matched_key, call.method, values)
+
+    return None
+
+
+def _build_values_header(entries: list[ValuesHeaderEntry]) -> str:
+    if not entries:
+        return ""
+
+    include_set = {"<cstddef>"}
+    for entry in entries:
+        include_set.update(entry.includes)
+
+    include_order = ["<cstddef>", "<cstring>", "<limits>", "<string>", "<vector>"]
+    ordered_includes = [include for include in include_order if include in include_set]
+    ordered_includes.extend(sorted(include_set - set(ordered_includes)))
+
+    lines = ["#pragma once"]
+    lines.extend(f"#include {include}" for include in ordered_includes)
+    lines.append("")
+
+    for entry in entries:
+        lines.append(f"// Values recorded from FDP_ID {entry.key} ({entry.method}).")
+        lines.append(entry.declaration)
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _ensure_values_header_include(source: str, header_name: str) -> str:
+    include_line = f'#include "{header_name}"'
+    if include_line in source:
+        return source
+    return include_line + "\n" + source
+
+
+def inline_source_with_report(
+    source: str,
+    streams: dict[int, Deque[tuple[str, Any]]],
+    header_name: str = VALUES_HEADER_NAME,
+) -> InlineResult:
     calls = _find_fdp_calls_for_inline(source)
     if not calls:
         return InlineResult(source=source, replaced=0)
 
-    stream_lengths = {key: len(records) for key, records in streams.items()}
     replacements: list[tuple[int, int, str]] = []
     skipped: list[InlineSkip] = []
+    header_entries: list[ValuesHeaderEntry] = []
+    header_keys: set[int] = set()
     replaced = 0
+    loop_replaced = 0
 
     for call in calls:
-        record = None
+        matched_key: int | None = None
         candidate_keys: list[int] = []
         if call.key is not None:
             candidate_keys.append(call.key)
@@ -291,58 +606,42 @@ def inline_source_with_report(source: str, streams: dict[int, Deque[tuple[str, A
         for candidate in candidate_keys:
             if candidate not in streams or not streams[candidate]:
                 continue
-            if stream_lengths.get(candidate, 0) != 1:
-                skipped.append(
-                    InlineSkip(
-                        key=candidate,
-                        method=call.method,
-                        reason="repeated-trace-id",
-                        record_count=stream_lengths[candidate],
-                    )
-                )
-                break
-            record = streams[candidate].popleft()
+            matched_key = candidate
             break
 
-        if record is None:
+        if matched_key is None:
             continue
 
-        record_type, value = record
-        literal = ""
-        if call.method == "ConsumeBool":
-            literal = "true" if value != 0 else "false"
-        elif call.method in (
-            "ConsumeBytesAsString",
-            "ConsumeRandomLengthString",
-            "ConsumeRemainingBytesAsString",
-        ):
-            if record_type == "B":
-                hex_str = "".join(f"\\x{b:02x}" for b in value)
-                literal = f'std::string("{hex_str}", {len(value)})'
-            else:
-                literal = 'std::string("")'
-        elif call.method in (
-            "ConsumeBytes",
-            "ConsumeBytesWithTerminator",
-            "ConsumeRemainingBytes",
-        ):
-            if record_type == "B":
-                hex_list = ", ".join(f"0x{b:02x}" for b in value)
-                literal = f"std::vector<unsigned char>{{{hex_list}}}"
-            else:
-                literal = "std::vector<unsigned char>{}"
-        elif call.method == "ConsumeData":
-            literal = str(len(value)) if record_type == "B" else "0"
-        elif call.method == "remaining_bytes":
-            if isinstance(value, int):
-                literal = f"static_cast<size_t>({value})"
-            else:
-                literal = "static_cast<size_t>(0)"
-        else:
-            literal = str(value)
+        record_count = len(streams[matched_key])
+        if record_count == 1:
+            record_type, value = streams[matched_key].popleft()
+            literal = _literal_for_single_record(call.method, record_type, value)
+            if literal is None:
+                continue
+            replacements.append((call.start, call.end, literal))
+            replaced += 1
+            continue
 
+        records = [streams[matched_key].popleft() for _ in range(record_count)]
+        repeated = _repeated_replacement_for_call(call, matched_key, records)
+        if repeated is None:
+            skipped.append(
+                InlineSkip(
+                    key=matched_key,
+                    method=call.method,
+                    reason="unsupported-repeated-trace-id",
+                    record_count=record_count,
+                )
+            )
+            continue
+
+        literal, header_entry = repeated
         replacements.append((call.start, call.end, literal))
         replaced += 1
+        loop_replaced += 1
+        if header_entry.key not in header_keys:
+            header_entries.append(header_entry)
+            header_keys.add(header_entry.key)
 
     if not replacements:
         return InlineResult(source=source, replaced=0, skipped=tuple(skipped))
@@ -351,7 +650,21 @@ def inline_source_with_report(source: str, streams: dict[int, Deque[tuple[str, A
     for start, end, literal in sorted(replacements, key=lambda item: item[0], reverse=True):
         output = output[:start] + literal + output[end:]
 
-    return InlineResult(source=output, replaced=replaced, skipped=tuple(skipped))
+    header_source = ""
+    result_header_name: str | None = None
+    if header_entries:
+        header_source = _build_values_header(header_entries)
+        output = _ensure_values_header_include(output, header_name)
+        result_header_name = header_name
+
+    return InlineResult(
+        source=output,
+        replaced=replaced,
+        skipped=tuple(skipped),
+        header_name=result_header_name,
+        header_source=header_source,
+        loop_replaced=loop_replaced,
+    )
 
 
 def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tuple[str, int]:

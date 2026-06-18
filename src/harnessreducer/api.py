@@ -20,6 +20,9 @@ from harnessreducer.reducer_runner import (
 )
 
 ADDITIONAL_HEADES = [
+    "#include <cstddef>",
+    "#include <cstring>",
+    "#include <string>",
     "#include <vector>",
     "#include <deque>",
     "#include <fstream>",
@@ -27,7 +30,8 @@ ADDITIONAL_HEADES = [
     "#include <mutex>",
     "#include <sstream>",
     "#include <cmath>",
-    "#include <iomanip>"
+    "#include <iomanip>",
+    "#include <limits>",
 ]
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class ReductionResult:
     reduced_harness: str
     tagged_harness: str
     fdp_trace: str
+    generated_headers: tuple[str, ...] = ()
     success: bool = True
 
 
@@ -104,31 +109,45 @@ def inline_literals_in_reduced_harness(
     crash_input: str | None,
     extra_flags: str | None,
     start_id: int = 100000,
-) -> str:
+) -> tuple[str, tuple[str, ...]]:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
     inline_result = inline_source_with_report(source, streams)
     transformed, count = inline_result.source, inline_result.replaced
     inline_harness_path = str(Path(reduced_harness_path).with_suffix(".inline.cpp"))
     Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+
+    generated_headers: list[str] = []
+    if inline_result.header_source and inline_result.header_name:
+        header_path = Path(inline_harness_path).with_name(inline_result.header_name)
+        header_path.write_text(inline_result.header_source, encoding="utf-8")
+        generated_headers.append(str(header_path))
+        print(
+            f"Moved {inline_result.loop_replaced} repeated FDP callsites into "
+            f"header-backed values: {header_path}"
+        )
+
     _prepend_additional_headers(inline_harness_path)
-    print(f"Inlined {count} FDP calls into {inline_harness_path}")
-    repeated_skips = [skip for skip in inline_result.skipped if skip.reason == "repeated-trace-id"]
-    if repeated_skips:
-        repeated_ids = ", ".join(
-            f"{skip.key}({skip.method}, {skip.record_count} records)" for skip in repeated_skips
+    print(f"Inlined/replayed {count} FDP calls into {inline_harness_path}")
+
+    unsupported_skips = [
+        skip for skip in inline_result.skipped if skip.reason == "unsupported-repeated-trace-id"
+    ]
+    if unsupported_skips:
+        skipped_ids = ", ".join(
+            f"{skip.key}({skip.method}, {skip.record_count} records)" for skip in unsupported_skips
         )
         print(
-            "[!] Preserved FDP callsites for replay because their trace IDs were repeated: "
-            f"{repeated_ids}"
+            "[!] Could not header-replay some repeated FDP callsites; "
+            f"they remain as FDP calls for validation/replay: {skipped_ids}"
         )
 
     if count == 0:
         print(
-            "[!] Skipping inline validation because no FDP callsites were inlined; "
+            "[!] Skipping inline validation because no FDP callsites were inlined/replayed; "
             "returning the tree-reduced harness."
         )
-        return _finalize_fallback_harness(reduced_harness_path, start_id)
+        return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
     print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
     cmd = [
@@ -145,13 +164,12 @@ def inline_literals_in_reduced_harness(
     proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
     if proc.returncode == 77:
         print("[+] Inline reduction preserved crash behavior.")
-        if repeated_skips:
-            inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
-            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
-            if removed:
-                Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
-                print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
-        return inline_harness_path
+        inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
+        cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
+        if removed:
+            Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
+            print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
+        return inline_harness_path, tuple(generated_headers)
 
     artifact_path = _write_inline_validation_failure_artifact(
         inline_harness_path,
@@ -163,7 +181,7 @@ def inline_literals_in_reduced_harness(
         "[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness. "
         f"Validation log: {artifact_path}"
     )
-    return _finalize_fallback_harness(reduced_harness_path, start_id)
+    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
@@ -197,7 +215,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         stable=config.stable,
     )
     format_reduced_harness(reduced_harness)
-    post_inline_harness = inline_literals_in_reduced_harness(
+    post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
         reduced_harness,
         fdp_trace_file,
         crash_pattern,
@@ -222,6 +240,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
+        generated_headers=generated_headers,
         success=True
     )
 

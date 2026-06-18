@@ -73,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(reduced_harness, output_path)
+        for header in result.generated_headers:
+            header_path = Path(header)
+            copied_header = output_path.parent / header_path.name
+            shutil.copy2(header_path, copied_header)
+            print(f"Generated values header saved to: {copied_header}")
         print(f"Reduced harness saved to: {output_path}")
     else:
         print(f"Reduced harness generated at: {reduced_harness}")
