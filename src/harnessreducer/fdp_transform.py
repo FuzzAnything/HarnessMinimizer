@@ -32,9 +32,7 @@ SUPPORTED_FDP_APIS = {
 CPP_LANGUAGE = Language(ts_cpp.language())
 PARSER = Parser(CPP_LANGUAGE)
 VALUES_HEADER_NAME = "harness_values.h"
-# Non-loop byte/string buffers longer than this are moved to VALUES_HEADER_NAME.
-# Change this value if you want more or fewer buffers kept inline in the harness.
-MAX_INLINE_BUFFER_BYTES = 64
+MAX_INLINE_BUFFER_BYTES = 64   # threshold for large buffers that should be moved to a header instead of inlined as literals
 _HEADER_BYTES_PER_LINE = 16
 _STRING_LITERAL_CHUNK_BYTES = 64
 
