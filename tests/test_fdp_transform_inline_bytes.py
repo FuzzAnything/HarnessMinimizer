@@ -1,6 +1,10 @@
 from collections import defaultdict, deque
 
-from harnessreducer.fdp_transform import inline_source
+from harnessreducer.fdp_transform import (
+    MAX_INLINE_BUFFER_BYTES,
+    inline_source,
+    inline_source_with_report,
+)
 
 
 def test_inline_bytes_uses_vector_literal_for_data_calls() -> None:
@@ -19,7 +23,7 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
     transformed, replaced = inline_source(source, streams)
 
     assert replaced == 1
-    assert "std::vector<unsigned char>{0x89, 0x50, 0x4e, 0x47}" in transformed
+    assert "std::vector<uint8_t>{0x89, 0x50, 0x4e, 0x47}" in transformed
     assert "bytes.data()" in transformed
 
 
@@ -58,7 +62,7 @@ size_t g(size_t colormap_size, uint8_t* data, int size) {
     assert "std::min((size_t)colormap_size, static_cast<size_t>(6731))" in transformed
 
 
-def test_inline_repeated_bytes_id_keeps_call_for_replay() -> None:
+def test_inline_repeated_bytes_id_uses_header_values() -> None:
     source = """
 void f(uint8_t* data, int size, size_t length) {
   FuzzedDataProvider fdp(data, size);
@@ -70,13 +74,17 @@ void f(uint8_t* data, int size, size_t length) {
     streams[100003].append(("B", [0x01, 0x02]))
     streams[100003].append(("B", [0x03, 0x04]))
 
-    transformed, replaced = inline_source(source, streams)
+    result = inline_source_with_report(source, streams)
 
-    assert replaced == 0
-    assert "ConsumeBytes<uint8_t>(length, /*FDP_ID:100003*/ 100003)" in transformed
+    assert result.replaced == 1
+    assert result.loop_replaced == 1
+    assert result.header_replaced == 1
+    assert "auto bytes = hr_values_100003[hr_index_100003++];" in result.source
+    assert "static const std::vector<uint8_t> hr_values_100003[]" in result.header_source
+    assert "std::vector<uint8_t>{0x01, 0x02}" in result.header_source
 
 
-def test_inline_repeated_remaining_bytes_id_keeps_call_for_replay() -> None:
+def test_inline_repeated_remaining_bytes_id_uses_header_values() -> None:
     source = """
 size_t g(uint8_t* data, int size) {
   FuzzedDataProvider fdp(data, size);
@@ -88,7 +96,51 @@ size_t g(uint8_t* data, int size) {
     streams[100004].append(("R", 128))
     streams[100004].append(("R", 0))
 
-    transformed, replaced = inline_source(source, streams)
+    result = inline_source_with_report(source, streams)
 
-    assert replaced == 0
-    assert "fdp.remaining_bytes(/*FDP_ID:100004*/ 100004)" in transformed
+    assert result.replaced == 1
+    assert result.loop_replaced == 1
+    assert "return hr_values_100004[hr_index_100004++];" in result.source
+    assert "static const size_t hr_values_100004[]" in result.header_source
+
+
+def test_large_single_byte_vector_moves_to_values_header() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto bytes = fdp.ConsumeBytes<uint8_t>(100, /*FDP_ID:100005*/ 100005);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100005].append(("B", list(range(MAX_INLINE_BUFFER_BYTES + 1))))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert result.large_buffer_replaced == 1
+    assert result.header_replaced == 1
+    assert "std::vector<uint8_t>(hr_bytes_100005, hr_bytes_100005 + hr_bytes_100005_size)" in result.source
+    assert "static const uint8_t hr_bytes_100005[]" in result.header_source
+    assert "static const size_t hr_bytes_100005_size" in result.header_source
+    assert "0x40" in result.header_source
+
+
+def test_large_single_string_moves_to_values_header() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto s = fdp.ConsumeBytesAsString(100, /*FDP_ID:100006*/ 100006);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100006].append(("B", [ord("A")] * (MAX_INLINE_BUFFER_BYTES + 1)))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert result.large_buffer_replaced == 1
+    assert "std::string(hr_string_100006, hr_string_100006_size)" in result.source
+    assert "static const char hr_string_100006[]" in result.header_source
+    assert "sizeof(hr_string_100006) - 1" in result.header_source

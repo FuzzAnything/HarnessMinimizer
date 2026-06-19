@@ -254,7 +254,9 @@ def run_case(args: argparse.Namespace) -> int:
         header_path.write_text(inline_result.header_source, encoding="utf-8")
 
     print(f"[+] Replaced FDP calls:       {inline_result.replaced}")
-    print(f"[+] Header-backed callsites: {inline_result.loop_replaced}")
+    print(f"[+] Header-backed callsites: {inline_result.header_replaced}")
+    print(f"[+]   repeated/loop:         {inline_result.loop_replaced}")
+    print(f"[+]   large buffers:         {inline_result.large_buffer_replaced}")
     print(f"[+] Removed leftover IDs:    {removed}")
     print(f"[+] Transformed harness:     {inline_harness}")
     if header_path:
