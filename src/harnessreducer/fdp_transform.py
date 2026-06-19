@@ -368,20 +368,7 @@ def _cpp_string_literal(bytes_list: list[int]) -> str:
 
 
 def _cpp_byte_literal(value: int) -> str:
-    b = value & 0xFF
-    if b == ord("'"):
-        return "'\\''"
-    if b == ord("\\"):
-        return "'\\\\'"
-    if b == ord("\n"):
-        return "'\\n'"
-    if b == ord("\r"):
-        return "'\\r'"
-    if b == ord("\t"):
-        return "'\\t'"
-    if 32 <= b <= 126:
-        return f"'{chr(b)}'"
-    return f"0x{b:02x}"
+    return f"0x{value & 0xFF:02x}"
 
 
 def _vector_element_type_for_call(call: CallSite) -> str:
