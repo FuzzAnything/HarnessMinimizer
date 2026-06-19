@@ -32,6 +32,11 @@ SUPPORTED_FDP_APIS = {
 CPP_LANGUAGE = Language(ts_cpp.language())
 PARSER = Parser(CPP_LANGUAGE)
 VALUES_HEADER_NAME = "harness_values.h"
+# Non-loop byte/string buffers longer than this are moved to VALUES_HEADER_NAME.
+# Change this value if you want more or fewer buffers kept inline in the harness.
+MAX_INLINE_BUFFER_BYTES = 64
+_HEADER_BYTES_PER_LINE = 16
+_STRING_LITERAL_CHUNK_BYTES = 64
 
 _BOOL_METHODS = {"ConsumeBool"}
 _STRING_METHODS = {
@@ -44,6 +49,7 @@ _BYTES_METHODS = {
     "ConsumeBytesWithTerminator",
     "ConsumeRemainingBytes",
 }
+_BUFFER_METHODS = _STRING_METHODS | _BYTES_METHODS | {"ConsumeData"}
 _SCALAR_METHODS = {
     "ConsumeIntegral",
     "ConsumeIntegralInRange",
@@ -82,6 +88,8 @@ class InlineResult:
     header_name: str | None = None
     header_source: str = ""
     loop_replaced: int = 0
+    header_replaced: int = 0
+    large_buffer_replaced: int = 0
 
 
 @dataclass(frozen=True)
@@ -407,6 +415,35 @@ def _cpp_vector_literal(bytes_list: list[int], element_type: str = "unsigned cha
     return f"{vector_type}{{{byte_text}}}"
 
 
+def _format_wrapped_items(items: list[str], per_line: int = _HEADER_BYTES_PER_LINE) -> str:
+    if not items:
+        return "{}"
+
+    lines = ["{"]
+    for start in range(0, len(items), per_line):
+        chunk = items[start : start + per_line]
+        suffix = "," if start + per_line < len(items) else ""
+        lines.append("    " + ", ".join(chunk) + suffix)
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _cpp_byte_array_initializer(bytes_list: list[int], element_type: str) -> str:
+    items = [_cpp_byte_literal_for_type(value, element_type) for value in bytes_list]
+    return _format_wrapped_items(items)
+
+
+def _cpp_chunked_string_initializer(bytes_list: list[int]) -> str:
+    if len(bytes_list) <= _STRING_LITERAL_CHUNK_BYTES:
+        return _cpp_string_literal(bytes_list)
+
+    chunks = [
+        bytes_list[start : start + _STRING_LITERAL_CHUNK_BYTES]
+        for start in range(0, len(bytes_list), _STRING_LITERAL_CHUNK_BYTES)
+    ]
+    return "\n".join(f"    {_cpp_string_literal(chunk)}" for chunk in chunks)
+
+
 def _format_cpp_number(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -453,7 +490,13 @@ def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> 
             return _cpp_vector_literal(value, element_type)
         return f"std::vector<{element_type}>{{}}"
     if method == "ConsumeData":
-        return str(len(value)) if record_type == "B" else "0"
+        if record_type != "B" or not value:
+            return "0"
+        if not call.arg_texts:
+            return str(len(value))
+        destination = call.arg_texts[0]
+        byte_vector = _cpp_vector_literal(value)
+        return f"(std::memcpy({destination}, {byte_vector}.data(), {len(value)}), {len(value)})"
     if method == "remaining_bytes":
         if isinstance(value, int):
             return f"static_cast<size_t>({value})"
@@ -463,6 +506,16 @@ def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> 
 
 def _value_names(key: int) -> tuple[str, str]:
     return f"hr_values_{key}", f"hr_index_{key}"
+
+
+def _byte_buffer_names(key: int) -> tuple[str, str]:
+    values_name = f"hr_bytes_{key}"
+    return values_name, f"{values_name}_size"
+
+
+def _string_buffer_names(key: int) -> tuple[str, str]:
+    values_name = f"hr_string_{key}"
+    return values_name, f"{values_name}_size"
 
 
 def _extract_record_values(records: list[tuple[str, Any]], expected_type: str) -> list[Any] | None:
@@ -535,6 +588,82 @@ def _make_vector_header_entry(
     )
     includes = tuple(dict.fromkeys(("<vector>", *_vector_type_includes(element_type))))
     return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+
+
+def _make_large_byte_header_entry(
+    key: int,
+    method: str,
+    bytes_list: list[int],
+    element_type: str = "unsigned char",
+    extra_includes: tuple[str, ...] = (),
+) -> ValuesHeaderEntry:
+    values_name, size_name = _byte_buffer_names(key)
+    declaration = (
+        f"static const {element_type} {values_name}[] = "
+        f"{_cpp_byte_array_initializer(bytes_list, element_type)};\n"
+        f"static const size_t {size_name} = "
+        f"sizeof({values_name}) / sizeof({values_name}[0]);"
+    )
+    includes = tuple(dict.fromkeys((*_vector_type_includes(element_type), *extra_includes)))
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+
+
+def _make_large_string_header_entry(
+    key: int,
+    method: str,
+    bytes_list: list[int],
+) -> ValuesHeaderEntry:
+    values_name, size_name = _string_buffer_names(key)
+    initializer = _cpp_chunked_string_initializer(bytes_list)
+    if "\n" in initializer:
+        declaration = f"static const char {values_name}[] =\n{initializer};\n"
+    else:
+        declaration = f"static const char {values_name}[] = {initializer};\n"
+    declaration += (
+        f"static const size_t {size_name} = sizeof({values_name}) - 1;"
+        "  // exclude the trailing '\\0'"
+    )
+    return ValuesHeaderEntry(key=key, method=method, declaration=declaration)
+
+
+def _large_single_record_replacement_for_call(
+    call: CallSite,
+    matched_key: int,
+    record_type: str,
+    value: Any,
+) -> tuple[str, ValuesHeaderEntry] | None:
+    if (
+        call.method not in _BUFFER_METHODS
+        or record_type != "B"
+        or not isinstance(value, list)
+        or len(value) <= MAX_INLINE_BUFFER_BYTES
+    ):
+        return None
+
+    if call.method in _STRING_METHODS:
+        values_name, size_name = _string_buffer_names(matched_key)
+        replacement = f"std::string({values_name}, {size_name})"
+        return replacement, _make_large_string_header_entry(matched_key, call.method, value)
+
+    if call.method in _BYTES_METHODS:
+        element_type = _vector_element_type_for_call(call)
+        values_name, size_name = _byte_buffer_names(matched_key)
+        replacement = f"std::vector<{element_type}>({values_name}, {values_name} + {size_name})"
+        return replacement, _make_large_byte_header_entry(
+            matched_key, call.method, value, element_type
+        )
+
+    if call.method == "ConsumeData":
+        if not call.arg_texts:
+            return None
+        values_name, size_name = _byte_buffer_names(matched_key)
+        destination = call.arg_texts[0]
+        replacement = f"(std::memcpy({destination}, {values_name}, {size_name}), {size_name})"
+        return replacement, _make_large_byte_header_entry(
+            matched_key, call.method, value, extra_includes=("<cstring>",)
+        )
+
+    return None
 
 
 def _repeated_replacement_for_call(
@@ -640,6 +769,8 @@ def inline_source_with_report(
     header_keys: set[int] = set()
     replaced = 0
     loop_replaced = 0
+    header_replaced = 0
+    large_buffer_replaced = 0
 
     for call in calls:
         matched_key: int | None = None
@@ -660,6 +791,20 @@ def inline_source_with_report(
         record_count = len(streams[matched_key])
         if record_count == 1:
             record_type, value = streams[matched_key].popleft()
+            large_buffer = _large_single_record_replacement_for_call(
+                call, matched_key, record_type, value
+            )
+            if large_buffer is not None:
+                literal, header_entry = large_buffer
+                replacements.append((call.start, call.end, literal))
+                replaced += 1
+                header_replaced += 1
+                large_buffer_replaced += 1
+                if header_entry.key not in header_keys:
+                    header_entries.append(header_entry)
+                    header_keys.add(header_entry.key)
+                continue
+
             literal = _literal_for_single_record(call, record_type, value)
             if literal is None:
                 continue
@@ -684,6 +829,7 @@ def inline_source_with_report(
         replacements.append((call.start, call.end, literal))
         replaced += 1
         loop_replaced += 1
+        header_replaced += 1
         if header_entry.key not in header_keys:
             header_entries.append(header_entry)
             header_keys.add(header_entry.key)
@@ -709,6 +855,8 @@ def inline_source_with_report(
         header_name=result_header_name,
         header_source=header_source,
         loop_replaced=loop_replaced,
+        header_replaced=header_replaced,
+        large_buffer_replaced=large_buffer_replaced,
     )
 
 

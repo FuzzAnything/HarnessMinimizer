@@ -122,8 +122,14 @@ def inline_literals_in_reduced_harness(
         header_path = Path(inline_harness_path).with_name(inline_result.header_name)
         header_path.write_text(inline_result.header_source, encoding="utf-8")
         generated_headers.append(str(header_path))
+        details = []
+        if inline_result.loop_replaced:
+            details.append(f"{inline_result.loop_replaced} repeated")
+        if inline_result.large_buffer_replaced:
+            details.append(f"{inline_result.large_buffer_replaced} large-buffer")
+        detail_text = f" ({', '.join(details)})" if details else ""
         print(
-            f"Moved {inline_result.loop_replaced} repeated FDP callsites into "
+            f"Moved {inline_result.header_replaced} FDP callsites{detail_text} into "
             f"header-backed values: {header_path}"
         )
 
