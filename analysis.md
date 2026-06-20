@@ -1,0 +1,358 @@
+# HarnessReducer — Codebase Analysis
+
+## Project Overview
+
+HarnessReducer is a reducer workflow for library fuzzing harnesses. It minimizes harness C/C++ code while preserving an existing crash, with first-class support for FuzzedDataProvider (FDP). The pipeline combines AST-level reduction (treereduce-c), FDP trace-based literal inlining, and optional LLM semantic minimization.
+
+---
+
+## Source File Inventory (src/harnessreducer/)
+
+| File | Lines | Role |
+|---|---|---|
+| __init__.py | 6 | Re-exports public API symbols |
+| __main__.py | 3 | python -m harnessreducer entry point |
+| main.py | 9 | Legacy entry point, delegates to cli.main() |
+| cli.py | 64 | CLI argument parser and output handling |
+| api.py | 270 | Orchestration engine — main pipeline logic |
+| fdp_transform.py | 918 | FDP AST transformation (tag, inline, strip) |
+| reducer_runner.py | 232 | Build/run/external-tool driver (all clang++ invocations) |
+| llm_reducer.py | 137 | Optional LLM-based semantic reducer |
+
+Additional external script:
+
+| File | Role |
+|---|---|
+| tests/crash_tester.py | Interestingness test invoked by treereduce-c for every candidate reduction |
+
+---
+
+## File Functions in Execution Flow Order
+
+The execution flow follows the reduce_with_config() function in api.py. Below each file is described in the order it is first reached during a run.
+
+### 1. __main__.py — Package Entry Point
+
+Invoked when the user runs python -m harnessreducer. Simply delegates to cli.main().
+
+### 2. cli.py — CLI Argument Parsing and Output
+
+Parses command-line arguments (see CLI Arguments section below), constructs a ReductionConfig, calls reduce_with_config(config), then copies the resulting reduced harness (and any generated header files) to the output path.
+
+### 3. api.py — Orchestration Engine
+
+Defines ReductionConfig and ReductionResult dataclasses, plus the main pipeline function reduce_with_config(). The pipeline steps in order:
+
+1. Configure working directory — configure_work_dir()
+2. Check prerequisites — check_tree_reducer(), check_harness_compilation()
+3. Extract crash pattern — Run the harness, parse ASan/UBSan/abort output for a regex pattern
+4. Validate crash pattern — check_reducer_crash_pattern() via crash_tester.py
+5. Tag FDP callsites — tag_harness_with_fdp_ids() which calls fdp_transform.inject_ids()
+6. Compile dump-mode binary — compile_dump_mode_harness()
+7. Dump FDP trace — dump_fdp_trace() — runs the tagged binary with FDP_TRACE_PATH env var
+8. Tree-reduce — run_treereducer() — invokes treereduce-c which calls crash_tester.py for each candidate
+9. Format — format_reduced_harness() via clang-format
+10. Inline FDP literals — inline_literals_in_reduced_harness() which calls fdp_transform.inline_source_with_report() and fdp_transform.strip_injected_ids()
+11. Validate inlined harness — Runs crash_tester.py on the inlined version
+12. (Optional) LLM reduction — apply_llm_reduction() if --llm flag is set
+
+Also defines:
+- ADDITIONAL_HEADERS — A list of 12 standard C++ headers that get prepended to the fallback harness if missing.
+- tag_harness_with_fdp_ids() — Reads the source, calls inject_ids(), writes the tagged file to the work dir.
+- _prepend_additional_headers() — Ensures the harness has standard includes needed after inlining.
+- _finalize_fallback_harness() — Strips injected IDs and prepends missing headers on the tree-reduced harness (used when inline validation fails).
+- inline_literals_in_reduced_harness() — Performs the inline transform, writes .inline.cpp, generates harness_values.h for large buffers, and validates crash preservation. Falls back to tree-reduced harness if validation fails.
+- process() — Convenience wrapper: builds a ReductionConfig from kwargs and calls reduce_with_config().
+
+### 4. fdp_transform.py — FDP AST Transformation Engine
+
+Uses tree-sitter with the tree_sitter_cpp grammar to parse C++ source into an AST. Provides three core operations:
+
+#### inject_ids(source, start_id=100000, marker="FDP_ID") -> (transformed_source, count)
+
+Scans the AST for supported FDP method calls (e.g. ConsumeIntegral, ConsumeBool, ConsumeBytesAsString, etc.). Appends a unique numeric ID as an extra argument to each call:
+
+  fuzz_data.ConsumeIntegral<int>()
+  // After:
+  fuzz_data.ConsumeIntegral<int>(/*FDP_ID*/100001)
+
+The IDs start at start_id and increment by 1. These IDs allow the FDP trace records (dumped at runtime) to be mapped back to their source callsites.
+
+Supports 17 FDP APIs defined in SUPPORTED_FDP_APIS, including ConsumeBytes, ConsumeBytesWithTerminator, ConsumeRemainingBytes, ConsumeBytesAsString, ConsumeRandomLengthString, ConsumeRemainingBytesAsString, ConsumeIntegral, ConsumeIntegralInRange, ConsumeFloatingPoint, ConsumeFloatingPointInRange, ConsumeProbability, ConsumeBool, ConsumeEnum, PickValueInArray, ConsumeData, remaining_bytes.
+
+#### inline_source_with_report(source, streams) -> InlineResult
+
+Replaces FDP calls with concrete literal values from the trace. Key behaviors:
+
+- Scalar methods (ConsumeIntegral, ConsumeBool, ConsumeFloatingPoint, etc.) — replaced with C++ literals (e.g. 42, true, 3.14).
+- String methods (ConsumeBytesAsString, ConsumeRandomLengthString, ConsumeRemainingBytesAsString) — replaced with C++ string literals, with escaping for non-printable characters.
+- Bytes/buffer methods (ConsumeBytes, ConsumeRemainingBytes, ConsumeData) — small buffers (64 bytes or less) become std::vector<uint8_t>{...} literals; large buffers (>64 bytes) are moved to a generated header file harness_values.h and referenced via an extern declaration.
+- Loop-carried FDP calls (same callsite ID appearing multiple times in the trace) — handled by creating a static array/vector from all trace records for that ID, and wrapping the call in a loop indexed by a static counter.
+- Returns InlineResult with fields: source, replaced count, skipped (callsites that could not be inlined), header_name, header_source, loop_replaced, header_replaced, large_buffer_replaced.
+
+Key constants:
+- MAX_INLINE_BUFFER_BYTES = 64 — buffers larger than this go to the header file.
+- VALUES_HEADER_NAME = "harness_values.h" — the generated header filename.
+- _HEADER_BYTES_PER_LINE = 16 — formatting for hex arrays in the header.
+- _STRING_LITERAL_CHUNK_BYTES = 64 — chunk size for long string literals.
+
+#### strip_injected_ids(source, start_id=100000) -> (cleaned_source, removed_count)
+
+Removes the injected /*FDP_ID*/NNNNNN arguments from FDP calls in the source. This is the final cleanup step so the output harness does not contain internal instrumentation artifacts.
+
+#### Supporting types:
+- CallSite — Represents an FDP callsite in the AST with position, method name, key, fallback keys, argument texts, and optional template argument.
+- InlineSkip — Records a callsite that was skipped during inlining (with reason).
+- InlineResult — The result of the inline transformation.
+- ValuesHeaderEntry — An entry for the generated header file (key, method, declaration, includes).
+
+### 5. reducer_runner.py — Build/Run/External-Tool Driver
+
+Handles all clang++ compilations, harness executions, and the treereduce-c integration. See Compilation Details section below for the full breakdown.
+
+Key functions:
+- get_project_root() — Resolves to <package_root>/../.. (the repo root).
+- get_fdp_header_dir() — <project_root>/include — where the instrumented FuzzedDataProvider.h lives.
+- get_crash_tester_path() — <project_root>/tests/crash_tester.py.
+- configure_work_dir(work_dir) / get_work_dir() — Manages the working directory (temp dir by default, or user-specified via --work-dir). Temp dirs are cleaned up at exit.
+- run_command(cmd, error_prefix, env, ignore_errors) — Generic subprocess runner with error handling.
+- check_tree_reducer() — Verifies treereduce-c is installed and in PATH.
+- check_harness_compilation(harness_path, extra_flags) — Phase 1 compilation (see below).
+- extract_crash_pattern_from_output(crash_input) — Runs the compiled harness and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/libFuzzer output.
+- check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, extra_flags) — Validates the crash pattern by running crash_tester.py.
+- compile_dump_mode_harness(harness_path, extra_flags) — Phase 2 compilation (see below).
+- dump_fdp_trace(harness_bin, crash_input) — Runs the dump-mode binary with FDP_TRACE_PATH env var to produce the FDP trace log.
+- run_treereducer(harness_path, fdp_trace_file, crash_pattern, extra_args, crash_input, stable) — Invokes treereduce-c with the crash tester as the interestingness test.
+- format_reduced_harness(reduced_harness_path) — Runs clang-format -i --style=LLVM on the reduced harness.
+
+Crash pattern extraction regexes (defined in reducer_runner.py):
+- ASAN_SUMMARY_PATTERN — Matches SUMMARY: AddressSanitizer: <bug-type>
+- ASAN_ERROR_PATTERN — Matches ERROR: AddressSanitizer: ...
+- LEAK_PATTERN — Matches SUMMARY: AddressSanitizer: N byte(s) leaked in M allocation(s).
+- UBSAN_PATTERN — Matches SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior <loc>
+- ABORT_ASSERT_LOCATION_PATTERN — Matches <file>:<line> from assertion failures
+- ABSL_CHECK_PATTERN — Matches Check failed: <condition> from absl CHECK failures
+- LIBFUZZER_SIGNAL_PATTERN — Matches SUMMARY: libFuzzer: <signal>
+
+### 6. tests/crash_tester.py — Interestingness Test
+
+Called by treereduce-c (and by the inline validation step) to determine if a candidate reduction still preserves the crash. It:
+
+1. Compiles the candidate source with Phase 3 flags (see below).
+2. Runs the resulting binary with ASAN_OPTIONS=exitcode=77 and UBSAN_OPTIONS=exitcode=77:halt_on_error=1.
+3. If the process exits with code 77 AND the crash pattern regex matches the output — returns exit code 77 ("interesting").
+4. Otherwise returns exit code 1 ("not interesting").
+
+If --fdp-trace is provided, sets FDP_TRACE_PATH env var and adds -DFDP_MIN_MODE_REPLAY -I<project>/include to the compile command.
+
+### 7. llm_reducer.py — Optional LLM Semantic Reducer
+
+Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimization:
+
+- Configuration: Reads OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL from environment variables (loaded via dotenv from /root/FuzzAgent/sub_modules/HarnessReducer/.env).
+- Prompt: Instructs the LLM to perform constant folding, dead-code elimination, and control-flow flattening while preserving exact semantics and crash behavior. Has strict rules about not removing conditional branches unless the condition can be exactly evaluated.
+- Validation: After LLM reduction, runs crash_tester.py to verify crash preservation. Falls back to the pre-LLM version if validation fails.
+- Output: Writes to <reduced_harness>.llm.cpp on success.
+
+---
+
+## CLI Arguments
+
+| Argument | Short | Required | Default | Description |
+|---|---|---|---|---|
+| harness | — | Yes (positional) | — | Path to the original harness source file (.c, .cc, .cpp). This is the file to be reduced. |
+| --extra-flags | — | No | None | Extra compiler flags passed to clang++ during all build steps. Split on whitespace. Used to supply -std=c++17, -I<path>, -L<path>, -l<lib>, -D<macro>, etc. |
+| --crash-input | — | No | None | Path to a crashing input file (seed corpus entry) fed to the harness binary at runtime. If not provided, the harness is run without a file argument (libFuzzer built-in fuzzing loop executes). |
+| --work-dir | — | No | None (auto temp dir) | Use a fixed working directory instead of creating a temporary one. When set, the directory is not cleaned up at exit. When omitted, a temp dir with prefix harness_reducer_ is created and removed at program exit. |
+| --llm | — | No | False | Enable LLM-based semantic minimization as a final reduction pass. Requires OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL environment variables to be set. |
+| -o / --output | -o | Yes | — | Output path for the reduced harness. The parent directory is created if needed. Any generated header files (e.g., harness_values.h) are copied to the same directory. |
+| --stable | — | No | False | Use deterministic/stable reduction mode. Passes --stable --min-reduction 1 to treereduce-c instead of --fast. Ensures reproducible output across runs. |
+
+### ReductionConfig fields (internal, built from CLI args)
+
+| Field | Type | Default | Source |
+|---|---|---|---|
+| harness_path | str | — | args.harness |
+| extra_flags | str or None | None | args.extra_flags |
+| crash_input | str or None | None | args.crash_input |
+| work_dir | str or None | None | args.work_dir |
+| start_id | int | 100000 | Hardcoded |
+| marker | str | "FDP_ID" | Hardcoded |
+| use_llm | bool | False | args.llm |
+| stable | bool | False | args.stable |
+
+### ReductionResult fields
+
+| Field | Type | Description |
+|---|---|---|
+| reduced_harness | str | Path to the final reduced harness file |
+| tagged_harness | str | Path to the FDP-ID-tagged intermediate harness |
+| fdp_trace | str | Path to the FDP trace log file |
+| generated_headers | tuple[str, ...] | Paths to any generated header files (e.g., harness_values.h) |
+| success | bool | Whether the reduction completed successfully |
+
+---
+
+## Compilation Details: Flags, Headers, and Libraries
+
+There are three distinct compilation contexts in the tool. Each uses clang++ but with different flags depending on the phase.
+
+### Phase 1: Initial Compilation Check
+
+Function: reducer_runner.py:check_harness_compilation()
+Purpose: Verify the original harness compiles before starting the pipeline.
+
+  clang++ -fsanitize=address,fuzzer,undefined -g -O0 <harness.cpp> -o <work_dir>/poc.out
+
+- Flags: -fsanitize=address,fuzzer,undefined -g -O0
+- User flags: --extra-flags split on whitespace and appended
+- Include dirs: None added by the tool — the user include for fuzzer/FuzzedDataProvider.h must resolve from system paths or the user own -I in --extra-flags
+- Linking: -fsanitize=fuzzer automatically links libFuzzer; -fsanitize=address,undefined links the sanitizer runtimes
+- Define macros: None
+- Output: <work_dir>/poc.out
+
+### Phase 2: Tagged Harness Dump Mode Compilation
+
+Function: reducer_runner.py:compile_dump_mode_harness()
+Purpose: Build an instrumented binary that records every FDP call return value to a trace log.
+
+  clang++ -DFDP_MIN_MODE_DUMP -I<project_root>/include -fsanitize=address,fuzzer,undefined -g -O0 <tagged_harness.cpp> -o <work_dir>/tagged_harness.out
+
+- Flags: Same base flags as Phase 1
+- Define macros:
+  - -DFDP_MIN_MODE_DUMP — Switches FuzzedDataProvider.h into dump mode. Every FDP call records its return value to the trace file (path from FDP_TRACE_PATH env var) instead of operating normally. The header contains #if defined(FDP_MIN_MODE_DUMP) / #elif defined(FDP_MIN_MODE_REPLAY) / #else conditional compilation blocks.
+- Include dirs:
+  - -I<project_root>/include — Explicitly adds the project include/ directory so the custom FuzzedDataProvider.h (with dump/replay instrumentation) is found instead of any system version. get_fdp_header_dir() resolves to <project_root>/include.
+- User flags: --extra-flags split on whitespace and appended
+- Linking: Same as Phase 1
+- Output: <work_dir>/tagged_harness.out
+
+### Phase 3: Crash Tester Replay Mode Compilation
+
+Script: tests/crash_tester.py:main()
+Purpose: Interestingness test invoked by treereduce-c for every candidate reduction. Also used for inline validation and LLM validation.
+
+  clang++ -I<project_root>/include -DFDP_MIN_MODE_REPLAY -fsanitize=address,fuzzer,undefined -g -O0 <source.cpp> -o </tmp/poc_PID_XXXXX.out>
+
+- Conditional flags (only when --fdp-trace argument is provided):
+  - -I<project_root>/include — Same as Phase 2, uses the instrumented FuzzedDataProvider.h
+  - -DFDP_MIN_MODE_REPLAY — Switches FuzzedDataProvider.h into replay mode. FDP calls read their return values from the trace file instead of consuming the fuzz input, making execution deterministic.
+- When --fdp-trace is NOT provided (e.g., during initial crash-pattern validation): neither -I nor -DFDP_MIN_MODE_REPLAY is added — the compilation is identical to Phase 1.
+- User flags: --extra-flags split on whitespace and appended
+- Linking: Same as Phase 1
+- Output: /tmp/poc_<PID>_<random>.out (temp file, deleted after test)
+
+### Compilation Flags Summary Table
+
+| Flag | Phase 1 (check) | Phase 2 (dump) | Phase 3 (replay tester) | Phase 3 (no trace) |
+|---|---|---|---|---|
+| -fsanitize=address,fuzzer,undefined | Yes | Yes | Yes | Yes |
+| -g -O0 | Yes | Yes | Yes | Yes |
+| -DFDP_MIN_MODE_DUMP | No | Yes | No | No |
+| -DFDP_MIN_MODE_REPLAY | No | No | Yes | No |
+| -I<project>/include | No | Yes | Yes | No |
+| User --extra-flags | Yes | Yes | Yes | Yes |
+
+### Header Discovery
+
+- The project own include/fuzzer/FuzzedDataProvider.h is the only header directory the tool explicitly adds via -I. It contains custom dump/replay instrumentation not present in the standard LLVM version.
+- The header uses compile-time mode selection:
+  - FDP_MIN_MODE_DUMP — Mode::kDump — FDP calls write return values to trace
+  - FDP_MIN_MODE_REPLAY — Mode::kReplay — FDP calls read return values from trace
+  - Neither defined — Mode::kNative — Normal FDP behavior
+  - FDP_MIN_MODE_DUMP and FDP_MIN_MODE_REPLAY are mutually exclusive (the header has #error if both are defined).
+- No other include paths are added by the tool — the user must supply any library-specific -I flags through --extra-flags.
+
+### Library Linking
+
+- The tool relies entirely on -fsanitize=fuzzer to link libFuzzer and -fsanitize=address,undefined to link the ASan/UBSan runtimes.
+- No -L flags or -l flags are added by the tool. Any library linking must come from the user --extra-flags (e.g., -lpng, -L/path/to/lib, etc.).
+
+### Runtime Environment Variables
+
+When running the compiled binaries (not compiling), these env vars are set:
+
+| Variable | Value | When | Purpose |
+|---|---|---|---|
+| ASAN_OPTIONS | exitcode=77:symbolize=0 | All harness executions | Makes ASan exit with code 77 on error (the interesting exit code for treereduce); disables symbolization for speed |
+| UBSAN_OPTIONS | exitcode=77:halt_on_error=1:symbolize=0 | All harness executions | Same for UBSan; halts on first error |
+| FDP_TRACE_PATH | <work_dir>/fdp_trace.log | Dump-mode execution only | Tells the dump-mode FDP header where to write the trace file |
+
+---
+
+## treereduce-c Integration
+
+The tool invokes treereduce-c as an external process for AST-level reduction:
+
+  treereduce-c -j 60 -s <harness.cpp> -o <reduced_harness.cpp> --fast \
+    --timeout 300 --interesting-exit-code 77 \
+    -- <crash_tester.py> @@.cpp <crash_pattern> \
+       --crash-input <crash_input> --extra-flags <extra_flags> --fdp-trace <trace>
+
+- -j 60 — Use up to 60 parallel jobs
+- -s — Read the source file
+- -o — Write the reduced output
+- --fast (default) or --stable --min-reduction 1 — Reduction strategy
+- --timeout 300 — Per-test timeout in seconds
+- --interesting-exit-code 77 — The exit code that means this reduction is still interesting (matches ASan/UBSan exit code)
+- @@.cpp — treereduce-c replaces this with the candidate source path
+
+---
+
+## Working Directory Layout
+
+When using a temp dir (default), the working directory contains:
+
+  harness_reducer_<random>/
+  +-- <harness_name>.cpp          # Tagged harness (with FDP_IDs)
+  +-- tagged_harness.out          # Dump-mode compiled binary
+  +-- poc.out                     # Phase 1 compiled binary
+  +-- fdp_trace.log               # FDP trace from dump mode
+  +-- reduced_harness.cpp         # Tree-reduced harness
+  +-- reduced_harness.inline.cpp  # After FDP literal inlining
+  +-- reduced_harness.llm.cpp     # After LLM reduction (if --llm)
+  +-- harness_values.h            # Generated header for large buffers
+
+When --work-dir is specified, the directory is not cleaned up at exit. Otherwise, it is removed via atexit handler.
+
+---
+
+## Additional Headers
+
+The api.py module defines ADDITIONAL_HEADERS — 12 standard C++ headers that are prepended to the fallback harness if they are not already present:
+
+  ADDITIONAL_HEADERS = [
+      "#include <cstddef>",
+      "#include <cstring>",
+      "#include <string>",
+      "#include <vector>",
+      "#include <deque>",
+      "#include <fstream>",
+      "#include <map>",
+      "#include <mutex>",
+      "#include <sstream>",
+      "#include <cmath>",
+      "#include <iomanip>",
+      "#include <limits>",
+  ]
+
+These are needed because the FDP literal inlining may introduce uses of these types (e.g., std::vector, std::string, std::deque) that were previously provided by FuzzedDataProvider.h.
+
+---
+
+## LLM Reducer Details
+
+The LLM reducer (llm_reducer.py) is an optional final pass:
+
+- Environment config: Reads from dotenv at /root/FuzzAgent/sub_modules/HarnessReducer/.env:
+  - OPENAI_API_KEY — API key
+  - OPENAI_BASE_URL — Base URL (supports non-OpenAI providers)
+  - OPENAI_MODEL — Model name
+- Model invocation: Uses openai Python client with temperature=1.0 and reasoning: {enabled: True} for chain-of-thought.
+- Prompt strategy: Instructs the LLM to perform:
+  1. Constant folding (evaluate compile-time-known expressions)
+  2. Redundant statement elimination (remove unused variables/calls)
+  3. Control-flow flattening (remove branches whose conditions are known)
+  4. Strict rules: cannot remove branches unless the exact condition value is known; must preserve updated variable values through branches.
+- Validation: After LLM output, compiles and runs with crash_tester.py (no --fdp-trace). Falls back to pre-LLM version if crash is not preserved.
+- Output file: <reduced_harness>.llm.cpp
