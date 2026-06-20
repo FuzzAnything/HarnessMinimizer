@@ -29,6 +29,11 @@ COMMON_HEADER_RULES = (
 )
 
 
+def _assert(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
 def _project_root() -> Path:
     return _REPO_ROOT
 
@@ -215,8 +220,14 @@ def run_case(args: argparse.Namespace) -> int:
 
     source = harness.read_text(encoding="utf-8", errors="ignore")
     tagged_source, injected = inject_ids(source, args.start_id, args.marker)
+    _assert(injected > 0, "Expected inject_ids() to instrument at least one FDP callsite.")
     tagged_harness = work_dir / f"{harness.stem}.tagged.cpp"
     tagged_harness.write_text(tagged_source, encoding="utf-8")
+    _assert(tagged_harness.exists(), f"Tagged harness was not written: {tagged_harness}")
+    _assert(
+        f"/*{args.marker}:" in tagged_source,
+        f"Tagged source does not contain expected injected marker /*{args.marker}:",
+    )
     print(f"[+] Injected {injected} FDP IDs: {tagged_harness}")
 
     tagged_binary = work_dir / "tagged_harness.out"
@@ -232,11 +243,18 @@ def run_case(args: argparse.Namespace) -> int:
     trace_path = work_dir / "fdp_trace.log"
     proc = _run_harness(tagged_binary, crash_input, trace_path=trace_path)
     print(f"[+] Dump-mode run exit code: {proc.returncode}")
+    _assert(
+        proc.returncode == args.expected_crash_exit_code,
+        "Dump-mode harness did not exit with the expected crash code "
+        f"{args.expected_crash_exit_code}; got {proc.returncode}.",
+    )
     if not trace_path.exists():
         raise RuntimeError(f"FDP trace was not created: {trace_path}")
+    _assert(trace_path.stat().st_size > 0, f"FDP trace is empty: {trace_path}")
     print(f"[+] FDP trace: {trace_path}")
 
     streams = load_trace(trace_path)
+    _assert(bool(streams), "load_trace() returned no FDP trace streams.")
     inline_result = inline_source_with_report(
         tagged_source,
         streams,
@@ -244,14 +262,25 @@ def run_case(args: argparse.Namespace) -> int:
     )
     transformed, removed = strip_injected_ids(inline_result.source, start_id=args.start_id)
     transformed = _prepend_needed_headers(transformed)
+    _assert(
+        inline_result.replaced > 0,
+        "Expected inline_source_with_report() to replace at least one FDP callsite.",
+    )
+    _assert(
+        f"/*{args.marker}:" not in transformed,
+        f"Transformed source still contains injected marker /*{args.marker}:",
+    )
 
     inline_harness = work_dir / f"{harness.stem}.fdp_inlined.cpp"
     inline_harness.write_text(transformed, encoding="utf-8")
+    _assert(inline_harness.exists(), f"Transformed harness was not written: {inline_harness}")
 
     header_path: Path | None = None
     if inline_result.header_source and inline_result.header_name:
         header_path = work_dir / inline_result.header_name
         header_path.write_text(inline_result.header_source, encoding="utf-8")
+        _assert(header_path.exists(), f"Generated values header was not written: {header_path}")
+        _assert(header_path.stat().st_size > 0, f"Generated values header is empty: {header_path}")
 
     print(f"[+] Replaced FDP calls:       {inline_result.replaced}")
     print(f"[+] Header-backed callsites: {inline_result.header_replaced}")
@@ -280,6 +309,7 @@ def run_case(args: argparse.Namespace) -> int:
         args.extra_flags,
         dump_mode=False,
     )
+    _assert(inline_binary.exists(), f"Transformed harness binary was not written: {inline_binary}")
     print(f"[+] Compiled transformed harness: {inline_binary}")
 
     if args.no_run_result:
@@ -293,6 +323,12 @@ def run_case(args: argparse.Namespace) -> int:
     if result_proc.stderr:
         print("===== stderr =====")
         print(result_proc.stderr)
+
+    _assert(
+        result_proc.returncode == args.expected_crash_exit_code,
+        "Transformed harness did not preserve the expected crash exit code "
+        f"{args.expected_crash_exit_code}; got {result_proc.returncode}.",
+    )
 
     return 0
 
@@ -342,6 +378,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-id", type=int, default=100000)
     parser.add_argument("--marker", default="FDP_ID")
     parser.add_argument("--header-name", default=VALUES_HEADER_NAME)
+    parser.add_argument(
+        "--expected-crash-exit-code",
+        type=int,
+        default=77,
+        help="Expected sanitizer/libFuzzer crash exit code. Default: 77",
+    )
     parser.add_argument(
         "--no-compile-result",
         action="store_true",
