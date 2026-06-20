@@ -300,7 +300,7 @@ clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined \
 ```
 
 - Conditional replay flags are used in both PCH precompilation and per-candidate object compilation only when --fdp-trace is provided. They are not needed for the final link command.
-- User flags: --extra-flags split on whitespace and appended to the PCH precompile, object compile, and link commands. -Qunused-arguments is used in PCH mode so link-oriented flags in --extra-flags do not break header/object compilation and compile-oriented flags do not break linking.
+- User flags: --extra-flags are split on whitespace and then separated for PCH mode: compile/preprocessor flags are appended to the PCH precompile and object compile commands, while library/linker flags are appended only to the final link command. Flags such as -pthread and -stdlib=... are preserved for both stages.
 - Optimization/debug flags: PCH mode intentionally uses -O1 -gline-tables-only instead of -g -O0 for the PCH precompile and object compile. The --direct path still uses -g -O0.
 - Temporary outputs: /tmp/poc_<PID>_<random>.o and /tmp/poc_<PID>_<random>.out are deleted after each test.
 - In tree-reduction, treereduce-c receives the include-stripped .fahm_body.cpp as -s input in --pch mode. After treereduce-c writes reduced_harness.cpp, restore_pch_includes() prepends the moved include directives so the reduced harness remains a standalone source file.
@@ -364,7 +364,7 @@ Note: The extract_crash_pattern_from_output() function is NOT a Phase 3 invocati
 
 - The tool relies entirely on -fsanitize=fuzzer to link libFuzzer and -fsanitize=address,undefined to link the ASan/UBSan runtimes.
 - No -L flags or -l flags are added by the tool. Any library linking must come from the user --extra-flags (e.g., -lpng, -L/path/to/lib, etc.).
-- In --direct Phase 3 mode, user flags are appended to the single compile/link command. In --pch Phase 3 mode, user flags are appended to the PCH precompile, object compile, and final link commands so compile-time include/define flags and link-time library flags are both preserved.
+- In --direct Phase 3 mode, user flags are appended to the single compile/link command. In --pch Phase 3 mode, user flags are split so compile-time include/define flags are used during PCH/object compilation and link-time library flags are used during the final link.
 
 ### Runtime Environment Variables
 
