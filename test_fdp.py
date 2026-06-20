@@ -146,30 +146,49 @@ def _library_args(lib_dir: Path) -> list[str]:
 def _compile_harness(
     source: Path,
     output: Path,
-    build_root: Path,
-    extra_flags: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
     dump_mode: bool,
 ) -> None:
-    root = _project_root()
     cmd = [
         "clang++",
-        "-std=c++17",
-        f"-I{root / 'include'}",
-        f"-I{build_root / 'include'}",
         "-fsanitize=address,fuzzer,undefined",
         "-g",
         "-O0",
     ]
     if dump_mode:
         cmd.append("-DFDP_MIN_MODE_DUMP")
-    if extra_flags:
-        cmd.extend(shlex.split(extra_flags))
-    cmd.extend([str(source), *_library_args(build_root / "lib"), "-o", str(output)])
+    if compile_flags:
+        cmd.extend(shlex.split(compile_flags))
+    cmd.extend([str(source), "-o", str(output)])
+    if link_flags:
+        cmd.extend(shlex.split(link_flags))
 
     run_command(
         cmd,
         f"Failed to compile {'dump-mode ' if dump_mode else ''}harness {source}",
     )
+
+
+def _case_flags(
+    build_root: Path,
+    user_compile_flags: str | None,
+    user_link_flags: str | None,
+) -> tuple[str, str]:
+    root = _project_root()
+    compile_flags = [
+        "-std=c++17",
+        f"-I{root / 'include'}",
+        f"-I{build_root / 'include'}",
+    ]
+    if user_compile_flags:
+        compile_flags.extend(shlex.split(user_compile_flags))
+
+    link_flags = _library_args(build_root / "lib")
+    if user_link_flags:
+        link_flags.extend(shlex.split(user_link_flags))
+
+    return " ".join(compile_flags), " ".join(link_flags)
 
 
 def _run_harness(binary: Path, crash_input: Path | None, trace_path: Path | None = None):
@@ -211,12 +230,19 @@ def run_case(args: argparse.Namespace) -> int:
     if not work_dir.is_absolute():
         work_dir = (root / work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
+    compile_flags, link_flags = _case_flags(
+        build_root,
+        args.compile_flags,
+        args.link_flags,
+    )
 
     print(f"[+] Benchmark case: {case_dir}")
     print(f"[+] Harness:        {harness}")
     print(f"[+] Crash input:    {crash_input if crash_input else '<none>'}")
     print(f"[+] Build root:     {build_root}")
     print(f"[+] Work dir:       {work_dir}")
+    print(f"[+] Compile flags:  {compile_flags}")
+    print(f"[+] Link flags:     {link_flags}")
 
     source = harness.read_text(encoding="utf-8", errors="ignore")
     tagged_source, injected = inject_ids(source, args.start_id, args.marker)
@@ -234,8 +260,8 @@ def run_case(args: argparse.Namespace) -> int:
     _compile_harness(
         tagged_harness,
         tagged_binary,
-        build_root,
-        args.extra_flags,
+        compile_flags,
+        link_flags,
         dump_mode=True,
     )
     print(f"[+] Compiled dump-mode harness: {tagged_binary}")
@@ -305,8 +331,8 @@ def run_case(args: argparse.Namespace) -> int:
     _compile_harness(
         inline_harness,
         inline_binary,
-        build_root,
-        args.extra_flags,
+        compile_flags,
+        link_flags,
         dump_mode=False,
     )
     _assert(inline_binary.exists(), f"Transformed harness binary was not written: {inline_binary}")
@@ -371,9 +397,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output/work directory. Default: <case>/fdp_test_work",
     )
     parser.add_argument(
-        "--extra-flags",
+        "--compile-flags",
         default=None,
-        help="Extra clang++ flags, quoted as a single string.",
+        help="Additional compile/preprocessor flags, quoted as a single string.",
+    )
+    parser.add_argument(
+        "--link-flags",
+        default=None,
+        help="Additional linker/library flags, quoted as a single string.",
     )
     parser.add_argument("--start-id", type=int, default=100000)
     parser.add_argument("--marker", default="FDP_ID")

@@ -13,11 +13,11 @@ HarnessReducer is a reducer workflow for library fuzzing harnesses. It minimizes
 | __init__.py | 3 | Re-exports public API symbols |
 | __main__.py | 3 | python -m harnessreducer entry point |
 | main.py | 6 | Legacy entry point, delegates to cli.main() |
-| cli.py | 106 | CLI argument parser and output handling |
-| api.py | 298 | Orchestration engine — main pipeline logic |
+| cli.py | 118 | CLI argument parser and output handling |
+| api.py | 310 | Orchestration engine — main pipeline logic |
 | fdp_transform.py | 918 | FDP AST transformation (tag, inline, strip) |
-| reducer_runner.py | 504 | Build/run/external-tool driver (all clang++ invocations) |
-| llm_reducer.py | 170 | Optional LLM-based semantic reducer |
+| reducer_runner.py | 516 | Build/run/external-tool driver (all clang++ invocations) |
+| llm_reducer.py | 172 | Optional LLM-based semantic reducer |
 
 Additional external script:
 
@@ -118,15 +118,15 @@ Key functions:
 - configure_work_dir(work_dir) / get_work_dir() — Manages the working directory (temp dir by default, or user-specified via --work-dir). Temp dirs are cleaned up at exit.
 - run_command(cmd, error_prefix, env, ignore_errors) — Generic subprocess runner with error handling.
 - check_tree_reducer() — Verifies treereduce-c is installed and in PATH.
-- check_harness_compilation(harness_path, extra_flags) — Phase 1 compilation (see below).
+- check_harness_compilation(harness_path, compile_flags, link_flags) — Phase 1 compilation (see below).
 - extract_crash_pattern_from_output(crash_input) — Runs the compiled harness and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/libFuzzer output.
-- check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, extra_flags, phase3_mode) — Validates the crash pattern by running crash_tester.py in direct or PCH mode.
-- compile_dump_mode_harness(harness_path, extra_flags) — Phase 2 compilation (see below).
+- check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, compile_flags, link_flags, phase3_mode) — Validates the crash pattern by running crash_tester.py in direct or PCH mode.
+- compile_dump_mode_harness(harness_path, compile_flags, link_flags) — Phase 2 compilation (see below).
 - dump_fdp_trace(harness_bin, crash_input) — Runs the dump-mode binary with FDP_TRACE_PATH env var to produce the FDP trace log.
-- prepare_phase3_pch_harness(harness_path, extra_flags, use_replay) — For --pch mode, writes fahm_prefix.h, fahm_prefix.pch, and an include-stripped .fahm_body.cpp used by crash_tester.py.
+- prepare_phase3_pch_harness(harness_path, compile_flags, use_replay) — For --pch mode, writes fahm_prefix.h, fahm_prefix.pch, and an include-stripped .fahm_body.cpp used by crash_tester.py.
 - restore_pch_includes(harness_path, artifacts) — Prepends the moved include directives back to a reduced body after PCH-mode tree reduction so the final harness remains standalone.
 - pch_tester_args(artifacts, phase3_mode) — Produces crash_tester.py mode arguments: --direct or --pch --pch-path <fahm_prefix.pch>.
-- run_treereducer(harness_path, fdp_trace_file, crash_pattern, extra_args, crash_input, stable, phase3_mode) — Invokes treereduce-c with the crash tester as the interestingness test; in PCH mode it reduces the include-stripped body and restores the includes afterward.
+- run_treereducer(harness_path, fdp_trace_file, crash_pattern, compile_flags, link_flags, crash_input, stable, phase3_mode) — Invokes treereduce-c with the crash tester as the interestingness test; in PCH mode it reduces the include-stripped body and restores the includes afterward.
 - format_reduced_harness(reduced_harness_path) — Runs clang-format -i --style=LLVM on the reduced harness.
 
 Crash pattern extraction regexes (defined in reducer_runner.py):
@@ -168,7 +168,8 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 | Argument | Short | Required | Default | Description |
 |---|---|---|---|---|
 | harness | — | Yes (positional) | — | Path to the original harness source file (.c, .cc, .cpp). This is the file to be reduced. |
-| --extra-flags | — | No | None | Extra compiler flags passed to clang++ during all build steps. Split on whitespace. Used to supply -std=c++17, -I<path>, -L<path>, -l<lib>, -D<macro>, etc. |
+| --compile-flags | — | No | None | Flags passed to compile/preprocess stages. Split on whitespace. Used for -std=c++17, -I<path>, -D<macro>, etc. |
+| --link-flags | — | No | None | Flags passed to link stages. Split on whitespace. Used for -L<path>, -l<lib>, static library paths, rpath flags, etc. |
 | --crash-input | — | No | None | Path to a crashing input file (seed corpus entry) fed to the harness binary at runtime. If not provided, the harness is run without a file argument (libFuzzer built-in fuzzing loop executes). |
 | --work-dir | — | No | None (auto temp dir) | Use a fixed working directory instead of creating a temporary one. When set, the directory is not cleaned up at exit. When omitted, a temp dir with prefix harness_reducer_ is created and removed at program exit. |
 | --llm | — | No | False | Enable LLM-based semantic minimization as a final reduction pass. Requires OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL environment variables to be set. |
@@ -182,7 +183,8 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 | Field | Type | Default | Source |
 |---|---|---|---|
 | harness_path | str | — | args.harness |
-| extra_flags | str or None | None | args.extra_flags |
+| compile_flags | str or None | None | args.compile_flags |
+| link_flags | str or None | None | args.link_flags |
 | crash_input | str or None | None | args.crash_input |
 | work_dir | str or None | None | args.work_dir |
 | start_id | int | 100000 | Hardcoded |
@@ -212,11 +214,11 @@ There are three distinct compilation contexts in the tool. Phase 1 and Phase 2 a
 Function: reducer_runner.py:check_harness_compilation()
 Purpose: Verify the original harness compiles before starting the pipeline.
 
-  clang++ -fsanitize=address,fuzzer,undefined -g -O0 <harness.cpp> -o <work_dir>/poc.out
+  clang++ -fsanitize=address,fuzzer,undefined -g -O0 [--compile-flags...] <harness.cpp> -o <work_dir>/poc.out [--link-flags...]
 
 - Flags: -fsanitize=address,fuzzer,undefined -g -O0
-- User flags: --extra-flags split on whitespace and appended
-- Include dirs: None added by the tool — the user include for fuzzer/FuzzedDataProvider.h must resolve from system paths or the user own -I in --extra-flags
+- User flags: --compile-flags are placed before the source file; --link-flags are placed after the output option for linking.
+- Include dirs: None added by the tool — the user include for fuzzer/FuzzedDataProvider.h must resolve from system paths or the user own -I in --compile-flags
 - Linking: -fsanitize=fuzzer automatically links libFuzzer; -fsanitize=address,undefined links the sanitizer runtimes
 - Define macros: None
 - Output: <work_dir>/poc.out
@@ -226,14 +228,14 @@ Purpose: Verify the original harness compiles before starting the pipeline.
 Function: reducer_runner.py:compile_dump_mode_harness()
 Purpose: Build an instrumented binary that records every FDP call return value to a trace log.
 
-  clang++ -DFDP_MIN_MODE_DUMP -I<project_root>/include -fsanitize=address,fuzzer,undefined -g -O0 <tagged_harness.cpp> -o <work_dir>/tagged_harness.out
+  clang++ -DFDP_MIN_MODE_DUMP -I<project_root>/include -fsanitize=address,fuzzer,undefined -g -O0 [--compile-flags...] <tagged_harness.cpp> -o <work_dir>/tagged_harness.out [--link-flags...]
 
 - Flags: Same base flags as Phase 1
 - Define macros:
   - -DFDP_MIN_MODE_DUMP — Switches FuzzedDataProvider.h into dump mode. Every FDP call records its return value to the trace file (path from FDP_TRACE_PATH env var) instead of operating normally. The header contains #if defined(FDP_MIN_MODE_DUMP) / #elif defined(FDP_MIN_MODE_REPLAY) / #else conditional compilation blocks.
 - Include dirs:
   - -I<project_root>/include — Explicitly adds the project include/ directory so the custom FuzzedDataProvider.h (with dump/replay instrumentation) is found instead of any system version. get_fdp_header_dir() resolves to <project_root>/include.
-- User flags: --extra-flags split on whitespace and appended
+- User flags: --compile-flags are placed before the source file; --link-flags are placed after the output option for linking.
 - Linking: Same as Phase 1
 - Output: <work_dir>/tagged_harness.out
 
@@ -251,14 +253,14 @@ This preserves the previous behavior: each crash_tester.py invocation compiles a
 ```bash
 clang++ [-I<project_root>/include -DFDP_MIN_MODE_REPLAY] \
   -fsanitize=address,fuzzer,undefined -g -O0 \
-  <source.cpp> -o </tmp/poc_PID_XXXXX.out> [--extra-flags...]
+  [--compile-flags...] <source.cpp> -o </tmp/poc_PID_XXXXX.out> [--link-flags...]
 ```
 
 - Conditional flags (only when --fdp-trace argument is provided):
   - -I<project_root>/include — Same as Phase 2, uses the instrumented FuzzedDataProvider.h.
   - -DFDP_MIN_MODE_REPLAY — Switches FuzzedDataProvider.h into replay mode. FDP calls read their return values from the trace file instead of consuming the fuzz input, making execution deterministic.
 - When --fdp-trace is NOT provided (e.g., initial crash-pattern validation and LLM validation): neither -I<project_root>/include nor -DFDP_MIN_MODE_REPLAY is added.
-- User flags: --extra-flags split on whitespace and appended once to the direct clang++ command.
+- User flags: --compile-flags are used before the source and --link-flags are used during the same final direct link command.
 - Linking: Same as the old Phase 3 path; -fsanitize=fuzzer links libFuzzer and the sanitizer runtimes are linked by the sanitizer flags.
 - Output: /tmp/poc_<PID>_<random>.out (temp file, deleted after test).
 
@@ -281,8 +283,8 @@ Preparation function: reducer_runner.py:prepare_phase3_pch_harness()
 ```bash
 clang++ -Qunused-arguments [-I<project_root>/include -DFDP_MIN_MODE_REPLAY] \
   -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
-  -x c++-header <work_dir>/fahm_prefix.h \
-  -o <work_dir>/fahm_prefix.pch [--extra-flags...]
+  -x c++-header [--compile-flags...] <work_dir>/fahm_prefix.h \
+  -o <work_dir>/fahm_prefix.pch
 ```
 
 Per crash_tester.py invocation in --pch mode:
@@ -291,16 +293,16 @@ Per crash_tester.py invocation in --pch mode:
 clang++ -Qunused-arguments -include-pch <work_dir>/fahm_prefix.pch \
   [-I<project_root>/include -DFDP_MIN_MODE_REPLAY] \
   -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
-  -c <candidate_body.cpp> -o </tmp/poc_PID_XXXXX.o> [--extra-flags...]
+  -c [--compile-flags...] <candidate_body.cpp> -o </tmp/poc_PID_XXXXX.o>
 ```
 
 ```bash
 clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined \
-  </tmp/poc_PID_XXXXX.o> -o </tmp/poc_PID_XXXXX.out> [--extra-flags...]
+  </tmp/poc_PID_XXXXX.o> -o </tmp/poc_PID_XXXXX.out> [--link-flags...]
 ```
 
 - Conditional replay flags are used in both PCH precompilation and per-candidate object compilation only when --fdp-trace is provided. They are not needed for the final link command.
-- User flags: --extra-flags are split on whitespace and then separated for PCH mode: compile/preprocessor flags are appended to the PCH precompile and object compile commands, while library/linker flags are appended only to the final link command. Flags such as -pthread and -stdlib=... are preserved for both stages.
+- User flags: --compile-flags are appended to the PCH precompile and object compile commands. --link-flags are appended only to the final link command.
 - Optimization/debug flags: PCH mode intentionally uses -O1 -gline-tables-only instead of -g -O0 for the PCH precompile and object compile. The --direct path still uses -g -O0.
 - Temporary outputs: /tmp/poc_<PID>_<random>.o and /tmp/poc_<PID>_<random>.out are deleted after each test.
 - In tree-reduction, treereduce-c receives the include-stripped .fahm_body.cpp as -s input in --pch mode. After treereduce-c writes reduced_harness.cpp, restore_pch_includes() prepends the moved include directives so the reduced harness remains a standalone source file.
@@ -318,7 +320,8 @@ clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined \
 | -x c++-header | No | No | No | Yes | No | No |
 | -include-pch <fahm_prefix.pch> | No | No | No | No | Yes | No |
 | -c to object | No | No | No | No | Yes | No |
-| User --extra-flags | Yes | Yes | Yes | Yes | Yes | Yes |
+| User --compile-flags | Yes | Yes | Yes | Yes | Yes | No |
+| User --link-flags | Yes | Yes | Yes | No | No | Yes |
 
 ### Compilation Phase Execution Counts
 
@@ -358,13 +361,13 @@ Note: The extract_crash_pattern_from_output() function is NOT a Phase 3 invocati
   - FDP_MIN_MODE_REPLAY — Mode::kReplay — FDP calls read return values from trace
   - Neither defined — Mode::kNative — Normal FDP behavior
   - FDP_MIN_MODE_DUMP and FDP_MIN_MODE_REPLAY are mutually exclusive (the header has #error if both are defined).
-- No other include paths are added by the tool — the user must supply any library-specific -I flags through --extra-flags. Quoted includes that exist relative to the source file are rewritten to absolute paths inside fahm_prefix.h only, so moving the generated prefix into the work directory does not break local quote-include lookup.
+- No other include paths are added by the tool — the user must supply any library-specific -I flags through --compile-flags. Quoted includes that exist relative to the source file are rewritten to absolute paths inside fahm_prefix.h only, so moving the generated prefix into the work directory does not break local quote-include lookup.
 
 ### Library Linking
 
 - The tool relies entirely on -fsanitize=fuzzer to link libFuzzer and -fsanitize=address,undefined to link the ASan/UBSan runtimes.
-- No -L flags or -l flags are added by the tool. Any library linking must come from the user --extra-flags (e.g., -lpng, -L/path/to/lib, etc.).
-- In --direct Phase 3 mode, user flags are appended to the single compile/link command. In --pch Phase 3 mode, user flags are split so compile-time include/define flags are used during PCH/object compilation and link-time library flags are used during the final link.
+- No -L flags or -l flags are added by the tool. Any library linking must come from the user --link-flags (e.g., -lpng, -L/path/to/lib, etc.).
+- In --direct Phase 3 mode, --compile-flags and --link-flags are both appended to the single compile/link command in their stage-appropriate positions. In --pch Phase 3 mode, --compile-flags are used for PCH/object compilation and --link-flags are used only during the final link.
 
 ### Runtime Environment Variables
 
@@ -388,7 +391,7 @@ Direct mode:
 treereduce-c -j 60 -s <tagged_harness.cpp> -o <reduced_harness.cpp> --fast \
   --timeout 300 --interesting-exit-code 77 \
   -- <crash_tester.py> @@.cpp <crash_pattern> \
-     --crash-input <crash_input> --extra-flags <extra_flags> \
+     --crash-input <crash_input> --compile-flags <compile_flags> --link-flags <link_flags> \
      --fdp-trace <trace> --direct
 ```
 
@@ -398,7 +401,7 @@ PCH mode:
 treereduce-c -j 60 -s <tagged_harness.fahm_body.cpp> -o <reduced_harness.cpp> --fast \
   --timeout 300 --interesting-exit-code 77 \
   -- <crash_tester.py> @@.cpp <crash_pattern> \
-     --crash-input <crash_input> --extra-flags <extra_flags> \
+     --crash-input <crash_input> --compile-flags <compile_flags> --link-flags <link_flags> \
      --fdp-trace <trace> --pch --pch-path <work_dir>/fahm_prefix.pch
 ```
 

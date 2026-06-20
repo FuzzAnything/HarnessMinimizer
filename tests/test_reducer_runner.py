@@ -39,15 +39,17 @@ class TestReducerRunner(unittest.TestCase):
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
-            extra_args="-std=c++17",
+            compile_flags="-std=c++17",
+            link_flags="-lm",
             crash_input="seed.bin",
         )
 
         self.assertTrue(out.endswith("reduced_harness.cpp"))
-        _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["env"]["FDP_TRACE_PATH"], "/tmp/trace.log")
-        self.assertEqual(kwargs["env"]["EXTRA_FLAGS"], "-std=c++17")
-        self.assertEqual(kwargs["env"]["CRASH_INPUT"], "seed.bin")
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--compile-flags=-std=c++17", cmd)
+        self.assertIn("--link-flags=-lm", cmd)
+        self.assertIn("--fdp-trace", cmd)
+        self.assertIn("/tmp/trace.log", cmd)
 
     @patch("harnessreducer.reducer_runner.tempfile.mkdtemp")
     def test_configure_work_dir_uses_user_dir_without_tmp_create(self, mock_mkdtemp):

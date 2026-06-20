@@ -54,7 +54,7 @@ uv run python -m unittest tests/test_fdp_complex_example.py -v
 After installation, run:
 
 ```bash
-harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
+harnessreducer <harness.cpp> [--compile-flags "..."] [--link-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
 ```
 
 Use a fixed working directory (no temporary directory creation):
@@ -66,7 +66,7 @@ harnessreducer <harness.cpp> <crash_regex> --work-dir ./workdir
 Equivalent module invocation:
 
 ```bash
-uv run python -m harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
+uv run python -m harnessreducer <harness.cpp> [--compile-flags "..."] [--link-flags "..."] [--crash-input seed.bin] [-o reduced.cpp]
 ```
 
 ## Python API Usage
@@ -76,8 +76,8 @@ from harnessreducer import ReductionConfig, reduce_with_config
 
 config = ReductionConfig(
 	harness_path="examples/fdp_complex_crash_harness.cpp",
-	crash_pattern="AddressSanitizer|runtime error",
-	extra_flags="-std=c++17",
+	compile_flags="-std=c++17",
+	link_flags=None,
 	crash_input="seed.bin",
 )
 

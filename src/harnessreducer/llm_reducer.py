@@ -106,7 +106,8 @@ def apply_llm_reduction(
     reduced_harness_path: str,
     crash_pattern: str,
     crash_input: str | None,
-    extra_flags: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
     fdp_trace_file: str,
     phase3_mode: str = "direct",
 ) -> str:
@@ -134,7 +135,7 @@ def apply_llm_reduction(
     if phase3_mode == "pch":
         pch_artifacts = prepare_phase3_pch_harness(
             llm_reduced_path,
-            extra_flags,
+            compile_flags,
             use_replay=False,
         )
         validation_source = pch_artifacts.body_source
@@ -144,7 +145,8 @@ def apply_llm_reduction(
         validation_source,
         crash_pattern,
         "--crash-input", crash_input or "",
-        "--extra-flags", extra_flags or ""
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
     ]
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     
