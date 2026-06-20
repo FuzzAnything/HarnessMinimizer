@@ -8,7 +8,10 @@ load_dotenv("/root/FuzzAgent/sub_modules/HarnessReducer/.env")
 from pathlib import Path
 from harnessreducer.reducer_runner import (
     get_crash_tester_path,
-    run_command
+    pch_tester_args,
+    prepare_phase3_pch_harness,
+    run_command,
+    validate_phase3_mode,
 )
     
 def llm_semantic_reduce(harness_code: str) -> str | None:
@@ -99,7 +102,14 @@ Here is the reduced harness:
 
     return output.strip()
     
-def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_input: str | None, extra_flags: str | None, fdp_trace_file: str) -> str:
+def apply_llm_reduction(
+    reduced_harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    extra_flags: str | None,
+    fdp_trace_file: str,
+    phase3_mode: str = "direct",
+) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     print("Applying LLM semantic reduction...")
     try:
@@ -118,14 +128,25 @@ def apply_llm_reduction(reduced_harness_path: str, crash_pattern: str, crash_inp
     Path(llm_reduced_path).write_text(transformed, encoding="utf-8")
     
     print(f"LLM semantic reduction completed. Verifying crash preservation for {llm_reduced_path}")
+    validate_phase3_mode(phase3_mode)
+    pch_artifacts = None
+    validation_source = llm_reduced_path
+    if phase3_mode == "pch":
+        pch_artifacts = prepare_phase3_pch_harness(
+            llm_reduced_path,
+            extra_flags,
+            use_replay=False,
+        )
+        validation_source = pch_artifacts.body_source
     
     cmd = [
         get_crash_tester_path(),
-        llm_reduced_path,
+        validation_source,
         crash_pattern,
         "--crash-input", crash_input or "",
         "--extra-flags", extra_flags or ""
     ]
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     
     proc = run_command(cmd, "LLM reduction validation failed.", ignore_errors=True)
     if proc.returncode == 77:

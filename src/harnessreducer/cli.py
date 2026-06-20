@@ -48,6 +48,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use stable reduction mode (no randomization, deterministic output).",
     )
+    phase3_group = parser.add_mutually_exclusive_group()
+    phase3_group.add_argument(
+        "--direct",
+        dest="phase3_mode",
+        action="store_const",
+        const="direct",
+        default="direct",
+        help="Use the original one-step Phase 3 compile/link path (default).",
+    )
+    phase3_group.add_argument(
+        "--pch",
+        dest="phase3_mode",
+        action="store_const",
+        const="pch",
+        help="Use Phase 3 precompiled-header mode and separate compile/link steps.",
+    )
     return parser
 
 
@@ -62,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         work_dir=args.work_dir,
         use_llm=args.llm,
         stable=args.stable,
+        phase3_mode=args.phase3_mode,
     )
     result = reduce_with_config(config)
     if not result.success:
