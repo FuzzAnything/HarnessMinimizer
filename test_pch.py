@@ -23,6 +23,11 @@ from harnessreducer.reducer_runner import (
 )
 
 
+def _assert(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
 def _project_root() -> Path:
     return _REPO_ROOT
 
@@ -164,6 +169,20 @@ def _run_pch_replay_candidate(
         extra_flags,
         use_replay=True,
     )
+    prefix_header = Path(artifacts.prefix_header)
+    pch_file = Path(artifacts.pch_file)
+    body_source = Path(artifacts.body_source)
+    _assert(prefix_header.exists(), f"PCH prefix header was not written: {prefix_header}")
+    _assert(pch_file.exists(), f"PCH file was not written: {pch_file}")
+    _assert(body_source.exists(), f"PCH body source was not written: {body_source}")
+    _assert(prefix_header.stat().st_size > 0, f"PCH prefix header is empty: {prefix_header}")
+    _assert(pch_file.stat().st_size > 0, f"PCH file is empty: {pch_file}")
+    body_text = body_source.read_text(encoding="utf-8", errors="ignore")
+    _assert(
+        all(not line.lstrip().startswith("#include") for line in body_text.splitlines()),
+        f"PCH body still contains #include directives: {body_source}",
+    )
+
     cmd = [
         get_crash_tester_path(),
         artifacts.body_source,
@@ -189,7 +208,9 @@ def _run_pch_replay_candidate(
         if proc.stderr:
             print("===== stderr =====")
             print(proc.stderr)
-        return 1
+        raise AssertionError(
+            f"PCH replay crash_tester did not return 77; got {proc.returncode}."
+        )
     return 0
 
 
@@ -206,6 +227,7 @@ def run_case(args: argparse.Namespace) -> int:
         work_dir = (root / work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     configure_work_dir(str(work_dir))
+    _assert(work_dir.exists(), f"Work directory was not created: {work_dir}")
 
     extra_flags = _phase3_extra_flags(
         build_root,
@@ -232,6 +254,7 @@ def run_case(args: argparse.Namespace) -> int:
             print("[-] Could not extract a crash pattern from the original harness.")
             return 1
         print(f"[+] Extracted crash pattern: {crash_pattern}")
+    _assert(bool(crash_pattern), "Crash pattern is empty.")
 
     if not args.skip_no_trace_validation:
         print("[+] Validating no-trace Phase 3 PCH path on the original harness...")
@@ -251,9 +274,16 @@ def run_case(args: argparse.Namespace) -> int:
             marker=args.marker,
         )
     )
+    _assert(tagged_harness.exists(), f"Tagged harness was not written: {tagged_harness}")
+    tagged_text = tagged_harness.read_text(encoding="utf-8", errors="ignore")
+    _assert(
+        f"/*{args.marker}:" in tagged_text,
+        f"Tagged source does not contain expected injected marker /*{args.marker}:",
+    )
 
     print("[+] Compiling tagged harness in dump mode with current source-code runner...")
     tagged_binary = Path(compile_dump_mode_harness(str(tagged_harness), extra_flags))
+    _assert(tagged_binary.exists(), f"Tagged dump-mode binary was not written: {tagged_binary}")
 
     print("[+] Dumping FDP trace with current source-code runner...")
     fdp_trace_file = Path(
@@ -262,6 +292,8 @@ def run_case(args: argparse.Namespace) -> int:
             str(crash_input) if crash_input else None,
         )
     )
+    _assert(fdp_trace_file.exists(), f"FDP trace was not written: {fdp_trace_file}")
+    _assert(fdp_trace_file.stat().st_size > 0, f"FDP trace is empty: {fdp_trace_file}")
     print(f"[+] FDP trace: {fdp_trace_file}")
 
     print("[+] Validating replay Phase 3 PCH path on the tagged harness...")
