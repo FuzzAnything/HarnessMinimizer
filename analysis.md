@@ -62,6 +62,7 @@ Also defines:
 - _prepend_additional_headers() — Ensures the harness has standard includes needed after inlining.
 - _finalize_fallback_harness() — Strips injected IDs and prepends missing headers on the tree-reduced harness (used when inline validation fails).
 - inline_literals_in_reduced_harness() — Performs the inline transform, writes .inline.cpp, generates harness_values.h for large buffers, and validates crash preservation. Falls back to tree-reduced harness if validation fails.
+- _write_inline_validation_failure_artifact() — Writes a validation failure log file (<inline_harness>.validation.log) containing returncode, stdout, and stderr when inline validation fails.
 - process() — Convenience wrapper: builds a ReductionConfig from kwargs and calls reduce_with_config().
 
 ### 4. fdp_transform.py — FDP AST Transformation Engine
@@ -78,7 +79,7 @@ Scans the AST for supported FDP method calls (e.g. ConsumeIntegral, ConsumeBool,
 
 The IDs start at start_id and increment by 1. These IDs allow the FDP trace records (dumped at runtime) to be mapped back to their source callsites.
 
-Supports 17 FDP APIs defined in SUPPORTED_FDP_APIS, including ConsumeBytes, ConsumeBytesWithTerminator, ConsumeRemainingBytes, ConsumeBytesAsString, ConsumeRandomLengthString, ConsumeRemainingBytesAsString, ConsumeIntegral, ConsumeIntegralInRange, ConsumeFloatingPoint, ConsumeFloatingPointInRange, ConsumeProbability, ConsumeBool, ConsumeEnum, PickValueInArray, ConsumeData, remaining_bytes.
+Supports 16 FDP APIs defined in SUPPORTED_FDP_APIS, including ConsumeBytes, ConsumeBytesWithTerminator, ConsumeRemainingBytes, ConsumeBytesAsString, ConsumeRandomLengthString, ConsumeRemainingBytesAsString, ConsumeIntegral, ConsumeIntegralInRange, ConsumeFloatingPoint, ConsumeFloatingPointInRange, ConsumeProbability, ConsumeBool, ConsumeEnum, PickValueInArray, ConsumeData, remaining_bytes.
 
 #### inline_source_with_report(source, streams) -> InlineResult
 
@@ -86,7 +87,7 @@ Replaces FDP calls with concrete literal values from the trace. Key behaviors:
 
 - Scalar methods (ConsumeIntegral, ConsumeBool, ConsumeFloatingPoint, etc.) — replaced with C++ literals (e.g. 42, true, 3.14).
 - String methods (ConsumeBytesAsString, ConsumeRandomLengthString, ConsumeRemainingBytesAsString) — replaced with C++ string literals, with escaping for non-printable characters.
-- Bytes/buffer methods (ConsumeBytes, ConsumeRemainingBytes, ConsumeData) — small buffers (64 bytes or less) become std::vector<uint8_t>{...} literals; large buffers (>64 bytes) are moved to a generated header file harness_values.h and referenced via an extern declaration.
+- Bytes/buffer methods (ConsumeBytes, ConsumeBytesWithTerminator, ConsumeRemainingBytes, ConsumeData) — small buffers (64 bytes or less) become std::vector<uint8_t>{...} literals; large buffers (>64 bytes) are moved to a generated header file harness_values.h and referenced via an extern declaration.
 - Loop-carried FDP calls (same callsite ID appearing multiple times in the trace) — handled by creating a static array/vector from all trace records for that ID, and wrapping the call in a loop indexed by a static counter.
 - Returns InlineResult with fields: source, replaced count, skipped (callsites that could not be inlined), header_name, header_source, loop_replaced, header_replaced, large_buffer_replaced.
 
@@ -165,7 +166,7 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 | --crash-input | — | No | None | Path to a crashing input file (seed corpus entry) fed to the harness binary at runtime. If not provided, the harness is run without a file argument (libFuzzer built-in fuzzing loop executes). |
 | --work-dir | — | No | None (auto temp dir) | Use a fixed working directory instead of creating a temporary one. When set, the directory is not cleaned up at exit. When omitted, a temp dir with prefix harness_reducer_ is created and removed at program exit. |
 | --llm | — | No | False | Enable LLM-based semantic minimization as a final reduction pass. Requires OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL environment variables to be set. |
-| -o / --output | -o | Yes | — | Output path for the reduced harness. The parent directory is created if needed. Any generated header files (e.g., harness_values.h) are copied to the same directory. |
+| -o / --output | -o | Yes | — | Required output path for the reduced harness. The parent directory is created if needed. Any generated header files (e.g., harness_values.h) are copied to the same directory. |
 | --stable | — | No | False | Use deterministic/stable reduction mode. Passes --stable --min-reduction 1 to treereduce-c instead of --fast. Ensures reproducible output across runs. |
 
 ### ReductionConfig fields (internal, built from CLI args)
@@ -252,6 +253,31 @@ Purpose: Interestingness test invoked by treereduce-c for every candidate reduct
 | -DFDP_MIN_MODE_REPLAY | No | No | Yes | No |
 | -I<project>/include | No | Yes | Yes | No |
 | User --extra-flags | Yes | Yes | Yes | Yes |
+
+### Compilation Phase Execution Counts
+
+Each compilation phase is invoked a different number of times during a single run of reduce_with_config():
+
+- **Phase 1 (check_harness_compilation)**: Executed exactly **1 time**.
+  Called at api.py:196 as a pre-flight check before the pipeline begins.
+
+- **Phase 2 (compile_dump_mode_harness)**: Executed exactly **1 time**.
+  Called at api.py:213 to produce the dump-mode binary used for trace extraction.
+
+- **Phase 3 (crash_tester.py)**: Executed **N + 2 or 3 times** (where N is the number of interestingness tests treereduce-c performs, typically hundreds to thousands).
+
+| Call site | Location | --fdp-trace? | Count |
+|---|---|---|---|
+| check_reducer_crash_pattern() | reducer_runner.py:174, called from api.py:207 | No | 1 (pre-validation before treereduce) |
+| Inside treereduce-c | reducer_runner.py:258 | Yes | N (once per candidate reduction) |
+| inline_literals_in_reduced_harness() | api.py:160 | Yes | 1 (validates the inlined harness) |
+| apply_llm_reduction() | llm_reducer.py:123 | No | 0 or 1 (only if --llm flag is set) |
+
+Total Phase 3 invocations:
+- Without --llm: **N + 2**
+- With --llm: **N + 3**
+
+Note: The extract_crash_pattern_from_output() function at reducer_runner.py:140 is NOT a Phase 3 invocation. It runs the Phase 1 compiled binary (poc.out) directly, not via crash_tester.py. It executes exactly 1 time.
 
 ### Header Discovery
 
