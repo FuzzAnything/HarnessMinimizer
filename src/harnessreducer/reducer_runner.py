@@ -87,82 +87,8 @@ def validate_phase3_mode(mode: str) -> str:
     return mode
 
 
-def _split_extra_flags(extra_flags: str | None) -> list[str]:
-    return extra_flags.split() if extra_flags else []
-
-
-def split_phase3_extra_flags(extra_flags: str | None) -> tuple[list[str], list[str]]:
-    """Split user flags for PCH-mode compile/precompile vs final link.
-
-    The historical direct Phase 3 path appends all --extra-flags to one
-    compile+link command.  PCH mode has separate frontend and linker commands,
-    so obvious library/linker inputs must not be passed while creating the PCH
-    or compiling the candidate object.
-    """
-
-    tokens = _split_extra_flags(extra_flags)
-    compile_flags: list[str] = []
-    link_flags: list[str] = []
-    compile_value_flags = {
-        "-I",
-        "-D",
-        "-U",
-        "-include",
-        "-isystem",
-        "-iquote",
-        "-idirafter",
-        "-F",
-        "-iframework",
-        "-target",
-        "-Xclang",
-    }
-    link_value_flags = {
-        "-l",
-        "-L",
-        "-framework",
-        "-Xlinker",
-        "-u",
-    }
-    both_value_flags = {
-        "-isysroot",
-    }
-
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        next_token = tokens[i + 1] if i + 1 < len(tokens) else None
-
-        if token in compile_value_flags and next_token is not None:
-            compile_flags.extend([token, next_token])
-            i += 2
-            continue
-        if token in link_value_flags and next_token is not None:
-            link_flags.extend([token, next_token])
-            i += 2
-            continue
-        if token in both_value_flags and next_token is not None:
-            compile_flags.extend([token, next_token])
-            link_flags.extend([token, next_token])
-            i += 2
-            continue
-
-        if token == "-pthread" or token.startswith("-stdlib="):
-            compile_flags.append(token)
-            link_flags.append(token)
-        elif (
-            token.startswith("-l")
-            or token.startswith("-L")
-            or token.startswith("-Wl,")
-            or token.startswith("-fuse-ld=")
-            or token in {"-shared", "-static", "-rdynamic", "-pie", "-no-pie"}
-            or re.search(r"\.(?:a|so(?:\.\d+)*|dylib|lib)$", token)
-        ):
-            link_flags.append(token)
-        else:
-            compile_flags.append(token)
-        i += 1
-
-    return compile_flags, link_flags
+def _split_flags(flags: str | None) -> list[str]:
+    return flags.split() if flags else []
 
 
 def _phase3_replay_flags(use_replay: bool) -> list[str]:
@@ -174,7 +100,7 @@ def _phase3_replay_flags(use_replay: bool) -> list[str]:
 def _build_pch_compile_command(
     prefix_header: str,
     pch_file: str,
-    extra_flags: str | None,
+    compile_flags: str | None,
     use_replay: bool,
 ) -> list[str]:
     cmd = [
@@ -185,12 +111,11 @@ def _build_pch_compile_command(
         *PHASE3_PCH_OPT_FLAGS,
         "-x",
         "c++-header",
+        *_split_flags(compile_flags),
         prefix_header,
         "-o",
         pch_file,
     ]
-    compile_flags, _ = split_phase3_extra_flags(extra_flags)
-    cmd.extend(compile_flags)
     return cmd
 
 
@@ -260,7 +185,7 @@ def _split_source_for_pch(source: str, source_dir: Path) -> tuple[str, str, str]
 
 def prepare_phase3_pch_harness(
     harness_path: str,
-    extra_flags: str | None,
+    compile_flags: str | None,
     use_replay: bool,
 ) -> PchArtifacts:
     """Create fahm_prefix.h/.pch and an include-stripped harness body.
@@ -286,7 +211,7 @@ def prepare_phase3_pch_harness(
     compile_cmd = _build_pch_compile_command(
         str(prefix_header),
         str(pch_file),
-        extra_flags,
+        compile_flags,
         use_replay=use_replay,
     )
     print(f"[+] Precompiling Phase 3 header: {prefix_header} -> {pch_file}")
@@ -363,7 +288,11 @@ def check_tree_reducer() -> None:
     )
     print("[+] tree-reducer is available.")
 
-def check_harness_compilation(harness_path: str, extra_flags: str | None) -> None:
+def check_harness_compilation(
+    harness_path: str,
+    compile_flags: str | None,
+    link_flags: str | None,
+) -> None:
     print("[+] Checking harness compilation...")
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
@@ -372,12 +301,12 @@ def check_harness_compilation(harness_path: str, extra_flags: str | None) -> Non
         "-fsanitize=address,fuzzer,undefined",
         "-g",
         "-O0",
+        *_split_flags(compile_flags),
         harness_path,
         "-o",
         output_bin,
+        *_split_flags(link_flags),
     ]
-    if extra_flags:
-        compile_cmd.extend(extra_flags.split())
 
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
@@ -434,7 +363,8 @@ def check_reducer_crash_pattern(
     harness_path: str,
     crash_pattern: str,
     crash_input: str | None,
-    extra_flags: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
     phase3_mode: str = PHASE3_DIRECT,
 ) -> None:
     print("[+] Checking crash pattern validity...")
@@ -447,7 +377,7 @@ def check_reducer_crash_pattern(
     if phase3_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
-            extra_flags,
+            compile_flags,
             use_replay=False,
         )
         tester_source = pch_artifacts.body_source
@@ -457,7 +387,8 @@ def check_reducer_crash_pattern(
         tester_source,
         crash_pattern,
         "--crash-input", crash_input or "",
-        "--extra-flags", extra_flags or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
     ]
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
@@ -466,7 +397,11 @@ def check_reducer_crash_pattern(
         raise ValueError(f"Crash pattern did not match the crash behavior. Tester output:\n{proc.stdout}\n{proc.stderr}")
     print("[+] Crash pattern is valid.")
 
-def compile_dump_mode_harness(harness_path: str, extra_flags: str | None) -> str:
+def compile_dump_mode_harness(
+    harness_path: str,
+    compile_flags: str | None,
+    link_flags: str | None,
+) -> str:
     tagged_harness_bin = os.path.join(get_work_dir(), "tagged_harness.out")
     compile_cmd = [
         "clang++",
@@ -475,12 +410,12 @@ def compile_dump_mode_harness(harness_path: str, extra_flags: str | None) -> str
         "-fsanitize=address,fuzzer,undefined",
         "-g",
         "-O0",
+        *_split_flags(compile_flags),
         harness_path,
         "-o",
         tagged_harness_bin,
+        *_split_flags(link_flags),
     ]
-    if extra_flags:
-        compile_cmd.extend(extra_flags.split())
 
     run_command(compile_cmd, "Failed to compile tagged harness with dump mode")
     return tagged_harness_bin
@@ -503,7 +438,8 @@ def run_treereducer(
     harness_path: str,
     fdp_trace_file: str,
     crash_pattern: str,
-    extra_args: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
     crash_input: str | None,
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
@@ -518,7 +454,7 @@ def run_treereducer(
     if phase3_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
-            extra_args,
+            compile_flags,
             use_replay=True,
         )
         reducer_source = pch_artifacts.body_source
@@ -549,7 +485,8 @@ def run_treereducer(
         "@@.cpp",
         crash_pattern,
         "--crash-input", crash_input or "",
-        "--extra-flags", extra_args or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
         "--fdp-trace", fdp_trace_file,
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))

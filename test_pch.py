@@ -138,23 +138,27 @@ def _library_args(lib_dir: Path) -> list[str]:
     raise FileNotFoundError(f"No .a or .so libraries found in {lib_dir}")
 
 
-def _phase3_extra_flags(
+def _phase3_flags(
     build_root: Path,
-    user_extra_flags: str | None,
+    user_compile_flags: str | None,
+    user_link_flags: str | None,
     use_case_libraries: bool,
-) -> str:
+) -> tuple[str, str]:
     root = _project_root()
-    flags = [
+    compile_flags = [
         "-std=c++17",
         f"-I{root / 'include'}",
         f"-I{build_root / 'include'}",
     ]
-    if user_extra_flags:
+    if user_compile_flags:
         # Match the source implementation's simple whitespace splitting.
-        flags.extend(user_extra_flags.split())
+        compile_flags.extend(user_compile_flags.split())
+    link_flags: list[str] = []
+    if user_link_flags:
+        link_flags.extend(user_link_flags.split())
     if use_case_libraries:
-        flags.extend(_library_args(build_root / "lib"))
-    return " ".join(flags)
+        link_flags.extend(_library_args(build_root / "lib"))
+    return " ".join(compile_flags), " ".join(link_flags)
 
 
 def _run_pch_replay_candidate(
@@ -162,11 +166,12 @@ def _run_pch_replay_candidate(
     fdp_trace_file: Path,
     crash_pattern: str,
     crash_input: Path | None,
-    extra_flags: str,
+    compile_flags: str,
+    link_flags: str,
 ) -> int:
     artifacts = prepare_phase3_pch_harness(
         str(tagged_harness),
-        extra_flags,
+        compile_flags,
         use_replay=True,
     )
     prefix_header = Path(artifacts.prefix_header)
@@ -189,8 +194,8 @@ def _run_pch_replay_candidate(
         crash_pattern,
         "--crash-input",
         str(crash_input) if crash_input else "",
-        "--extra-flags",
-        extra_flags,
+        f"--compile-flags={compile_flags}",
+        f"--link-flags={link_flags}",
         "--fdp-trace",
         str(fdp_trace_file),
     ]
@@ -229,9 +234,10 @@ def run_case(args: argparse.Namespace) -> int:
     configure_work_dir(str(work_dir))
     _assert(work_dir.exists(), f"Work directory was not created: {work_dir}")
 
-    extra_flags = _phase3_extra_flags(
+    compile_flags, link_flags = _phase3_flags(
         build_root,
-        args.extra_flags,
+        args.compile_flags,
+        args.link_flags,
         use_case_libraries=not args.no_case_libraries,
     )
 
@@ -240,13 +246,14 @@ def run_case(args: argparse.Namespace) -> int:
     print(f"[+] Crash input:    {crash_input if crash_input else '<none>'}")
     print(f"[+] Build root:     {build_root}")
     print(f"[+] Work dir:       {work_dir}")
-    print(f"[+] Extra flags:    {extra_flags}")
+    print(f"[+] Compile flags:  {compile_flags}")
+    print(f"[+] Link flags:     {link_flags}")
 
     if args.crash_pattern:
         crash_pattern = args.crash_pattern
         print(f"[+] Using provided crash pattern: {crash_pattern}")
     else:
-        check_harness_compilation(str(harness), extra_flags)
+        check_harness_compilation(str(harness), compile_flags, link_flags)
         crash_pattern = extract_crash_pattern_from_output(
             str(crash_input) if crash_input else None
         )
@@ -262,7 +269,8 @@ def run_case(args: argparse.Namespace) -> int:
             str(harness),
             crash_pattern,
             str(crash_input) if crash_input else None,
-            extra_flags,
+            compile_flags,
+            link_flags,
             phase3_mode="pch",
         )
 
@@ -277,7 +285,9 @@ def run_case(args: argparse.Namespace) -> int:
     _assert(tagged_harness.exists(), f"Tagged harness was not written: {tagged_harness}")
 
     print("[+] Compiling tagged harness in dump mode with current source-code runner...")
-    tagged_binary = Path(compile_dump_mode_harness(str(tagged_harness), extra_flags))
+    tagged_binary = Path(
+        compile_dump_mode_harness(str(tagged_harness), compile_flags, link_flags)
+    )
     _assert(tagged_binary.exists(), f"Tagged dump-mode binary was not written: {tagged_binary}")
 
     print("[+] Dumping FDP trace with current source-code runner...")
@@ -297,7 +307,8 @@ def run_case(args: argparse.Namespace) -> int:
         fdp_trace_file=fdp_trace_file,
         crash_pattern=crash_pattern,
         crash_input=crash_input,
-        extra_flags=extra_flags,
+        compile_flags=compile_flags,
+        link_flags=link_flags,
     )
 
 
@@ -339,9 +350,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output/work directory. Default: <case>/pch_test_work",
     )
     parser.add_argument(
-        "--extra-flags",
+        "--compile-flags",
         default=None,
-        help="Additional clang++ flags, quoted as a single string.",
+        help="Additional compile/preprocessor flags, quoted as a single string.",
+    )
+    parser.add_argument(
+        "--link-flags",
+        default=None,
+        help="Additional linker/library flags, quoted as a single string.",
     )
     parser.add_argument(
         "--crash-pattern",

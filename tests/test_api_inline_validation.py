@@ -27,6 +27,7 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
             "AddressSanitizer",
             "seed.bin",
             "-I/tmp/include",
+            "",
         )
 
     assert out.endswith(".inline.cpp")
@@ -61,6 +62,7 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
             "AddressSanitizer",
             "seed.bin",
             "-I/tmp/include",
+            "",
         )
 
     assert out == str(reduced)
@@ -108,6 +110,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
             "AddressSanitizer",
             "seed.bin",
             "-I/tmp/include",
+            "",
         )
 
     captured = capsys.readouterr()
@@ -149,6 +152,7 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
             "AddressSanitizer",
             "seed.bin",
             "-I/tmp/include",
+            "",
         )
 
     assert out == str(reduced)
@@ -186,6 +190,7 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
             "AddressSanitizer",
             "seed.bin",
             "-I/tmp/include",
+            "",
         )
 
     assert out == str(reduced)

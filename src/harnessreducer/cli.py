@@ -17,9 +17,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
     parser.add_argument(
-        "--extra-flags",
+        "--compile-flags",
         default=None,
-        help="Extra compiler flags passed to clang++ during build steps.",
+        help=(
+            "Flags used while compiling/preprocessing, e.g. "
+            "'-std=c++17 -I/path/include -DMACRO'."
+        ),
+    )
+    parser.add_argument(
+        "--link-flags",
+        default=None,
+        help=(
+            "Flags used only while linking, e.g. "
+            "'-L/path/lib -lfoo /path/libfoo.a'."
+        ),
     )
     parser.add_argument(
         "--crash-input",
@@ -73,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
 
     config = ReductionConfig(
         harness_path=args.harness,
-        extra_flags=args.extra_flags,
+        compile_flags=args.compile_flags,
+        link_flags=args.link_flags,
         crash_input=args.crash_input,
         work_dir=args.work_dir,
         use_llm=args.llm,

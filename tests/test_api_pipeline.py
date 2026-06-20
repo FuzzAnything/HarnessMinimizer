@@ -12,10 +12,16 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.compile_dump_mode_harness")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
     @patch("harnessreducer.api.check_tree_reducer")
     def test_reduce_with_config_returns_result(
         self,
         mock_check,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
         mock_tag,
         mock_configure,
         mock_compile,
@@ -28,11 +34,13 @@ class TestApiPipeline(unittest.TestCase):
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
         mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
             harness_path="a.cpp",
-            crash_pattern="AddressSanitizer",
-            extra_flags="-std=c++17",
+            compile_flags="-std=c++17",
+            link_flags="-lm",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
             start_id=123,
@@ -46,26 +54,48 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
         mock_configure.assert_called_once_with("/tmp/workdir")
+        mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
+        mock_extract.assert_called_once_with("seed.bin")
+        mock_check_pattern.assert_called_once_with(
+            "a.cpp",
+            "AddressSanitizer",
+            "seed.bin",
+            "-std=c++17",
+            "-lm",
+            phase3_mode="direct",
+        )
         mock_tag.assert_called_once_with("a.cpp", start_id=123, marker="M")
-        mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17")
+        mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
         mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin")
         mock_reduce.assert_called_once_with(
             "/tmp/tagged.cpp",
             "/tmp/fdp_trace.log",
             "AddressSanitizer",
             "-std=c++17",
+            "-lm",
             "seed.bin",
+            stable=False,
+            phase3_mode="direct",
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
-        mock_inline.assert_called_once_with("/tmp/reduced.cpp", "/tmp/fdp_trace.log")
+        mock_inline.assert_called_once_with(
+            "/tmp/reduced.cpp",
+            "/tmp/fdp_trace.log",
+            "AddressSanitizer",
+            "seed.bin",
+            "-std=c++17",
+            "-lm",
+            123,
+            phase3_mode="direct",
+        )
         mock_check.assert_called_once()
 
     @patch("harnessreducer.api.reduce_with_config")
     def test_process_compat_wrapper(self, mock_reduce_with_config):
         cfg = ReductionConfig(
             harness_path="a.cpp",
-            crash_pattern="boom",
-            extra_flags=None,
+            compile_flags=None,
+            link_flags=None,
             crash_input=None,
         )
         expected_reduced = "/tmp/out.cpp"
@@ -74,10 +104,11 @@ class TestApiPipeline(unittest.TestCase):
             reduced_harness = expected_reduced
             tagged_harness = "/tmp/tagged.cpp"
             fdp_trace = "/tmp/trace.log"
+            success = True
 
         mock_reduce_with_config.return_value = ResultObj()
 
-        reduced = process(cfg.harness_path, cfg.extra_flags, cfg.crash_pattern, cfg.crash_input)
+        reduced = process(cfg.harness_path, cfg.compile_flags, cfg.crash_input, link_flags=cfg.link_flags)
         self.assertEqual(reduced, expected_reduced)
         mock_reduce_with_config.assert_called_once()
 

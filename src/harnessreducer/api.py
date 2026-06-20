@@ -40,7 +40,8 @@ ADDITIONAL_HEADERS = [
 @dataclass(frozen=True)
 class ReductionConfig:
     harness_path: str
-    extra_flags: str | None = None
+    compile_flags: str | None = None
+    link_flags: str | None = None
     crash_input: str | None = None
     work_dir: str | None = None
     start_id: int = 100000
@@ -111,7 +112,8 @@ def inline_literals_in_reduced_harness(
     fdp_trace_file: str,
     crash_pattern: str,
     crash_input: str | None,
-    extra_flags: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
     start_id: int = 100000,
     phase3_mode: str = "direct",
 ) -> tuple[str, tuple[str, ...]]:
@@ -167,7 +169,7 @@ def inline_literals_in_reduced_harness(
     if phase3_mode == "pch":
         pch_artifacts = prepare_phase3_pch_harness(
             inline_harness_path,
-            extra_flags,
+            compile_flags,
             use_replay=True,
         )
         validation_source = pch_artifacts.body_source
@@ -178,8 +180,8 @@ def inline_literals_in_reduced_harness(
         crash_pattern,
         "--crash-input",
         crash_input or "",
-        "--extra-flags",
-        extra_flags or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
         "--fdp-trace",
         fdp_trace_file,
     ]
@@ -211,7 +213,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     validate_phase3_mode(config.phase3_mode)
     check_tree_reducer()
-    check_harness_compilation(config.harness_path, config.extra_flags)
+    check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
     crash_pattern = extract_crash_pattern_from_output(config.crash_input)
     if not crash_pattern:
         return ReductionResult(
@@ -226,7 +228,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.harness_path,
         crash_pattern,
         config.crash_input,
-        config.extra_flags,
+        config.compile_flags,
+        config.link_flags,
         phase3_mode=config.phase3_mode,
     )
     tagged_harness_file = tag_harness_with_fdp_ids(
@@ -234,13 +237,18 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         start_id=config.start_id,
         marker=config.marker,
     )
-    tagged_harness_bin = compile_dump_mode_harness(tagged_harness_file, config.extra_flags)
+    tagged_harness_bin = compile_dump_mode_harness(
+        tagged_harness_file,
+        config.compile_flags,
+        config.link_flags,
+    )
     fdp_trace_file = dump_fdp_trace(tagged_harness_bin, config.crash_input)
     reduced_harness = run_treereducer(
         tagged_harness_file,
         fdp_trace_file,
         crash_pattern,
-        config.extra_flags,
+        config.compile_flags,
+        config.link_flags,
         config.crash_input,
         stable=config.stable,
         phase3_mode=config.phase3_mode,
@@ -251,7 +259,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         fdp_trace_file,
         crash_pattern,
         config.crash_input,
-        config.extra_flags,
+        config.compile_flags,
+        config.link_flags,
         config.start_id,
         phase3_mode=config.phase3_mode,
     )
@@ -262,7 +271,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             post_inline_harness,
             crash_pattern,
             config.crash_input,
-            config.extra_flags,
+            config.compile_flags,
+            config.link_flags,
             fdp_trace_file,
             phase3_mode=config.phase3_mode,
         )
@@ -280,15 +290,17 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 
 def process(
     harness_path: str,
-    extra_flags: str | None,
-    crash_input: str | None,
+    compile_flags: str | None = None,
+    crash_input: str | None = None,
+    link_flags: str | None = None,
     work_dir: str | None = None,
     use_llm: bool = False,
     phase3_mode: str = "direct",
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
-        extra_flags=extra_flags,
+        compile_flags=compile_flags,
+        link_flags=link_flags,
         crash_input=crash_input,
         work_dir=work_dir,
         use_llm=use_llm,
