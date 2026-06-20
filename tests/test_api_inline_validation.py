@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from harnessreducer.api import ADDITIONAL_HEADES, inline_literals_in_reduced_harness
+from harnessreducer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
 from harnessreducer.fdp_transform import InlineResult, InlineSkip
 
 
@@ -31,7 +31,7 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
 
     assert out.endswith(".inline.cpp")
     content = Path(out).read_text(encoding="utf-8")
-    for header in ADDITIONAL_HEADES:
+    for header in ADDITIONAL_HEADERS:
         assert header in content
     assert "int y = 1;" in content
 
@@ -65,7 +65,7 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
 
     assert out == str(reduced)
     content = reduced.read_text(encoding="utf-8")
-    for header in ADDITIONAL_HEADES:
+    for header in ADDITIONAL_HEADERS:
         assert header in content
     assert "ConsumeBytes<uint8_t>(length)" in content
     assert "100001" not in content

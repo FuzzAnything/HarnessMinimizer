@@ -19,7 +19,7 @@ from harnessreducer.reducer_runner import (
     run_treereducer,
 )
 
-ADDITIONAL_HEADES = [
+ADDITIONAL_HEADERS = [
     "#include <cstddef>",
     "#include <cstring>",
     "#include <string>",
@@ -67,7 +67,7 @@ def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> s
 
 def _prepend_additional_headers(harness_path: str) -> None:
     content = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
-    missing = [header for header in ADDITIONAL_HEADES if header not in content]
+    missing = [header for header in ADDITIONAL_HEADERS if header not in content]
     if not missing:
         return
     headers_block = "\n".join(missing) + "\n"
