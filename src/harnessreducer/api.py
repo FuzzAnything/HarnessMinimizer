@@ -16,7 +16,10 @@ from harnessreducer.reducer_runner import (
     dump_fdp_trace,
     format_reduced_harness,
     get_work_dir,
+    pch_tester_args,
+    prepare_phase3_pch_harness,
     run_treereducer,
+    validate_phase3_mode,
 )
 
 ADDITIONAL_HEADERS = [
@@ -44,6 +47,7 @@ class ReductionConfig:
     marker: str = "FDP_ID"
     use_llm: bool = False
     stable: bool = False
+    phase3_mode: str = "direct"
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,7 @@ def inline_literals_in_reduced_harness(
     crash_input: str | None,
     extra_flags: str | None,
     start_id: int = 100000,
+    phase3_mode: str = "direct",
 ) -> tuple[str, tuple[str, ...]]:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
@@ -156,9 +161,20 @@ def inline_literals_in_reduced_harness(
         return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
     print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
+    validate_phase3_mode(phase3_mode)
+    pch_artifacts = None
+    validation_source = inline_harness_path
+    if phase3_mode == "pch":
+        pch_artifacts = prepare_phase3_pch_harness(
+            inline_harness_path,
+            extra_flags,
+            use_replay=True,
+        )
+        validation_source = pch_artifacts.body_source
+
     cmd = [
         get_crash_tester_path(),
-        inline_harness_path,
+        validation_source,
         crash_pattern,
         "--crash-input",
         crash_input or "",
@@ -167,6 +183,7 @@ def inline_literals_in_reduced_harness(
         "--fdp-trace",
         fdp_trace_file,
     ]
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
     if proc.returncode == 77:
         print("[+] Inline reduction preserved crash behavior.")
@@ -192,6 +209,7 @@ def inline_literals_in_reduced_harness(
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
+    validate_phase3_mode(config.phase3_mode)
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.extra_flags)
     crash_pattern = extract_crash_pattern_from_output(config.crash_input)
@@ -204,7 +222,13 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
 
     print(f"[+] Extracted crash pattern: {crash_pattern}")
-    check_reducer_crash_pattern(config.harness_path, crash_pattern, config.crash_input, config.extra_flags)
+    check_reducer_crash_pattern(
+        config.harness_path,
+        crash_pattern,
+        config.crash_input,
+        config.extra_flags,
+        phase3_mode=config.phase3_mode,
+    )
     tagged_harness_file = tag_harness_with_fdp_ids(
         config.harness_path,
         start_id=config.start_id,
@@ -219,6 +243,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.extra_flags,
         config.crash_input,
         stable=config.stable,
+        phase3_mode=config.phase3_mode,
     )
     format_reduced_harness(reduced_harness)
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
@@ -228,6 +253,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.crash_input,
         config.extra_flags,
         config.start_id,
+        phase3_mode=config.phase3_mode,
     )
 
     if config.use_llm:
@@ -238,6 +264,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             config.extra_flags,
             fdp_trace_file,
+            phase3_mode=config.phase3_mode,
         )
     else:
         final_harness = post_inline_harness
@@ -257,6 +284,7 @@ def process(
     crash_input: str | None,
     work_dir: str | None = None,
     use_llm: bool = False,
+    phase3_mode: str = "direct",
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -264,7 +292,7 @@ def process(
         crash_input=crash_input,
         work_dir=work_dir,
         use_llm=use_llm,
+        phase3_mode=phase3_mode,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None
-
