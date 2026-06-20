@@ -25,6 +25,72 @@ def split_extra_flags(extra_flags: str | None) -> list[str]:
     return extra_flags.split() if extra_flags else []
 
 
+def split_phase3_extra_flags(extra_flags: str | None) -> tuple[list[str], list[str]]:
+    tokens = split_extra_flags(extra_flags)
+    compile_flags: list[str] = []
+    link_flags: list[str] = []
+    compile_value_flags = {
+        "-I",
+        "-D",
+        "-U",
+        "-include",
+        "-isystem",
+        "-iquote",
+        "-idirafter",
+        "-F",
+        "-iframework",
+        "-target",
+        "-Xclang",
+    }
+    link_value_flags = {
+        "-l",
+        "-L",
+        "-framework",
+        "-Xlinker",
+        "-u",
+    }
+    both_value_flags = {
+        "-isysroot",
+    }
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        next_token = tokens[i + 1] if i + 1 < len(tokens) else None
+
+        if token in compile_value_flags and next_token is not None:
+            compile_flags.extend([token, next_token])
+            i += 2
+            continue
+        if token in link_value_flags and next_token is not None:
+            link_flags.extend([token, next_token])
+            i += 2
+            continue
+        if token in both_value_flags and next_token is not None:
+            compile_flags.extend([token, next_token])
+            link_flags.extend([token, next_token])
+            i += 2
+            continue
+
+        if token == "-pthread" or token.startswith("-stdlib="):
+            compile_flags.append(token)
+            link_flags.append(token)
+        elif (
+            token.startswith("-l")
+            or token.startswith("-L")
+            or token.startswith("-Wl,")
+            or token.startswith("-fuse-ld=")
+            or token in {"-shared", "-static", "-rdynamic", "-pie", "-no-pie"}
+            or re.search(r"\.(?:a|so(?:\.\d+)*|dylib|lib)$", token)
+        ):
+            link_flags.append(token)
+        else:
+            compile_flags.append(token)
+        i += 1
+
+    return compile_flags, link_flags
+
+
 def phase3_replay_flags(fdp_trace: str | None) -> list[str]:
     if not fdp_trace:
         return []
@@ -69,7 +135,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
         object_path = obj_file.name
 
-    extra_flags = split_extra_flags(args.extra_flags)
+    compile_flags, link_flags = split_phase3_extra_flags(args.extra_flags)
     compile_cmd = [
         "clang++",
         "-Qunused-arguments",
@@ -83,7 +149,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         "-o",
         object_path,
     ]
-    compile_cmd.extend(extra_flags)
+    compile_cmd.extend(compile_flags)
 
     compile_proc = subprocess.run(
         compile_cmd,
@@ -105,7 +171,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         "-o",
         output_path,
     ]
-    link_cmd.extend(extra_flags)
+    link_cmd.extend(link_flags)
     link_proc = subprocess.run(
         link_cmd,
         stdout=subprocess.PIPE,
