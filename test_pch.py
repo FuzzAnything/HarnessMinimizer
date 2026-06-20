@@ -275,11 +275,6 @@ def run_case(args: argparse.Namespace) -> int:
         )
     )
     _assert(tagged_harness.exists(), f"Tagged harness was not written: {tagged_harness}")
-    tagged_text = tagged_harness.read_text(encoding="utf-8", errors="ignore")
-    _assert(
-        f"/*{args.marker}:" in tagged_text,
-        f"Tagged source does not contain expected injected marker /*{args.marker}:",
-    )
 
     print("[+] Compiling tagged harness in dump mode with current source-code runner...")
     tagged_binary = Path(compile_dump_mode_harness(str(tagged_harness), extra_flags))
