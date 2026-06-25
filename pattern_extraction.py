@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 _REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_REPO_ROOT / "src"))
@@ -16,6 +17,7 @@ from harnessreducer.reducer_runner import (  # noqa: E402
     ASAN_SUMMARY_PATTERN,
     LEAK_PATTERN,
     LIBFUZZER_SIGNAL_PATTERN,
+    RUNTIME_ERROR_PATTERN,
     UBSAN_PATTERN,
     check_harness_compilation,
     check_reducer_crash_pattern,
@@ -194,7 +196,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=1,
             name="Assert/Abort",
             regex=ABORT_ASSERT_LOCATION_PATTERN.pattern,
-            extracted_value=assert_summary_match.group(1).split(":")[0] + ":" + assert_summary_match.group(1).split(":")[1],
+            extracted_value=assert_summary_match.group(0).split(":")[0] + ":" + assert_summary_match.group(0).split(":")[1],
             line=_line_containing_span(
                 output, assert_summary_match.start(), assert_summary_match.end()
             ),
@@ -232,20 +234,30 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             line=_line_containing_span(output, leak_match.start(), leak_match.end()),
         )
 
+    rerror_match = RUNTIME_ERROR_PATTERN.search(output)
+    if rerror_match:
+        return CrashPatternMatch(
+            priority=5,
+            name="Runtime Error (UBSan)",
+            regex=RUNTIME_ERROR_PATTERN.pattern,
+            extracted_value=re.escape(rerror_match.group(0)),
+            line=_line_containing_span(output, rerror_match.start(), rerror_match.end()),
+        )
+
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
         return CrashPatternMatch(
-            priority=5,
+            priority=6,
             name="UBSan Summary",
             regex=UBSAN_PATTERN.pattern,
-            extracted_value=ubsan_match.group(1),
+            extracted_value=ubsan_match.group(0),
             line=_line_containing_span(output, ubsan_match.start(), ubsan_match.end()),
         )
 
     absl_check_match = ABSL_CHECK_PATTERN.search(output)
     if absl_check_match:
         return CrashPatternMatch(
-            priority=6,
+            priority=7,
             name="Abseil CHECK",
             regex=ABSL_CHECK_PATTERN.pattern,
             extracted_value=absl_check_match.group(1).strip(),
@@ -255,7 +267,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
     libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
     if libfuzzer_signal_match:
         return CrashPatternMatch(
-            priority=7,
+            priority=8,
             name="libFuzzer Signal",
             regex=LIBFUZZER_SIGNAL_PATTERN.pattern,
             extracted_value=libfuzzer_signal_match.group(1).strip(),
