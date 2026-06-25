@@ -3,6 +3,7 @@
 output/
 .env
 build/
+!benchmark/libpcap-2/build/
 fdp_visible_recorder.h
 generate_reproducer.py
 mark_fdp_calls.py
