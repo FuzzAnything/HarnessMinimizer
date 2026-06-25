@@ -16,7 +16,7 @@ HarnessReducer is a reducer workflow for library fuzzing harnesses. It minimizes
 | cli.py | 118 | CLI argument parser and output handling |
 | api.py | 310 | Orchestration engine — main pipeline logic |
 | fdp_transform.py | 918 | FDP AST transformation (tag, inline, strip) |
-| reducer_runner.py | 516 | Build/run/external-tool driver (all clang++ invocations) |
+| reducer_runner.py | 542 | Build/run/external-tool driver (all clang++ invocations) |
 | llm_reducer.py | 172 | Optional LLM-based semantic reducer |
 
 Additional external script:
@@ -45,7 +45,7 @@ Defines ReductionConfig and ReductionResult dataclasses, plus the main pipeline 
 
 1. Configure working directory — configure_work_dir()
 2. Check prerequisites — check_tree_reducer(), check_harness_compilation()
-3. Extract crash pattern — Run the harness, parse ASan/UBSan/abort output for a regex pattern
+3. Extract crash pattern — Run the harness, parse ASan/UBSan/leak/runtime-error/abort/assert output for a regex pattern; memory addresses are normalized via normalize_crash_signature()
 4. Validate crash pattern — check_reducer_crash_pattern() via crash_tester.py using the selected Phase 3 mode (--direct by default, or --pch)
 5. Tag FDP callsites — tag_harness_with_fdp_ids() which calls fdp_transform.inject_ids()
 6. Compile dump-mode binary — compile_dump_mode_harness()
@@ -119,7 +119,8 @@ Key functions:
 - run_command(cmd, error_prefix, env, ignore_errors) — Generic subprocess runner with error handling.
 - check_tree_reducer() — Verifies treereduce-c is installed and in PATH.
 - check_harness_compilation(harness_path, compile_flags, link_flags) — Phase 1 compilation (see below).
-- extract_crash_pattern_from_output(crash_input) — Runs the compiled harness and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/libFuzzer output.
+- normalize_crash_signature(signature, escape=False) — Normalizes a crash signature by replacing memory addresses (0x...) with the regex pattern 0x[0-9a-fA-F]+. When escape=True, it also re.escapes the rest of the signature (used for runtime error patterns that contain regex-special characters like colons).
+- extract_crash_pattern_from_output(crash_input) — Runs the compiled harness and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/runtime-error/libFuzzer output. All extracted signatures are passed through normalize_crash_signature() to scrub non-deterministic memory addresses.
 - check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, compile_flags, link_flags, phase3_mode) — Validates the crash pattern by running crash_tester.py in direct or PCH mode.
 - compile_dump_mode_harness(harness_path, compile_flags, link_flags) — Phase 2 compilation (see below).
 - dump_fdp_trace(harness_bin, crash_input) — Runs the dump-mode binary with FDP_TRACE_PATH env var to produce the FDP trace log.
@@ -130,11 +131,13 @@ Key functions:
 - format_reduced_harness(reduced_harness_path) — Runs clang-format -i --style=LLVM on the reduced harness.
 
 Crash pattern extraction regexes (defined in reducer_runner.py):
+- MEMORY_ADDRESS_PATTERN — Matches hex memory addresses (0x...); used by normalize_crash_signature() to scrub non-deterministic addresses from signatures
 - ASAN_SUMMARY_PATTERN — Matches SUMMARY: AddressSanitizer: <bug-type>
 - ASAN_ERROR_PATTERN — Matches ERROR: AddressSanitizer: ...
 - LEAK_PATTERN — Matches SUMMARY: AddressSanitizer: N byte(s) leaked in M allocation(s).
+- RUNTIME_ERROR_PATTERN — Matches <path>:<line>:<col>: runtime error: ... (UBSan runtime errors without a SUMMARY line)
 - UBSAN_PATTERN — Matches SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior <loc>
-- ABORT_ASSERT_LOCATION_PATTERN — Matches <file>:<line> from assertion failures
+- ABORT_ASSERT_LOCATION_PATTERN — Matches <file>:<line>...Assertion ... failed. (full assertion line from abort/assert failures)
 - ABSL_CHECK_PATTERN — Matches Check failed: <condition> from absl CHECK failures
 - LIBFUZZER_SIGNAL_PATTERN — Matches SUMMARY: libFuzzer: <signal>
 

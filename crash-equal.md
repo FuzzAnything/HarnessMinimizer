@@ -32,21 +32,24 @@ The combined stdout + stderr becomes the raw crash output. The exit code **must 
 
 ### 1.3 Pattern Selection (Priority Order)
 
-The function applies regex patterns in strict priority order and returns the **first match**:
+The function applies regex patterns in strict priority order and returns the **first match**. All extracted signatures are passed through `normalize_crash_signature()` which replaces non-deterministic memory addresses (`0x...`) with the regex `0x[0-9a-fA-F]+`, ensuring the pattern matches across runs even when addresses change.
 
 | Priority | Pattern Name | Regex | Extracted Value | Example Output |
 |---|---|---|---|---|
-| 1 | ASan Summary | `SUMMARY:\s*AddressSanitizer:\s*([\w-]+)` | Bug type (group 1) | `heap-buffer-overflow` |
-| 2 | ASan Error | `ERROR:\s*AddressSanitizer:\s*[\w-]+` | Full ERROR line | `ERROR: AddressSanitizer: heap-buffer-overflow` |
-| 3 | Leak Summary | `SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\.` | Full leak summary line | `SUMMARY: AddressSanitizer: 42 byte(s) leaked in 3 allocation(s).` |
-| 4 | UBSan Summary | `SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior\s+(\S+:\d+:\d+)` | Source location (group 1) | `src/foo.c:42:5` |
-| 5 | Assert/Abort | `((?:/[^\s:]+)+:\d+)` (on lines containing "Assertion" + "failed.") | Source file:line | `/root/src/lib.c:358` |
-| 6 | Abseil CHECK | `Check failed:\s*(.+?)\s*\(` | Condition text (group 1) | `last_returned_size_ > 0` |
-| 7 | libFuzzer Signal | `SUMMARY:\s*libFuzzer:\s*([\w][\w\s-]*)` | Signal description (group 1) | `deadly signal` |
+| 1 | Assert/Abort | `((?:/[^\s:]+)+:\d+:.*Assertion .* failed\.)` | `file:line` portion of the match (split on `:` and taking the first two fields), normalized | `/root/src/lib.c:358` |
+| 2 | ASan Summary | `SUMMARY:\s*AddressSanitizer:\s*([\w-]+)` | Full SUMMARY match (group 0), normalized | `SUMMARY: AddressSanitizer: heap-buffer-overflow` |
+| 3 | ASan Error | `ERROR:\s*AddressSanitizer:\s*[\w-]+` | Full ERROR match (group 0), normalized | `ERROR: AddressSanitizer: heap-buffer-overflow` |
+| 4 | Leak Summary | `SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\.` | Full leak summary match (group 0), normalized | `SUMMARY: AddressSanitizer: 42 byte(s) leaked in 3 allocation(s).` |
+| 5 | Runtime Error | `(?:/[^\s:]+)+:\d+:\d+:\s*runtime error:.*` | Full runtime error match (group 0), normalized with `escape=True` | `/src/foo.c:42:5: runtime error: ...` |
+| 6 | UBSan Summary | `SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior\s+(\S+:\d+:\d+)` | Full SUMMARY match (group 0), normalized | `SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior src/foo.c:42:5` |
+| 7 | Abseil CHECK | `Check failed:\s*(.+?)\s*\(` | Condition text (group 1), normalized | `last_returned_size_ > 0` |
+| 8 | libFuzzer Signal | `SUMMARY:\s*libFuzzer:\s*([\w][\w\s-]*)` | Signal description (group 1), normalized | `deadly signal` |
 
 If none match, a `ValueError` is raised — the crash is considered unrecognizable.
 
-**Key design choice**: The pattern is intentionally **coarse** (e.g., just `heap-buffer-overflow`, not the full stack trace). This ensures that cosmetic changes during reduction (like variable renaming or statement reordering) won't break the equivalence check, while still ensuring the same *type* of bug is triggered.
+**Key design choice**: The pattern is intentionally **coarse** (e.g., the full SUMMARY line rather than the full stack trace), and non-deterministic memory addresses are replaced with a regex wildcard. This ensures that cosmetic changes during reduction (like variable renaming, statement reordering, or address shifts) will not break the equivalence check, while still ensuring the same *type* of bug is triggered.
+
+The `normalize_crash_signature(signature, escape=False)` function handles address normalization: it strips the signature, replaces all `0x[hex]` occurrences with `0x[0-9a-fA-F]+`. When `escape=True` (used for the Runtime Error pattern), it also `re.escape()`s the rest of the signature before substituting the address pattern back, since the runtime error text may contain regex-special characters like colons.
 
 ### 1.4 Pattern Validation
 
@@ -214,4 +217,5 @@ Crash equivalence in HarnessReducer works through a **two-part check** applied c
 This is made reliable by:
 - **Deterministic FDP replay** ensuring consistent FDP return values across reductions.
 - **Coarse-grained patterns** that tolerate cosmetic changes while catching different bug types.
+- **Memory address normalization** via `normalize_crash_signature()` that scrubs non-deterministic `0x...` addresses from signatures, replacing them with a regex wildcard so the pattern matches even when addresses shift across runs.
 - **Fallback mechanisms** that revert to the last known-good version when a reduction step breaks crash preservation.
