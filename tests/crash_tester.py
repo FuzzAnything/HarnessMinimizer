@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,16 @@ __project_root__ = Path(__script_dir__).parent
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
+
+# Stack trace validation thresholds (must match reducer_runner.py).
+SMALL_HARNESS_LINE_THRESHOLD = 75
+TINY_HARNESS_LINE_THRESHOLD = 50
+SMALL_HARNESS_ITERATION = 10
+TINY_HARNESS_ITERATION = 1
+
+# Stack frame pattern and harness boundary (must match reducer_runner.py).
+STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
+LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 
 
 def get_project_root():
@@ -29,6 +40,52 @@ def phase3_replay_flags(fdp_trace: str | None) -> list[str]:
     if not fdp_trace:
         return []
     return [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
+
+
+def extract_stack_trace(output: str) -> str | None:
+    """Extract the first stack trace from symbolized sanitizer output.
+
+    Parses stack frames, truncates at LLVMFuzzerTestOneInput.
+    Only the first stack trace is kept.
+    Returns None if no stack frames are found.
+    """
+    frames: list[str] = []
+    in_first_trace = False
+    for line in output.splitlines():
+        if STACK_FRAME_PATTERN.match(line):
+            in_first_trace = True
+            if LLVMFuzzerTestOneInput_PATTERN.search(line):
+                break
+            frames.append(line)
+        elif in_first_trace:
+            break
+    if not frames:
+        return None
+    return "\n".join(frames)
+
+
+def _effective_iteration(base_iteration: int, source_path: str) -> int:
+    """Return the effective iteration interval based on source line count."""
+    try:
+        line_count = sum(1 for _ in open(source_path, encoding="utf-8", errors="ignore"))
+    except OSError:
+        return base_iteration
+    if line_count < TINY_HARNESS_LINE_THRESHOLD:
+        return TINY_HARNESS_ITERATION
+    if line_count < SMALL_HARNESS_LINE_THRESHOLD:
+        return SMALL_HARNESS_ITERATION
+    return base_iteration
+
+
+def _read_counter(counter_file: str) -> int:
+    try:
+        return int(Path(counter_file).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_counter(counter_file: str, value: int) -> None:
+    Path(counter_file).write_text(str(value), encoding="utf-8")
 
 
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
@@ -120,6 +177,38 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     return 0, object_path
 
 
+def _check_stack_trace(
+    run_log: str,
+    stack_trace_file: str,
+    source_path: str,
+    backup_file: str | None,
+) -> bool:
+    """Check the stack trace from a symbolize=1 run against the stored pattern.
+
+    Returns True if the stack trace matches. If backup_file is provided and
+    the check passes, the current source is saved as the new backup.
+    """
+    stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8").strip()
+    if not stored_pattern:
+        print("[*] No stored stack trace pattern; skipping stack trace check.")
+        return True
+
+    raw_trace = extract_stack_trace(run_log)
+    if raw_trace is None:
+        print("[-] No stack trace found in symbolized output.")
+        return False
+
+    if re.search(stored_pattern, run_log) is not None:
+        print("[+] Stack trace validation passed.")
+        if backup_file:
+            shutil.copy2(source_path, backup_file)
+            print(f"[+] Stack trace backup saved to {backup_file}")
+        return True
+
+    print("[-] Stack trace does not match the stored pattern.")
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -132,6 +221,12 @@ def main() -> int:
     mode_group.add_argument("--direct", action="store_true", help="Use the original one-step Phase 3 compile/link command")
     mode_group.add_argument("--pch", action="store_true", help="Use PCH Phase 3 mode: compile object with -include-pch, then link")
     parser.add_argument("--pch-path", type=str, default=None, help="Path to fahm_prefix.pch when --pch is used")
+    # Stack trace validation arguments
+    parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
+    parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--iteration", type=int, default=None, help="Base iteration interval for periodic symbolize=1 checks")
+    parser.add_argument("--counter-file", type=str, default=None, help="Path to the counter file tracking invocation count")
+    parser.add_argument("--backup-file", type=str, default=None, help="Path to save source backup on successful stack trace check")
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -147,12 +242,29 @@ def main() -> int:
         if compile_status != 0:
             return -1
 
+        # Determine whether this invocation should use symbolize=1.
+        force_symbolize = args.symbolize
+        periodic_check = False
+        if not force_symbolize and args.iteration is not None and args.counter_file and args.stack_trace_file:
+            counter = _read_counter(args.counter_file)
+            counter += 1
+            _write_counter(args.counter_file, counter)
+            effective = _effective_iteration(args.iteration, args.source)
+            if counter % effective == 0:
+                periodic_check = True
+
+        use_symbolize = force_symbolize or periodic_check
+
         env = os.environ.copy()
-        env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
-        env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1:print_stacktrace=1"
+        if use_symbolize:
+            env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
+            env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"
+        else:
+            env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
+            env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1:print_stacktrace=1"
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
-        
+
         exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
         run_proc = subprocess.run(
             exec_cmd,
@@ -167,14 +279,20 @@ def main() -> int:
 
         run_log = run_proc.stdout + run_proc.stderr
 
-        # Some libFuzzer/ASAN crash paths print fatal markers but still exit 0.
-        if status == 77 and re.search(args.crash_pattern, run_log) is not None:
-            print("execution log: ")
-            print(run_log)
-            print("Crash behavior preserved.")
-            return 77
-        print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
-        return 1
+        # First: crash pattern must match.
+        if status != 77 or re.search(args.crash_pattern, run_log) is None:
+            print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
+            return 1
+
+        # Crash pattern matched.  If symbolized, also validate stack trace.
+        if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
+            if not _check_stack_trace(run_log, args.stack_trace_file, args.source, args.backup_file):
+                return 1
+
+        print("execution log: ")
+        print(run_log)
+        print("Crash behavior preserved.")
+        return 77
     finally:
         if object_path:
             try:
@@ -184,7 +302,7 @@ def main() -> int:
         try:
             os.remove(output_path)
         except FileNotFoundError:
-            pass
+                pass
 
 
 if __name__ == "__main__":
