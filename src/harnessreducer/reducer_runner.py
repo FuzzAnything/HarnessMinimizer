@@ -318,8 +318,8 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     if crash_input:
         cmd.append(crash_input)
     env = os.environ.copy()
-    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:symbolize=0"
-    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
     proc = run_command(cmd, env=env, error_prefix="Failed to execute harness for crash pattern extraction", ignore_errors=True)
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:

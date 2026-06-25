@@ -1,23 +1,43 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from harnessreducer.reducer_runner import (  # noqa: E402
+    ABORT_ASSERT_LOCATION_PATTERN,
+    ABSL_CHECK_PATTERN,
+    ASAN_ERROR_PATTERN,
+    ASAN_SUMMARY_PATTERN,
+    LEAK_PATTERN,
+    LIBFUZZER_SIGNAL_PATTERN,
+    UBSAN_PATTERN,
     check_harness_compilation,
     check_reducer_crash_pattern,
     configure_work_dir,
     extract_crash_pattern_from_output,
+    get_work_dir,
+    run_command,
 )
 
 
 def _assert(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+@dataclass(frozen=True)
+class CrashPatternMatch:
+    priority: int
+    name: str
+    regex: str
+    extracted_value: str
+    line: str
 
 
 def _project_root() -> Path:
@@ -157,6 +177,123 @@ def _case_flags(
     return " ".join(compile_flags), " ".join(link_flags)
 
 
+def _line_containing_span(output: str, start: int, end: int) -> str:
+    line_start = output.rfind("\n", 0, start) + 1
+    line_end = output.find("\n", end)
+    if line_end == -1:
+        line_end = len(output)
+    return output[line_start:line_end]
+
+
+def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
+    """Mirror Phase 1.3 priority order, reusing reducer_runner's regex objects."""
+
+    asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
+    if asan_summary_match:
+        return CrashPatternMatch(
+            priority=1,
+            name="ASan Summary",
+            regex=ASAN_SUMMARY_PATTERN.pattern,
+            extracted_value=asan_summary_match.group(1).strip(),
+            line=_line_containing_span(
+                output, asan_summary_match.start(), asan_summary_match.end()
+            ),
+        )
+
+    asan_error_match = ASAN_ERROR_PATTERN.search(output)
+    if asan_error_match:
+        return CrashPatternMatch(
+            priority=2,
+            name="ASan Error",
+            regex=ASAN_ERROR_PATTERN.pattern,
+            extracted_value=asan_error_match.group(0),
+            line=_line_containing_span(output, asan_error_match.start(), asan_error_match.end()),
+        )
+
+    leak_match = LEAK_PATTERN.search(output)
+    if leak_match:
+        return CrashPatternMatch(
+            priority=3,
+            name="Leak Summary",
+            regex=LEAK_PATTERN.pattern,
+            extracted_value=leak_match.group(0),
+            line=_line_containing_span(output, leak_match.start(), leak_match.end()),
+        )
+
+    ubsan_match = UBSAN_PATTERN.search(output)
+    if ubsan_match:
+        return CrashPatternMatch(
+            priority=4,
+            name="UBSan Summary",
+            regex=UBSAN_PATTERN.pattern,
+            extracted_value=ubsan_match.group(1),
+            line=_line_containing_span(output, ubsan_match.start(), ubsan_match.end()),
+        )
+
+    for line in output.splitlines():
+        if "Assertion" in line and "failed." in line:
+            abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
+            if abort_assert_match:
+                return CrashPatternMatch(
+                    priority=5,
+                    name="Assert/Abort",
+                    regex=ABORT_ASSERT_LOCATION_PATTERN.pattern,
+                    extracted_value=abort_assert_match.group(1),
+                    line=line,
+                )
+
+    absl_check_match = ABSL_CHECK_PATTERN.search(output)
+    if absl_check_match:
+        return CrashPatternMatch(
+            priority=6,
+            name="Abseil CHECK",
+            regex=ABSL_CHECK_PATTERN.pattern,
+            extracted_value=absl_check_match.group(1).strip(),
+            line=_line_containing_span(output, absl_check_match.start(), absl_check_match.end()),
+        )
+
+    libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
+    if libfuzzer_signal_match:
+        return CrashPatternMatch(
+            priority=7,
+            name="libFuzzer Signal",
+            regex=LIBFUZZER_SIGNAL_PATTERN.pattern,
+            extracted_value=libfuzzer_signal_match.group(1).strip(),
+            line=_line_containing_span(
+                output, libfuzzer_signal_match.start(), libfuzzer_signal_match.end()
+            ),
+        )
+
+    raise ValueError("Failed to match crash pattern details from harness output.")
+
+
+def _extract_crash_pattern_details_from_poc(crash_input: Path | None) -> CrashPatternMatch | None:
+    """Run the already-compiled poc.out once more and report match diagnostics."""
+
+    output_bin = Path(get_work_dir()) / "poc.out"
+    cmd = [str(output_bin)]
+    if crash_input:
+        cmd.append(str(crash_input))
+
+    env = os.environ.copy()
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:symbolize=0"
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
+    proc = run_command(
+        cmd,
+        env=env,
+        error_prefix="Failed to execute harness for crash pattern detail extraction",
+        ignore_errors=True,
+    )
+    output = proc.stdout + "\n" + proc.stderr
+    if proc.returncode != 77:
+        print(
+            "[!] Warning: Could not collect crash pattern details because the "
+            f"diagnostic rerun exited with {proc.returncode}, not 77."
+        )
+        return None
+    return _match_crash_pattern_details(output)
+
+
 def run_case(args: argparse.Namespace) -> int:
     root = _project_root()
     benchmark_root = (root / args.benchmark_root).resolve()
@@ -202,6 +339,19 @@ def run_case(args: argparse.Namespace) -> int:
 
     print(f"[+] Extracted crash pattern: {crash_pattern}")
     print(f"[+] repr(pattern): {crash_pattern!r}")
+
+    details = _extract_crash_pattern_details_from_poc(crash_input)
+    if details:
+        print(f"[+] Pattern source: {details.name} (priority {details.priority})")
+        print(f"[+] Regex used: {details.regex}")
+        print(f"[+] Value from matched regex: {details.extracted_value!r}")
+        if details.extracted_value != crash_pattern:
+            print(
+                "[!] Warning: diagnostic rerun extracted a different value than "
+                "extract_crash_pattern_from_output()."
+            )
+        print("[+] Entire matched line:")
+        print(details.line)
 
     if not args.skip_validation:
         check_reducer_crash_pattern(
