@@ -56,7 +56,7 @@ UBSAN_PATTERN = re.compile(
 # Captures source location as file:line from abort/assert lines.
 # Example line:
 # poc.out: /root/src/libaom/av1/encoder/intra_mode_search.c:358: ... Assertion `...` failed.
-ABORT_ASSERT_LOCATION_PATTERN = ABORT_ASSERT_LOCATION_PATTERN = re.compile(
+ABORT_ASSERT_LOCATION_PATTERN = re.compile(
     r"((?:/[^\s:]+)+:\d+:.*Assertion .* failed\.)"
 )
 # Captures the condition from absl CHECK failure lines.
@@ -328,15 +328,22 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
         return None
 
-    for line in output.splitlines():
-        if "Assertion" in line and "failed." in line:
-            abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
-            if abort_assert_match:
-                return re.escape(abort_assert_match.group(1))
+    # for line in output.splitlines():
+    #     if "Assertion" in line and "failed." in line:
+    #         abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
+    #         if abort_assert_match:
+    #             return re.escape(abort_assert_match.group(1))
+
+    abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(output)
+    if abort_assert_match:
+        # temp = abort_assert_match.group(1)
+        # temp1 = temp.split(":")[0] + ":" + temp.split(":")[1]
+        # print(f"[+] Harness crashed at: {temp1}")
+        return abort_assert_match.group(1).split(":")[0] + ":" + abort_assert_match.group(1).split(":")[1]
 
     asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
     if asan_summary_match:
-        return asan_summary_match.group(1).strip()
+        return asan_summary_match.group(0)
 
     asan_error_match = ASAN_ERROR_PATTERN.search(output)
     if asan_error_match:

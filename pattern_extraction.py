@@ -188,13 +188,25 @@ def _line_containing_span(output: str, start: int, end: int) -> str:
 def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
     """Mirror Phase 1.3 priority order, reusing reducer_runner's regex objects."""
 
+    assert_summary_match = ABORT_ASSERT_LOCATION_PATTERN.search(output)
+    if assert_summary_match:
+        return CrashPatternMatch(
+            priority=1,
+            name="Assert/Abort",
+            regex=ABORT_ASSERT_LOCATION_PATTERN.pattern,
+            extracted_value=assert_summary_match.group(1).split(":")[0] + ":" + assert_summary_match.group(1).split(":")[1],
+            line=_line_containing_span(
+                output, assert_summary_match.start(), assert_summary_match.end()
+            ),
+        )
+            
     asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
     if asan_summary_match:
         return CrashPatternMatch(
-            priority=1,
+            priority=2,
             name="ASan Summary",
             regex=ASAN_SUMMARY_PATTERN.pattern,
-            extracted_value=asan_summary_match.group(1).strip(),
+            extracted_value=asan_summary_match.group(0),
             line=_line_containing_span(
                 output, asan_summary_match.start(), asan_summary_match.end()
             ),
@@ -203,7 +215,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
     asan_error_match = ASAN_ERROR_PATTERN.search(output)
     if asan_error_match:
         return CrashPatternMatch(
-            priority=2,
+            priority=3,
             name="ASan Error",
             regex=ASAN_ERROR_PATTERN.pattern,
             extracted_value=asan_error_match.group(0),
@@ -213,7 +225,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
     leak_match = LEAK_PATTERN.search(output)
     if leak_match:
         return CrashPatternMatch(
-            priority=3,
+            priority=4,
             name="Leak Summary",
             regex=LEAK_PATTERN.pattern,
             extracted_value=leak_match.group(0),
@@ -223,24 +235,12 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
         return CrashPatternMatch(
-            priority=4,
+            priority=5,
             name="UBSan Summary",
             regex=UBSAN_PATTERN.pattern,
             extracted_value=ubsan_match.group(1),
             line=_line_containing_span(output, ubsan_match.start(), ubsan_match.end()),
         )
-
-    for line in output.splitlines():
-        if "Assertion" in line and "failed." in line:
-            abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(line)
-            if abort_assert_match:
-                return CrashPatternMatch(
-                    priority=5,
-                    name="Assert/Abort",
-                    regex=ABORT_ASSERT_LOCATION_PATTERN.pattern,
-                    extracted_value=abort_assert_match.group(1),
-                    line=line,
-                )
 
     absl_check_match = ABSL_CHECK_PATTERN.search(output)
     if absl_check_match:
@@ -276,8 +276,8 @@ def _extract_crash_pattern_details_from_poc(crash_input: Path | None) -> CrashPa
         cmd.append(str(crash_input))
 
     env = os.environ.copy()
-    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:symbolize=0"
-    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
     proc = run_command(
         cmd,
         env=env,
