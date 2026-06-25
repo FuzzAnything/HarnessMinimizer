@@ -68,9 +68,9 @@ def extract_stack_trace(output: str) -> str | None:
 
 
 def _effective_iteration(base_iteration: int, source_path: str) -> int:
-    """Return the effective iteration interval based on source line count."""
     try:
-        line_count = sum(1 for _ in open(source_path, encoding="utf-8", errors="ignore"))
+        with open(source_path, encoding="utf-8", errors="ignore") as f:
+            line_count = sum(1 for _ in f)
     except OSError:
         return base_iteration
     if line_count < TINY_HARNESS_LINE_THRESHOLD:
