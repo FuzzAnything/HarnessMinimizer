@@ -13,10 +13,10 @@ HarnessReducer is a reducer workflow for library fuzzing harnesses. It minimizes
 | __init__.py | 3 | Re-exports public API symbols |
 | __main__.py | 3 | python -m harnessreducer entry point |
 | main.py | 6 | Legacy entry point, delegates to cli.main() |
-| cli.py | 118 | CLI argument parser and output handling |
-| api.py | 310 | Orchestration engine — main pipeline logic |
+| cli.py | 130 | CLI argument parser and output handling |
+| api.py | 343 | Orchestration engine — main pipeline logic |
 | fdp_transform.py | 918 | FDP AST transformation (tag, inline, strip) |
-| reducer_runner.py | 542 | Build/run/external-tool driver (all clang++ invocations) |
+| reducer_runner.py | 673 | Build/run/external-tool driver (all clang++ invocations) |
 | llm_reducer.py | 172 | Optional LLM-based semantic reducer |
 
 Additional external script:
@@ -45,7 +45,7 @@ Defines ReductionConfig and ReductionResult dataclasses, plus the main pipeline 
 
 1. Configure working directory — configure_work_dir()
 2. Check prerequisites — check_tree_reducer(), check_harness_compilation()
-3. Extract crash pattern — Run the harness, parse ASan/UBSan/leak/runtime-error/abort/assert output for a regex pattern; memory addresses are normalized via normalize_crash_signature()
+3. Extract crash pattern — Run the harness with symbolize=1, parse ASan/UBSan/leak/runtime-error/abort/assert output for a regex pattern; memory addresses are normalized via normalize_crash_signature(). Additionally, the first symbolized stack trace is extracted, truncated at LLVMFuzzerTestOneInput, normalized via normalize_crash_signature(escape=True), and saved to stack_trace.pattern in the work dir
 4. Validate crash pattern — check_reducer_crash_pattern() via crash_tester.py using the selected Phase 3 mode (--direct by default, or --pch)
 5. Tag FDP callsites — tag_harness_with_fdp_ids() which calls fdp_transform.inject_ids()
 6. Compile dump-mode binary — compile_dump_mode_harness()
@@ -120,7 +120,11 @@ Key functions:
 - check_tree_reducer() — Verifies treereduce-c is installed and in PATH.
 - check_harness_compilation(harness_path, compile_flags, link_flags) — Phase 1 compilation (see below).
 - normalize_crash_signature(signature, escape=False) — Normalizes a crash signature by replacing memory addresses (0x...) with the regex pattern 0x[0-9a-fA-F]+. When escape=True, it also re.escapes the rest of the signature (used for runtime error patterns that contain regex-special characters like colons).
-- extract_crash_pattern_from_output(crash_input) — Runs the compiled harness and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/runtime-error/libFuzzer output. All extracted signatures are passed through normalize_crash_signature() to scrub non-deterministic memory addresses.
+- extract_crash_pattern_from_output(crash_input) — Runs the compiled harness with symbolize=1 and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/runtime-error/libFuzzer output. All extracted signatures are passed through normalize_crash_signature() to scrub non-deterministic memory addresses. Also extracts and saves the normalized first stack trace to stack_trace.pattern.
+- extract_stack_trace(output) — Extracts the first symbolized stack trace from sanitizer output, truncating at LLVMFuzzerTestOneInput. Returns the raw frame text or None.
+- get_stack_trace_file() / get_stack_trace_counter_file() / get_stack_trace_backup_file() — Return paths for the stack trace pattern file, invocation counter, and backup source in the work dir.
+- stack_trace_tester_args(iteration) — Builds the extra crash_tester.py arguments for periodic stack trace validation (--stack-trace-file, --iteration, --counter-file, --backup-file).
+- validate_stack_trace(harness_path, crash_pattern, ...) — Runs a symbolize=1 check via crash_tester.py and compares the resulting stack trace against the stored pattern. Returns True if the trace matches (or no stored pattern exists).
 - check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, compile_flags, link_flags, phase3_mode) — Validates the crash pattern by running crash_tester.py in direct or PCH mode.
 - compile_dump_mode_harness(harness_path, compile_flags, link_flags) — Phase 2 compilation (see below).
 - dump_fdp_trace(harness_bin, crash_input) — Runs the dump-mode binary with FDP_TRACE_PATH env var to produce the FDP trace log.
@@ -140,6 +144,8 @@ Crash pattern extraction regexes (defined in reducer_runner.py):
 - ABORT_ASSERT_LOCATION_PATTERN — Matches <file>:<line>...Assertion ... failed. (full assertion line from abort/assert failures)
 - ABSL_CHECK_PATTERN — Matches Check failed: <condition> from absl CHECK failures
 - LIBFUZZER_SIGNAL_PATTERN — Matches SUMMARY: libFuzzer: <signal>
+- STACK_FRAME_PATTERN — Matches symbolized stack frames (#N 0xADDR in ...); used by extract_stack_trace()
+- LLVMFuzzerTestOneInput_PATTERN — Matches the harness entry point; stack trace extraction truncates at this boundary
 
 ### 6. tests/crash_tester.py — Interestingness Test
 
@@ -149,8 +155,22 @@ Called by treereduce-c (and by the inline validation step) to determine if a can
    - --direct — the original one-step compile/link command.
    - --pch --pch-path <fahm_prefix.pch> — compile the include-stripped candidate body to an object with -include-pch, then link the object.
 2. Compiles or compiles+links the candidate source with Phase 3 flags (see below).
-3. Runs the resulting binary with ASAN_OPTIONS=exitcode=77 and UBSAN_OPTIONS=exitcode=77:halt_on_error=1.
-4. If the process exits with code 77 AND the crash pattern regex matches the output — returns exit code 77 ("interesting").
+3. Determines whether to use symbolize=0 (fast) or symbolize=1 (stack trace validation):
+   - By default, symbolize=0 is used for speed.
+   - If --symbolize is passed, symbolize=1 is forced for this invocation.
+   - If --iteration N is provided along with --counter-file and --stack-trace-file, a counter is incremented each invocation and every N-th check (adapted by source line count) switches to symbolize=1 and validates the stack trace against the stored pattern.
+4. Runs the resulting binary with the appropriate ASAN_OPTIONS/UBSAN_OPTIONS.
+5. If the process exits with code 77 AND the crash pattern regex matches the output — proceeds to stack trace check if symbolized.
+6. If symbolized and --stack-trace-file is provided, the stack trace from the output is compared against the stored normalized pattern. If it matches, the candidate source is saved to --backup-file. If it does not match, returns exit code 1 ("not interesting").
+7. Otherwise returns exit code 77 ("interesting") or 1 ("not interesting").
+
+If --fdp-trace is provided, sets FDP_TRACE_PATH env var and adds -DFDP_MIN_MODE_REPLAY -I<project>/include to the compile command.
+
+Stack trace validation thresholds (defined in both reducer_runner.py and crash_tester.py, tune as needed):
+- SMALL_HARNESS_LINE_THRESHOLD = 75 — below this, the iteration interval shrinks.
+- TINY_HARNESS_LINE_THRESHOLD = 50 — below this, every candidate is checked.
+- SMALL_HARNESS_ITERATION = 10 — interval when source has fewer than 75 lines.
+- TINY_HARNESS_ITERATION = 1 — interval when source has fewer than 50 lines.
 5. Otherwise returns exit code 1 ("not interesting").
 
 If --fdp-trace is provided, sets FDP_TRACE_PATH env var and adds -DFDP_MIN_MODE_REPLAY -I<project>/include to the compile command.
@@ -178,6 +198,7 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 | --llm | — | No | False | Enable LLM-based semantic minimization as a final reduction pass. Requires OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL environment variables to be set. |
 | -o / --output | -o | Yes | — | Required output path for the reduced harness. The parent directory is created if needed. Any generated header files (e.g., harness_values.h) are copied to the same directory. |
 | --stable | — | No | False | Use deterministic/stable reduction mode. Passes --stable --min-reduction 1 to treereduce-c instead of --fast. Ensures reproducible output across runs. |
+| --iteration | — | No | None | Enable periodic stack trace validation every N crash-tester invocations during reduction. The interval adapts based on candidate line count (see thresholds above). When omitted, the stack trace is still recorded at startup (symbolize=1) but symbolize=0 is used throughout reduction (no periodic checks). |
 | --direct | — | No | True | Use the original one-step Phase 3 compile/link path. This is the default and preserves the previous crash_tester.py behavior. Mutually exclusive with --pch. |
 | --pch | — | No | False | Use precompiled-header Phase 3 mode. The tool builds fahm_prefix.h/fahm_prefix.pch, removes include lines from the tested candidate body, compiles candidates with -include-pch to .o files, and links separately. Mutually exclusive with --direct. |
 
@@ -195,6 +216,7 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 | use_llm | bool | False | args.llm |
 | stable | bool | False | args.stable |
 | phase3_mode | str | "direct" | args.direct / args.pch |
+| iteration | int or None | None | args.iteration |
 
 ### ReductionResult fields
 
@@ -375,13 +397,16 @@ Note: The extract_crash_pattern_from_output() function is NOT a Phase 3 invocati
 ### Runtime Environment Variables
 
 When running the compiled binaries (not compiling), these env vars are set:
-
 | Variable | Value | When | Purpose |
 |---|---|---|---|
-| ASAN_OPTIONS | exitcode=77:symbolize=0 | All harness executions | Makes ASan exit with code 77 on error (the interesting exit code for treereduce); disables symbolization for speed |
-| UBSAN_OPTIONS | exitcode=77:halt_on_error=1:symbolize=0 | All harness executions | Same for UBSan; halts on first error |
+| ASAN_OPTIONS | exitcode=77:symbolize=1 | Phase 1 crash extraction | Makes ASan exit with code 77; enables symbolization for stack trace capture |
+| ASAN_OPTIONS | exitcode=77:symbolize=0:handle_abort=1 | Phase 3 crash tester (default) | Fast: disables symbolization for speed |
+| ASAN_OPTIONS | exitcode=77:symbolize=1:handle_abort=1 | Phase 3 crash tester (periodic stack trace check) | Enables symbolization for stack trace validation |
+| UBSAN_OPTIONS | exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1 | Phase 1 crash extraction | Enables symbolization for stack trace capture |
+| UBSAN_OPTIONS | exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0 | Phase 3 crash tester (default) | Fast: disables symbolization for speed |
+| UBSAN_OPTIONS | exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1 | Phase 3 crash tester (periodic stack trace check) | Enables symbolization for stack trace validation |
 | FDP_TRACE_PATH | <work_dir>/fdp_trace.log | Dump-mode execution and Phase 3 replay executions with --fdp-trace | Dump mode writes the trace; replay mode reads the trace |
-
+| FDP_TRACE_PATH | <work_dir>/fdp_trace.log | Dump-mode execution and Phase 3 replay executions with --fdp-trace | Dump mode writes the trace; replay mode reads the trace |
 ---
 
 ## treereduce-c Integration
@@ -395,7 +420,9 @@ treereduce-c -j 60 -s <tagged_harness.cpp> -o <reduced_harness.cpp> --fast \
   --timeout 300 --interesting-exit-code 77 \
   -- <crash_tester.py> @@.cpp <crash_pattern> \
      --crash-input <crash_input> --compile-flags <compile_flags> --link-flags <link_flags> \
-     --fdp-trace <trace> --direct
+     --fdp-trace <trace> --direct \
+     [--stack-trace-file <stack_trace.pattern> --iteration <N> \
+      --counter-file <stack_trace.counter> --backup-file <stack_trace.backup.cpp>]
 ```
 
 PCH mode:
@@ -405,7 +432,9 @@ treereduce-c -j 60 -s <tagged_harness.fahm_body.cpp> -o <reduced_harness.cpp> --
   --timeout 300 --interesting-exit-code 77 \
   -- <crash_tester.py> @@.cpp <crash_pattern> \
      --crash-input <crash_input> --compile-flags <compile_flags> --link-flags <link_flags> \
-     --fdp-trace <trace> --pch --pch-path <work_dir>/fahm_prefix.pch
+     --fdp-trace <trace> --pch --pch-path <work_dir>/fahm_prefix.pch \
+     [--stack-trace-file <stack_trace.pattern> --iteration <N> \
+      --counter-file <stack_trace.counter> --backup-file <stack_trace.backup.cpp>]
 ```
 
 - -j 60 — Use up to 60 parallel jobs
@@ -416,6 +445,7 @@ treereduce-c -j 60 -s <tagged_harness.fahm_body.cpp> -o <reduced_harness.cpp> --
 - --interesting-exit-code 77 — The exit code that means this reduction is still interesting (matches ASan/UBSan exit code)
 - @@.cpp — treereduce-c replaces this with the candidate source path
 - After a PCH-mode treereduce run succeeds, restore_pch_includes() prepends the moved include lines to reduced_harness.cpp.
+- The bracketed stack trace arguments are only present when --iteration is provided. They enable periodic symbolize=1 checks during the reduction and automatic source backup on successful stack trace validation. After treereduce-c completes, api.py runs a final symbolize=1 check via validate_stack_trace(); if it fails, the last backup is restored.
 
 ---
 
@@ -435,6 +465,9 @@ When using a temp dir (default), the working directory contains:
   +-- reduced_harness.inline.cpp  # After FDP literal inlining
   +-- reduced_harness.llm.cpp     # After LLM reduction (if --llm)
   +-- harness_values.h            # Generated header for large buffers
+  +-- stack_trace.pattern         # Normalized stack trace regex (from Phase 1 symbolize=1 run)
+  +-- stack_trace.counter         # Invocation counter for periodic stack trace checks (--iteration)
+  +-- stack_trace.backup.cpp      # Last known-good source backup from stack trace validation
 
 When --work-dir is specified, the directory is not cleaned up at exit. Otherwise, it is removed via atexit handler.
 

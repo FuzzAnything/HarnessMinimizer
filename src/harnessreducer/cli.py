@@ -59,6 +59,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use stable reduction mode (no randomization, deterministic output).",
     )
+    parser.add_argument(
+        "--iteration",
+        type=int,
+        default=None,
+        help=(
+            "Enable periodic stack trace validation every N crash-tester "
+            "invocations during reduction. When omitted, the stack trace is "
+            "still recorded at startup but symbolize=0 is used throughout "
+            "reduction (no periodic checks)."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -91,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         use_llm=args.llm,
         stable=args.stable,
         phase3_mode=args.phase3_mode,
+        iteration=args.iteration,
     )
     result = reduce_with_config(config)
     if not result.success:

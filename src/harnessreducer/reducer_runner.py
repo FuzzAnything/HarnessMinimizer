@@ -22,6 +22,20 @@ PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
 
+# Stack trace validation thresholds (tune these values as needed).
+SMALL_HARNESS_LINE_THRESHOLD = 75   # below this, iteration interval shrinks
+TINY_HARNESS_LINE_THRESHOLD = 50    # below this, every candidate is checked
+SMALL_HARNESS_ITERATION = 10        # interval when lines < SMALL_HARNESS_LINE_THRESHOLD
+TINY_HARNESS_ITERATION = 1          # interval when lines < TINY_HARNESS_LINE_THRESHOLD
+STACK_TRACE_FILE_NAME = "stack_trace.pattern"
+STACK_TRACE_COUNTER_FILE_NAME = "stack_trace.counter"
+STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"
+# Matches symbolized stack frames like:
+#   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
+#   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
+STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
+LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+
 
 @dataclass(frozen=True)
 class PchArtifacts:
@@ -327,6 +341,41 @@ def normalize_crash_signature(signature: str, escape: bool = False) -> str:
 
     return MEMORY_ADDRESS_PATTERN.sub(r"0x[0-9a-fA-F]+", signature)
 
+def extract_stack_trace(output: str) -> str | None:
+    """Extract the first stack trace from symbolized sanitizer output.
+
+    Parses stack frames (lines matching ``#N 0xADDR in ...``), truncates at
+    ``LLVMFuzzerTestOneInput``, and returns the raw text of those frames.
+    Only the *first* stack trace is kept (ASan may emit multiple — e.g., one
+    for the overflow and one for the allocation site).
+    Returns None if no stack frames are found.
+    """
+    frames: list[str] = []
+    in_first_trace = False
+    for line in output.splitlines():
+        if STACK_FRAME_PATTERN.match(line):
+            in_first_trace = True
+            # Stop if this frame belongs to the harness / fuzzer infrastructure.
+            if LLVMFuzzerTestOneInput_PATTERN.search(line):
+                break
+            frames.append(line)
+        elif in_first_trace:
+            # A non-frame line after we started collecting means the first
+            # trace is over.  Do not continue into a second trace.
+            break
+    if not frames:
+        return None
+    return "\n".join(frames)
+
+def get_stack_trace_file() -> str:
+    return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
+
+def get_stack_trace_counter_file() -> str:
+    return os.path.join(get_work_dir(), STACK_TRACE_COUNTER_FILE_NAME)
+
+def get_stack_trace_backup_file() -> str:
+    return os.path.join(get_work_dir(), STACK_TRACE_BACKUP_FILE_NAME)
+
 def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
@@ -334,13 +383,23 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     if crash_input:
         cmd.append(crash_input)
     env = os.environ.copy()
-    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
-    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
     proc = run_command(cmd, env=env, error_prefix="Failed to execute harness for crash pattern extraction", ignore_errors=True)
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
         return None
+
+    # Extract and save the first stack trace (normalized) for periodic validation.
+    raw_stack_trace = extract_stack_trace(output)
+    if raw_stack_trace:
+        normalized_trace = normalize_crash_signature(raw_stack_trace, escape=True)
+        trace_file = get_stack_trace_file()
+        Path(trace_file).write_text(normalized_trace, encoding="utf-8")
+        print(f"[+] Saved stack trace pattern to {trace_file}")
+    else:
+        print("[!] No symbolized stack trace found in crash output.")
 
     # for line in output.splitlines():
     #     if "Assertion" in line and "failed." in line:
@@ -469,6 +528,7 @@ def run_treereducer(
     crash_input: str | None,
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
+    iteration: int | None = None,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -516,6 +576,7 @@ def run_treereducer(
         "--fdp-trace", fdp_trace_file,
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(stack_trace_tester_args(iteration))
 
     proc = subprocess.run(
         cmd,
@@ -540,3 +601,71 @@ def format_reduced_harness(reduced_harness_path: str) -> None:
         ["clang-format", "-i", "--style=LLVM", reduced_harness_path],
         "Failed to format reduced harness with clang-format",
     )
+
+
+def stack_trace_tester_args(
+    iteration: int | None,
+) -> list[str]:
+    """Build extra crash_tester.py args for stack trace validation."""
+    if iteration is None:
+        return []
+    args: list[str] = []
+    stack_trace_file = get_stack_trace_file()
+    if os.path.exists(stack_trace_file):
+        args.extend(["--stack-trace-file", stack_trace_file])
+    args.extend(["--iteration", str(iteration)])
+    args.extend(["--counter-file", get_stack_trace_counter_file()])
+    args.extend(["--backup-file", get_stack_trace_backup_file()])
+    return args
+
+
+def validate_stack_trace(
+    harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None = None,
+    phase3_mode: str = PHASE3_DIRECT,
+) -> bool:
+    """Run a symbolize=1 check and compare the stack trace against the stored pattern.
+
+    Returns True if the stack trace matches (or no stored pattern exists).
+    """
+    stack_trace_file = get_stack_trace_file()
+    if not os.path.exists(stack_trace_file):
+        print("[*] No stored stack trace pattern; skipping stack trace validation.")
+        return True
+
+    stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8")
+    if not stored_pattern.strip():
+        print("[*] Stored stack trace pattern is empty; skipping stack trace validation.")
+        return True
+
+    validate_phase3_mode(phase3_mode)
+    pch_artifacts: PchArtifacts | None = None
+    tester_source = harness_path
+    if phase3_mode == PHASE3_PCH:
+        pch_artifacts = prepare_phase3_pch_harness(
+            harness_path,
+            compile_flags,
+            use_replay=fdp_trace_file is not None,
+        )
+        tester_source = pch_artifacts.body_source
+
+    cmd = [
+        get_crash_tester_path(),
+        tester_source,
+        crash_pattern,
+        "--crash-input", crash_input or "",
+        f"--compile-flags={compile_flags or ''}"
+        f"--link-flags={link_flags or ''}"
+        "--symbolize",  # force symbolize=1 for this check
+        "--stack-trace-file", stack_trace_file,
+    ]
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+
+    proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
+    return proc.returncode == 77
