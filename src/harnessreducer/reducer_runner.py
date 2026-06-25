@@ -50,6 +50,9 @@ ASAN_ERROR_PATTERN = re.compile(r"ERROR:\s*AddressSanitizer:\s*[\w-]+")
 LEAK_PATTERN = re.compile(
     r"SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\."
 )
+RUNTIME_ERROR_PATTERN = re.compile(
+    r"(?:/[^\s:]+)+:\d+:\d+:\s*runtime error:.*"
+)
 UBSAN_PATTERN = re.compile(
     r"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior\s+(\S+:\d+:\d+)"
 )
@@ -339,7 +342,7 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
         # temp = abort_assert_match.group(1)
         # temp1 = temp.split(":")[0] + ":" + temp.split(":")[1]
         # print(f"[+] Harness crashed at: {temp1}")
-        return abort_assert_match.group(1).split(":")[0] + ":" + abort_assert_match.group(1).split(":")[1]
+        return abort_assert_match.group(0).split(":")[0] + ":" + abort_assert_match.group(0).split(":")[1]
 
     asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
     if asan_summary_match:
@@ -352,10 +355,14 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     leak_match = LEAK_PATTERN.search(output)
     if leak_match:
         return leak_match.group(0)
+    
+    runtime_error_match = RUNTIME_ERROR_PATTERN.search(output)
+    if runtime_error_match:
+        return re.escape(runtime_error_match.group(0))
 
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
-        return ubsan_match.group(1)
+        return ubsan_match.group(0)
 
     absl_check_match = ABSL_CHECK_PATTERN.search(output)
     if absl_check_match:
