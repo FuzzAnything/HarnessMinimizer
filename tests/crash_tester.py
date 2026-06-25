@@ -148,8 +148,8 @@ def main() -> int:
             return -1
 
         env = os.environ.copy()
-        env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0"
-        env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1"
+        env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
+        env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1:print_stacktrace=1"
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
         
