@@ -371,6 +371,19 @@ def get_stack_trace_counter_file() -> str:
 def get_stack_trace_backup_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_BACKUP_FILE_NAME)
 
+
+def reset_stack_trace_state() -> None:
+    """Remove persisted stack-trace validation artifacts from the work dir."""
+    for path in (
+        get_stack_trace_file(),
+        get_stack_trace_counter_file(),
+        get_stack_trace_backup_file(),
+    ):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
 def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
@@ -394,6 +407,10 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
         Path(trace_file).write_text(normalized_trace, encoding="utf-8")
         print(f"[+] Saved stack trace pattern to {trace_file}")
     else:
+        try:
+            os.remove(get_stack_trace_file())
+        except FileNotFoundError:
+            pass
         print("[!] No symbolized stack trace found in crash output.")
 
     # for line in output.splitlines():
@@ -653,8 +670,8 @@ def validate_stack_trace(
         tester_source,
         crash_pattern,
         "--crash-input", crash_input or "",
-        f"--compile-flags={compile_flags or ''}"
-        f"--link-flags={link_flags or ''}"
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
         "--symbolize",  # force symbolize=1 for this check
         "--stack-trace-file", stack_trace_file,
     ]

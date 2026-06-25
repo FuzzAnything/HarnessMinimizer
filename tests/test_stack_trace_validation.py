@@ -14,15 +14,13 @@ from harnessreducer.reducer_runner import (
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
-    SMALL_HARNESS_LINE_THRESHOLD,
-    TINY_HARNESS_LINE_THRESHOLD,
-    SMALL_HARNESS_ITERATION,
-    TINY_HARNESS_ITERATION,
+    extract_crash_pattern_from_output,
     extract_stack_trace,
     normalize_crash_signature,
     get_stack_trace_file,
     get_stack_trace_counter_file,
     get_stack_trace_backup_file,
+    reset_stack_trace_state,
     stack_trace_tester_args,
     validate_stack_trace,
     configure_work_dir,
@@ -50,6 +48,10 @@ ct_effective_iteration = _ct_module._effective_iteration
 ct_read_counter = _ct_module._read_counter
 ct_write_counter = _ct_module._write_counter
 ct_check_stack_trace = _ct_module._check_stack_trace
+SMALL_HARNESS_LINE_THRESHOLD = _ct_module.SMALL_HARNESS_LINE_THRESHOLD
+TINY_HARNESS_LINE_THRESHOLD = _ct_module.TINY_HARNESS_LINE_THRESHOLD
+SMALL_HARNESS_ITERATION = _ct_module.SMALL_HARNESS_ITERATION
+TINY_HARNESS_ITERATION = _ct_module.TINY_HARNESS_ITERATION
 
 
 # --- Sample ASan output for testing ---
@@ -382,6 +384,65 @@ class TestStackTraceTesterArgs(unittest.TestCase):
             self.assertNotIn("--stack-trace-file", result)
             self.assertIn("--iteration", result)
             self.assertIn("100", result)
+
+
+class TestStackTraceStateManagement(unittest.TestCase):
+    def test_reset_stack_trace_state_removes_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
+            Path(get_stack_trace_counter_file()).write_text("3", encoding="utf-8")
+            Path(get_stack_trace_backup_file()).write_text("int main() {}", encoding="utf-8")
+
+            reset_stack_trace_state()
+
+            self.assertFalse(os.path.exists(get_stack_trace_file()))
+            self.assertFalse(os.path.exists(get_stack_trace_counter_file()))
+            self.assertFalse(os.path.exists(get_stack_trace_backup_file()))
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            trace_file = get_stack_trace_file()
+            Path(trace_file).write_text("stale-pattern", encoding="utf-8")
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+            mock_run.return_value.stderr = ""
+
+            pattern = extract_crash_pattern_from_output(None)
+
+            self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
+            self.assertFalse(os.path.exists(trace_file))
+
+
+class TestValidateStackTraceInvocation(unittest.TestCase):
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+
+            ok = validate_stack_trace(
+                "candidate.cpp",
+                "AddressSanitizer",
+                "seed.bin",
+                "-O2",
+                "-lm",
+                fdp_trace_file="/tmp/fdp.log",
+            )
+
+            self.assertTrue(ok)
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--compile-flags=-O2", cmd)
+            self.assertIn("--link-flags=-lm", cmd)
+            self.assertIn("--symbolize", cmd)
+            self.assertIn("--stack-trace-file", cmd)
+            broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
+            self.assertNotIn(broken_arg, cmd)
 
 
 if __name__ == "__main__":

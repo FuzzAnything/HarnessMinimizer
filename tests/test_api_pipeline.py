@@ -10,6 +10,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.run_treereducer")
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
     @patch("harnessreducer.api.check_reducer_crash_pattern")
@@ -24,6 +25,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_check_pattern,
         mock_tag,
         mock_configure,
+        mock_reset_stack_state,
         mock_compile,
         mock_dump,
         mock_reduce,
@@ -54,6 +56,7 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
         mock_configure.assert_called_once_with("/tmp/workdir")
+        mock_reset_stack_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
         mock_extract.assert_called_once_with("seed.bin")
         mock_check_pattern.assert_called_once_with(
