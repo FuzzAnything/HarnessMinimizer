@@ -22,11 +22,6 @@ PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
 
-# Stack trace validation thresholds (tune these values as needed).
-SMALL_HARNESS_LINE_THRESHOLD = 75   # below this, iteration interval shrinks
-TINY_HARNESS_LINE_THRESHOLD = 50    # below this, every candidate is checked
-SMALL_HARNESS_ITERATION = 10        # interval when lines < SMALL_HARNESS_LINE_THRESHOLD
-TINY_HARNESS_ITERATION = 1          # interval when lines < TINY_HARNESS_LINE_THRESHOLD
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 STACK_TRACE_COUNTER_FILE_NAME = "stack_trace.counter"
 STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"

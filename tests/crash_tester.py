@@ -14,15 +14,18 @@ PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 
-# Stack trace validation thresholds (must match reducer_runner.py).
-SMALL_HARNESS_LINE_THRESHOLD = 75
-TINY_HARNESS_LINE_THRESHOLD = 50
-SMALL_HARNESS_ITERATION = 10
-TINY_HARNESS_ITERATION = 1
+# Stack trace validation thresholds (tune these values as needed).
+SMALL_HARNESS_LINE_THRESHOLD = 75   # below this, iteration interval shrinks
+TINY_HARNESS_LINE_THRESHOLD = 50    # below this, every candidate is checked
+SMALL_HARNESS_ITERATION = 10        # interval when lines < SMALL_HARNESS_LINE_THRESHOLD
+TINY_HARNESS_ITERATION = 1          # interval when lines < TINY_HARNESS_LINE_THRESHOLD
 
-# Stack frame pattern and harness boundary (must match reducer_runner.py).
-STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
-LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+from harnessreducer.reducer_runner import (
+    STACK_FRAME_PATTERN,
+    LLVMFuzzerTestOneInput_PATTERN,
+)
+# STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
+# LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 
 
 def get_project_root():
