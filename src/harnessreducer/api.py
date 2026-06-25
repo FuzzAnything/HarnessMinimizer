@@ -20,6 +20,7 @@ from harnessreducer.reducer_runner import (
     get_work_dir,
     pch_tester_args,
     prepare_phase3_pch_harness,
+    reset_stack_trace_state,
     run_treereducer,
     validate_phase3_mode,
     validate_stack_trace,
@@ -219,6 +220,7 @@ def inline_literals_in_reduced_harness(
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
+    reset_stack_trace_state()
     validate_phase3_mode(config.phase3_mode)
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
