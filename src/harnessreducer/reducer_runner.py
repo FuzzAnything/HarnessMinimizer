@@ -45,6 +45,7 @@ def cleanup() -> None:
 
 atexit.register(cleanup)
 
+MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
 ASAN_SUMMARY_PATTERN = re.compile(r"SUMMARY:\s*AddressSanitizer:\s*([\w-]+)")
 ASAN_ERROR_PATTERN = re.compile(r"ERROR:\s*AddressSanitizer:\s*[\w-]+")
 LEAK_PATTERN = re.compile(
@@ -316,6 +317,16 @@ def check_harness_compilation(
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
 
+def normalize_crash_signature(signature: str, escape: bool = False) -> str:
+    signature = signature.strip()
+    if escape:
+        placeholder = "__ADDR__"
+        signature = MEMORY_ADDRESS_PATTERN.sub(placeholder, signature)
+        signature = re.escape(signature)
+        return signature.replace(re.escape(placeholder), r"0x[0-9a-fA-F]+")
+
+    return MEMORY_ADDRESS_PATTERN.sub(r"0x[0-9a-fA-F]+", signature)
+
 def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
@@ -339,38 +350,37 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
 
     abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(output)
     if abort_assert_match:
-        # temp = abort_assert_match.group(1)
-        # temp1 = temp.split(":")[0] + ":" + temp.split(":")[1]
-        # print(f"[+] Harness crashed at: {temp1}")
-        return abort_assert_match.group(0).split(":")[0] + ":" + abort_assert_match.group(0).split(":")[1]
+        parts = abort_assert_match.group(0).split(":")
+        signature = parts[0] + ":" + parts[1]
+        return normalize_crash_signature(signature)
 
     asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
     if asan_summary_match:
-        return asan_summary_match.group(0)
+        return normalize_crash_signature(asan_summary_match.group(0))
 
     asan_error_match = ASAN_ERROR_PATTERN.search(output)
     if asan_error_match:
-        return asan_error_match.group(0)
+        return normalize_crash_signature(asan_error_match.group(0))
 
     leak_match = LEAK_PATTERN.search(output)
     if leak_match:
-        return leak_match.group(0)
-    
+        return normalize_crash_signature(leak_match.group(0))
+
     runtime_error_match = RUNTIME_ERROR_PATTERN.search(output)
     if runtime_error_match:
-        return re.escape(runtime_error_match.group(0))
+        return normalize_crash_signature(runtime_error_match.group(0), escape=True)
 
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
-        return ubsan_match.group(0)
+        return normalize_crash_signature(ubsan_match.group(0))
 
     absl_check_match = ABSL_CHECK_PATTERN.search(output)
     if absl_check_match:
-        return absl_check_match.group(1).strip()
+        return normalize_crash_signature(absl_check_match.group(1))
 
     libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
     if libfuzzer_signal_match:
-        return libfuzzer_signal_match.group(1).strip()
+        return normalize_crash_signature(libfuzzer_signal_match.group(1))
 
     raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
 

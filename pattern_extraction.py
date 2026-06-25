@@ -20,6 +20,7 @@ from harnessreducer.reducer_runner import (  # noqa: E402
     RUNTIME_ERROR_PATTERN,
     UBSAN_PATTERN,
     check_harness_compilation,
+    normalize_crash_signature,
     check_reducer_crash_pattern,
     configure_work_dir,
     extract_crash_pattern_from_output,
@@ -196,7 +197,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=1,
             name="Assert/Abort",
             regex=ABORT_ASSERT_LOCATION_PATTERN.pattern,
-            extracted_value=assert_summary_match.group(0).split(":")[0] + ":" + assert_summary_match.group(0).split(":")[1],
+            extracted_value=normalize_crash_signature(assert_summary_match.group(0).split(":")[0] + ":" + assert_summary_match.group(0).split(":")[1]),
             line=_line_containing_span(
                 output, assert_summary_match.start(), assert_summary_match.end()
             ),
@@ -208,7 +209,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=2,
             name="ASan Summary",
             regex=ASAN_SUMMARY_PATTERN.pattern,
-            extracted_value=asan_summary_match.group(0),
+            extracted_value=normalize_crash_signature(asan_summary_match.group(0)),
             line=_line_containing_span(
                 output, asan_summary_match.start(), asan_summary_match.end()
             ),
@@ -220,7 +221,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=3,
             name="ASan Error",
             regex=ASAN_ERROR_PATTERN.pattern,
-            extracted_value=asan_error_match.group(0),
+            extracted_value=normalize_crash_signature(asan_error_match.group(0)),
             line=_line_containing_span(output, asan_error_match.start(), asan_error_match.end()),
         )
 
@@ -230,7 +231,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=4,
             name="Leak Summary",
             regex=LEAK_PATTERN.pattern,
-            extracted_value=leak_match.group(0),
+            extracted_value=normalize_crash_signature(leak_match.group(0)),
             line=_line_containing_span(output, leak_match.start(), leak_match.end()),
         )
 
@@ -240,7 +241,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=5,
             name="Runtime Error (UBSan)",
             regex=RUNTIME_ERROR_PATTERN.pattern,
-            extracted_value=re.escape(rerror_match.group(0)),
+            extracted_value=normalize_crash_signature(rerror_match.group(0), escape=True),
             line=_line_containing_span(output, rerror_match.start(), rerror_match.end()),
         )
 
@@ -250,7 +251,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=6,
             name="UBSan Summary",
             regex=UBSAN_PATTERN.pattern,
-            extracted_value=ubsan_match.group(0),
+            extracted_value=normalize_crash_signature(ubsan_match.group(0)),
             line=_line_containing_span(output, ubsan_match.start(), ubsan_match.end()),
         )
 
@@ -260,7 +261,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=7,
             name="Abseil CHECK",
             regex=ABSL_CHECK_PATTERN.pattern,
-            extracted_value=absl_check_match.group(1).strip(),
+            extracted_value=normalize_crash_signature(absl_check_match.group(1).strip()),
             line=_line_containing_span(output, absl_check_match.start(), absl_check_match.end()),
         )
 
@@ -270,7 +271,7 @@ def _match_crash_pattern_details(output: str) -> CrashPatternMatch:
             priority=8,
             name="libFuzzer Signal",
             regex=LIBFUZZER_SIGNAL_PATTERN.pattern,
-            extracted_value=libfuzzer_signal_match.group(1).strip(),
+            extracted_value=normalize_crash_signature(libfuzzer_signal_match.group(1).strip()),
             line=_line_containing_span(
                 output, libfuzzer_signal_match.start(), libfuzzer_signal_match.end()
             ),
