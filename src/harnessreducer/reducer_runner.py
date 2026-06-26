@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import atexit
-import glob
 import json
 import os
 import re
@@ -27,6 +26,10 @@ PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
 COVERAGE_BIN_FILE_NAME = "poc_cov.out"
 COVERAGE_DRIVER_FILE_NAME = "coverage_driver.cpp"
+SOURCE_COVERAGE_RAW_FILE_NAME = "coverage.profraw"
+SOURCE_COVERAGE_DATA_FILE_NAME = "coverage.profdata"
+SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
+SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
@@ -37,6 +40,7 @@ STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
 STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+LLVM_COV_SHOW_LINE_PATTERN = re.compile(r"^\s*(\d+)\|\s*([^|]*)\|")
 
 
 @dataclass(frozen=True)
@@ -339,7 +343,7 @@ def compile_coverage_harness(
     compile_flags: str | None,
     link_flags: str | None,
 ) -> str:
-    """Compile a sanitizer-coverage-instrumented harness binary for pre-slicing."""
+    """Compile a source-coverage-instrumented harness binary for pre-slicing."""
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, COVERAGE_BIN_FILE_NAME)
     driver_source = Path(work_dir) / COVERAGE_DRIVER_FILE_NAME
@@ -349,18 +353,27 @@ def compile_coverage_harness(
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <sanitizer/common_interface_defs.h>
 #include <string>
 #include <vector>
 
+extern "C" int __llvm_profile_write_file(void);
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
+static void fahmCoverageDeathCallback() {
+    __llvm_profile_write_file();
+}
+
 int main(int argc, char **argv) {
+    __sanitizer_set_death_callback(fahmCoverageDeathCallback);
     std::vector<uint8_t> data;
     if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\\0') {
         std::ifstream input(argv[1], std::ios::binary);
         data.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
     }
-    return LLVMFuzzerTestOneInput(data.empty() ? nullptr : data.data(), data.size());
+    const int result = LLVMFuzzerTestOneInput(data.empty() ? nullptr : data.data(), data.size());
+    __llvm_profile_write_file();
+    return result;
 }
 """.lstrip(),
         encoding="utf-8",
@@ -368,7 +381,8 @@ int main(int argc, char **argv) {
     compile_cmd = [
         "clang++",
         "-fsanitize=address,undefined,fuzzer-no-link",
-        "-fsanitize-coverage=bb,no-prune,trace-pc-guard",
+        "-fprofile-instr-generate",
+        "-fcoverage-mapping",
         "-g",
         "-O0",
         *_split_flags(compile_flags),
@@ -440,77 +454,115 @@ def reset_stack_trace_state() -> None:
             pass
 
 
-def _clear_sancov_artifacts(binary_path: str) -> None:
-    for path in glob.glob(f"{binary_path}.*.sancov"):
+def _source_coverage_raw_path() -> Path:
+    return Path(get_work_dir()) / SOURCE_COVERAGE_RAW_FILE_NAME
+
+
+def _source_coverage_data_path() -> Path:
+    return Path(get_work_dir()) / SOURCE_COVERAGE_DATA_FILE_NAME
+
+
+def _source_coverage_show_path() -> Path:
+    return Path(get_work_dir()) / SOURCE_COVERAGE_SHOW_FILE_NAME
+
+
+def _source_coverage_export_path() -> Path:
+    return Path(get_work_dir()) / SOURCE_COVERAGE_EXPORT_FILE_NAME
+
+
+def _clear_source_coverage_artifacts() -> None:
+    for path in (
+        _source_coverage_raw_path(),
+        _source_coverage_data_path(),
+        _source_coverage_show_path(),
+        _source_coverage_export_path(),
+    ):
         try:
-            os.remove(path)
+            path.unlink()
         except FileNotFoundError:
             pass
 
 
-def _read_sancov_addresses(sancov_file: str) -> list[str]:
-    proc = run_command(
-        ["sancov", "-print", sancov_file],
-        "Failed to read sanitizer coverage addresses",
+def _coverage_count_is_nonzero(count_text: str) -> bool:
+    text = count_text.strip()
+    if not text or text in {"-", "#####"}:
+        return False
+    return not re.fullmatch(r"0+(?:\.0+)?[kMGTPE]?", text)
+
+
+def _parse_llvm_cov_show_text(report_text: str) -> CoverageMap:
+    executable_lines: set[int] = set()
+    covered_lines: set[int] = set()
+
+    for line in report_text.splitlines():
+        match = LLVM_COV_SHOW_LINE_PATTERN.match(line)
+        if not match:
+            continue
+        line_no = int(match.group(1))
+        count_text = match.group(2).strip()
+        if not count_text:
+            continue
+        executable_lines.add(line_no)
+        if _coverage_count_is_nonzero(count_text):
+            covered_lines.add(line_no)
+
+    return CoverageMap(
+        executable_lines=frozenset(executable_lines),
+        covered_lines=frozenset(covered_lines),
     )
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _read_binary_coverage_pcs(binary_path: str) -> list[str]:
-    proc = run_command(
-        ["sancov", "-print-coverage-pcs", binary_path],
-        "Failed to read binary coverage PCs",
+def _merge_source_coverage_profile(raw_path: Path, profdata_path: Path) -> None:
+    run_command(
+        [
+            "llvm-profdata",
+            "merge",
+            "-sparse",
+            str(raw_path),
+            "-o",
+            str(profdata_path),
+        ],
+        "Failed to merge source coverage profile",
     )
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _symbolize_addresses(binary_path: str, addresses: list[str]) -> dict[str, str]:
-    if not addresses:
-        return {}
-
-    proc = run_command(
-        ["llvm-symbolizer", "--functions=none", "-e", binary_path, *addresses],
-        "Failed to symbolize coverage addresses",
-    )
-    blocks = [block.strip() for block in proc.stdout.split("\n\n")]
-    mapping: dict[str, str] = {}
-    for address, block in zip(addresses, blocks):
-        line = block.splitlines()[0].strip() if block.splitlines() else "??:0:0"
-        mapping[address] = line
-    return mapping
-
-
-def symbolize_harness_coverage_reports(
+def generate_harness_coverage_reports(
     coverage_bin: str,
-) -> list[tuple[str, str]]:
-    """Return JSON coverage reports for a coverage-enabled harness."""
-    reports: list[tuple[str, str]] = []
-    all_pcs = _read_binary_coverage_pcs(coverage_bin)
-    for sancov_file in sorted(glob.glob(f"{coverage_bin}.*.sancov")):
-        covered_pcs = _read_sancov_addresses(sancov_file)
-        relevant_pcs = sorted(set(all_pcs) | set(covered_pcs))
-        locations = _symbolize_addresses(coverage_bin, relevant_pcs)
-        report = {
-            "binary": coverage_bin,
-            "sancov_file": sancov_file,
-            "all_pcs": all_pcs,
-            "covered_pcs": covered_pcs,
-            "locations": [
-                {
-                    "pc": pc,
-                    "location": locations.get(pc, "??:0:0"),
-                    "covered": pc in set(covered_pcs),
-                }
-                for pc in relevant_pcs
-            ],
-        }
-        reports.append(
-            (
-                sancov_file,
-                json.dumps(report, indent=2, sort_keys=True) + "\n",
-            )
-        )
-    return reports
+    harness_path: str,
+) -> dict[str, str]:
+    """Generate llvm-cov reports for a previously collected source-coverage run."""
+    profdata_path = _source_coverage_data_path()
+    if not profdata_path.exists():
+        raise RuntimeError("Coverage profile data is missing; collect coverage first.")
+
+    harness_realpath = str(Path(harness_path).resolve())
+    show_proc = run_command(
+        [
+            "llvm-cov",
+            "show",
+            coverage_bin,
+            f"-instr-profile={profdata_path}",
+            harness_realpath,
+        ],
+        "Failed to generate line coverage report",
+    )
+    export_proc = run_command(
+        [
+            "llvm-cov",
+            "export",
+            coverage_bin,
+            f"-instr-profile={profdata_path}",
+            f"--sources={harness_realpath}",
+        ],
+        "Failed to export coverage report",
+    )
+
+    _source_coverage_show_path().write_text(show_proc.stdout, encoding="utf-8")
+    _source_coverage_export_path().write_text(export_proc.stdout, encoding="utf-8")
+    return {
+        SOURCE_COVERAGE_SHOW_FILE_NAME: show_proc.stdout,
+        SOURCE_COVERAGE_EXPORT_FILE_NAME: export_proc.stdout,
+    }
 
 
 def collect_harness_coverage(
@@ -518,15 +570,15 @@ def collect_harness_coverage(
     harness_path: str,
     crash_input: str | None,
 ) -> CoverageMap:
-    """Run the crashing input under sanitizer coverage and return point-line sets."""
-    work_dir = get_work_dir()
-    _clear_sancov_artifacts(coverage_bin)
+    """Run the crashing input under source-based coverage and return line sets."""
+    _clear_source_coverage_artifacts()
+    raw_path = _source_coverage_raw_path()
+    profdata_path = _source_coverage_data_path()
 
     env = os.environ.copy()
-    env["ASAN_OPTIONS"] = (
-        f"exitcode=77:symbolize=0:handle_abort=1:coverage=1:coverage_dir={work_dir}:coverage_direct=1"
-    )
+    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
+    env["LLVM_PROFILE_FILE"] = str(raw_path)
     cmd = [coverage_bin]
     if crash_input:
         cmd.append(crash_input)
@@ -537,34 +589,12 @@ def collect_harness_coverage(
         ignore_errors=True,
     )
 
-    reports = symbolize_harness_coverage_reports(coverage_bin)
-    if not reports:
-        raise RuntimeError("No sanitizer coverage files were produced.")
+    if not raw_path.exists() or raw_path.stat().st_size == 0:
+        raise RuntimeError("No source coverage profile was produced.")
 
-    all_lines: set[int] = set()
-    covered_lines: set[int] = set()
-    harness_realpath = str(Path(harness_path).resolve())
-    for _sancov_file, report_text in reports:
-        payload = json.loads(report_text)
-        for item in payload.get("locations", []):
-            location = item.get("location", "")
-            try:
-                filename, line_text, _col_text = location.rsplit(":", 2)
-                line = int(line_text)
-            except ValueError:
-                continue
-            if line <= 0:
-                continue
-            if str(Path(filename).resolve()) != harness_realpath:
-                continue
-            all_lines.add(line)
-            if item.get("covered"):
-                covered_lines.add(line)
-
-    return CoverageMap(
-        all_point_lines=frozenset(all_lines),
-        covered_lines=frozenset(covered_lines),
-    )
+    _merge_source_coverage_profile(raw_path, profdata_path)
+    reports = generate_harness_coverage_reports(coverage_bin, harness_path)
+    return _parse_llvm_cov_show_text(reports[SOURCE_COVERAGE_SHOW_FILE_NAME])
 
 
 def apply_coverage_guided_slice(
@@ -583,8 +613,8 @@ def apply_coverage_guided_slice(
     try:
         coverage_bin = compile_coverage_harness(harness_path, compile_flags, link_flags)
         coverage = collect_harness_coverage(coverage_bin, harness_path, crash_input)
-        if not coverage.all_point_lines:
-            print("[*] Coverage-guided slicing skipped: no harness coverage points were found.")
+        if not coverage.executable_lines:
+            print("[*] Coverage-guided slicing skipped: no executable harness lines were found.")
             return harness_path
 
         source = Path(harness_path).read_text(encoding="utf-8", errors="ignore")

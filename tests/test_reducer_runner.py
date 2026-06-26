@@ -71,6 +71,27 @@ class TestReducerRunner(unittest.TestCase):
         self.assertFalse(reducer_runner._IS_USER_WORK_DIR)
         mock_mkdtemp.assert_called_once()
 
+    def test_parse_llvm_cov_show_text_uses_executable_line_semantics(self):
+        report = (
+            "    1|      2|int main() {\n"
+            "    2|      2|  if (x) {\n"
+            "    3|      0|    dead();\n"
+            "    4|       |  }\n"
+            "    5|      2|  live();\n"
+        )
+
+        coverage = reducer_runner._parse_llvm_cov_show_text(report)
+
+        self.assertEqual(coverage.executable_lines, frozenset({1, 2, 3, 5}))
+        self.assertEqual(coverage.covered_lines, frozenset({1, 2, 5}))
+
+    def test_coverage_count_is_nonzero_handles_scaled_and_zero_counts(self):
+        self.assertTrue(reducer_runner._coverage_count_is_nonzero("1"))
+        self.assertTrue(reducer_runner._coverage_count_is_nonzero("1.2k"))
+        self.assertFalse(reducer_runner._coverage_count_is_nonzero("0"))
+        self.assertFalse(reducer_runner._coverage_count_is_nonzero("0.0k"))
+        self.assertFalse(reducer_runner._coverage_count_is_nonzero(""))
+
     @patch("harnessreducer.reducer_runner.validate_stack_trace")
     @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
@@ -98,7 +119,7 @@ class TestReducerRunner(unittest.TestCase):
             )
             mock_compile_cov.return_value = str(Path(tmpdir) / "poc_cov.out")
             mock_collect_cov.return_value = CoverageMap(
-                all_point_lines=frozenset({1, 2, 4, 7}),
+                executable_lines=frozenset({1, 2, 4, 7}),
                 covered_lines=frozenset({1, 2, 7}),
             )
             mock_validate_trace.return_value = True
@@ -144,7 +165,7 @@ class TestReducerRunner(unittest.TestCase):
             )
             mock_compile_cov.return_value = str(Path(tmpdir) / "poc_cov.out")
             mock_collect_cov.return_value = CoverageMap(
-                all_point_lines=frozenset({1, 2, 4, 7}),
+                executable_lines=frozenset({1, 2, 4, 7}),
                 covered_lines=frozenset({1, 2, 7}),
             )
             mock_validate_trace.return_value = False
