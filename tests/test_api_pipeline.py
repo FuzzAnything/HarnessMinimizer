@@ -10,6 +10,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.run_treereducer")
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.apply_coverage_guided_slice")
     @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
@@ -26,6 +27,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag,
         mock_configure,
         mock_reset_stack_state,
+        mock_slice,
         mock_compile,
         mock_dump,
         mock_reduce,
@@ -38,6 +40,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_reduce.return_value = "/tmp/reduced.cpp"
         mock_inline.return_value = ("/tmp/reduced.cpp", ())
         mock_extract.return_value = "AddressSanitizer"
+        mock_slice.return_value = "/tmp/sliced.cpp"
 
         config = ReductionConfig(
             harness_path="a.cpp",
@@ -67,7 +70,15 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             phase3_mode="direct",
         )
-        mock_tag.assert_called_once_with("a.cpp", start_id=123, marker="M")
+        mock_slice.assert_called_once_with(
+            "a.cpp",
+            "AddressSanitizer",
+            "seed.bin",
+            "-std=c++17",
+            "-lm",
+            phase3_mode="direct",
+        )
+        mock_tag.assert_called_once_with("/tmp/sliced.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
         mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin")
         mock_reduce.assert_called_once_with(

@@ -8,6 +8,7 @@ from pathlib import Path
 from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     get_crash_tester_path,
+    apply_coverage_guided_slice,
     run_command,
     check_reducer_crash_pattern,
     check_tree_reducer,
@@ -242,8 +243,16 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
         phase3_mode=config.phase3_mode,
     )
-    tagged_harness_file = tag_harness_with_fdp_ids(
+    effective_harness_path = apply_coverage_guided_slice(
         config.harness_path,
+        crash_pattern,
+        config.crash_input,
+        config.compile_flags,
+        config.link_flags,
+        phase3_mode=config.phase3_mode,
+    )
+    tagged_harness_file = tag_harness_with_fdp_ids(
+        effective_harness_path,
         start_id=config.start_id,
         marker=config.marker,
     )
