@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import glob
+import json
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from harnessreducer.dynamic_slicer import CoverageMap, parse_symbolized_sancov_json, slice_source_by_coverage
+from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -25,6 +26,7 @@ PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
 COVERAGE_BIN_FILE_NAME = "poc_cov.out"
+COVERAGE_DRIVER_FILE_NAME = "coverage_driver.cpp"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
@@ -340,14 +342,38 @@ def compile_coverage_harness(
     """Compile a sanitizer-coverage-instrumented harness binary for pre-slicing."""
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, COVERAGE_BIN_FILE_NAME)
+    driver_source = Path(work_dir) / COVERAGE_DRIVER_FILE_NAME
+    driver_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+
+int main(int argc, char **argv) {
+    std::vector<uint8_t> data;
+    if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\\0') {
+        std::ifstream input(argv[1], std::ios::binary);
+        data.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    }
+    return LLVMFuzzerTestOneInput(data.empty() ? nullptr : data.data(), data.size());
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
     compile_cmd = [
         "clang++",
-        "-fsanitize=address,fuzzer,undefined",
+        "-fsanitize=address,undefined,fuzzer-no-link",
         "-fsanitize-coverage=bb,no-prune,trace-pc-guard",
         "-g",
         "-O0",
         *_split_flags(compile_flags),
         harness_path,
+        str(driver_source),
         "-o",
         output_bin,
         *_split_flags(link_flags),
@@ -422,6 +448,71 @@ def _clear_sancov_artifacts(binary_path: str) -> None:
             pass
 
 
+def _read_sancov_addresses(sancov_file: str) -> list[str]:
+    proc = run_command(
+        ["sancov", "-print", sancov_file],
+        "Failed to read sanitizer coverage addresses",
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _read_binary_coverage_pcs(binary_path: str) -> list[str]:
+    proc = run_command(
+        ["sancov", "-print-coverage-pcs", binary_path],
+        "Failed to read binary coverage PCs",
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _symbolize_addresses(binary_path: str, addresses: list[str]) -> dict[str, str]:
+    if not addresses:
+        return {}
+
+    proc = run_command(
+        ["llvm-symbolizer", "--functions=none", "-e", binary_path, *addresses],
+        "Failed to symbolize coverage addresses",
+    )
+    blocks = [block.strip() for block in proc.stdout.split("\n\n")]
+    mapping: dict[str, str] = {}
+    for address, block in zip(addresses, blocks):
+        line = block.splitlines()[0].strip() if block.splitlines() else "??:0:0"
+        mapping[address] = line
+    return mapping
+
+
+def symbolize_harness_coverage_reports(
+    coverage_bin: str,
+) -> list[tuple[str, str]]:
+    """Return JSON coverage reports for a coverage-enabled harness."""
+    reports: list[tuple[str, str]] = []
+    all_pcs = _read_binary_coverage_pcs(coverage_bin)
+    for sancov_file in sorted(glob.glob(f"{coverage_bin}.*.sancov")):
+        covered_pcs = _read_sancov_addresses(sancov_file)
+        relevant_pcs = sorted(set(all_pcs) | set(covered_pcs))
+        locations = _symbolize_addresses(coverage_bin, relevant_pcs)
+        report = {
+            "binary": coverage_bin,
+            "sancov_file": sancov_file,
+            "all_pcs": all_pcs,
+            "covered_pcs": covered_pcs,
+            "locations": [
+                {
+                    "pc": pc,
+                    "location": locations.get(pc, "??:0:0"),
+                    "covered": pc in set(covered_pcs),
+                }
+                for pc in relevant_pcs
+            ],
+        }
+        reports.append(
+            (
+                sancov_file,
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+            )
+        )
+    return reports
+
+
 def collect_harness_coverage(
     coverage_bin: str,
     harness_path: str,
@@ -432,7 +523,9 @@ def collect_harness_coverage(
     _clear_sancov_artifacts(coverage_bin)
 
     env = os.environ.copy()
-    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize=0:handle_abort=1:coverage=1:coverage_dir={work_dir}"
+    env["ASAN_OPTIONS"] = (
+        f"exitcode=77:symbolize=0:handle_abort=1:coverage=1:coverage_dir={work_dir}:coverage_direct=1"
+    )
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
     cmd = [coverage_bin]
     if crash_input:
@@ -444,20 +537,29 @@ def collect_harness_coverage(
         ignore_errors=True,
     )
 
-    sancov_files = sorted(glob.glob(f"{coverage_bin}.*.sancov"))
-    if not sancov_files:
+    reports = symbolize_harness_coverage_reports(coverage_bin)
+    if not reports:
         raise RuntimeError("No sanitizer coverage files were produced.")
 
     all_lines: set[int] = set()
     covered_lines: set[int] = set()
-    for sancov_file in sancov_files:
-        proc = run_command(
-            ["sancov", "-symbolize", coverage_bin, sancov_file],
-            "Failed to symbolize sanitizer coverage",
-        )
-        coverage = parse_symbolized_sancov_json(proc.stdout, harness_path)
-        all_lines.update(coverage.all_point_lines)
-        covered_lines.update(coverage.covered_lines)
+    harness_realpath = str(Path(harness_path).resolve())
+    for _sancov_file, report_text in reports:
+        payload = json.loads(report_text)
+        for item in payload.get("locations", []):
+            location = item.get("location", "")
+            try:
+                filename, line_text, _col_text = location.rsplit(":", 2)
+                line = int(line_text)
+            except ValueError:
+                continue
+            if line <= 0:
+                continue
+            if str(Path(filename).resolve()) != harness_realpath:
+                continue
+            all_lines.add(line)
+            if item.get("covered"):
+                covered_lines.add(line)
 
     return CoverageMap(
         all_point_lines=frozenset(all_lines),
