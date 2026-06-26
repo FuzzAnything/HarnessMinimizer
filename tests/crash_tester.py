@@ -10,6 +10,7 @@ from pathlib import Path
 
 __script_dir__ = os.path.dirname(os.path.realpath(__file__))
 __project_root__ = Path(__script_dir__).parent
+sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
