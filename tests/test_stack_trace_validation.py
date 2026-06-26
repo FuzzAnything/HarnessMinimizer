@@ -89,6 +89,17 @@ SAMPLE_UBSAN_OUTPUT = """\
 SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /root/src/foo.c:42:5
 """
 
+SAMPLE_ASAN_OUTPUT_WITH_HELPER = """\
+=================================================================
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000034
+    #0 0xaaa1 in crash_func /src/lib.c:10:3
+    #1 0xbbb2 in caller_func /src/caller.c:20:5
+    #2 0xccc3 in helper_func /tmp/case/custom_harness.cpp:40:7
+    #3 0xddd4 in LLVMFuzzerTestOneInput /tmp/case/custom_harness.cpp:80:1
+    #4 0xeee5 in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/tmp/fuzzer+0x123)
+SUMMARY: AddressSanitizer: heap-buffer-overflow /src/lib.c:10:3 in crash_func
+"""
+
 
 class TestStackFramePattern(unittest.TestCase):
     """Test the STACK_FRAME_PATTERN and LLVMFuzzerTestOneInput_PATTERN regexes."""
@@ -149,10 +160,29 @@ class TestExtractStackTrace(unittest.TestCase):
         self.assertEqual(len(lines), 1)  # #0 only, #1 is LLVMFuzzerTestOneInput
         self.assertIn("buggy_func", lines[0])
 
+    def test_truncates_at_first_harness_frame_when_path_is_known(self):
+        result = extract_stack_trace(
+            SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+            harness_path="/tmp/case/custom_harness.cpp",
+        )
+        self.assertIsNotNone(result)
+        lines = result.strip().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("crash_func", lines[0])
+        self.assertIn("caller_func", lines[1])
+        self.assertNotIn("helper_func", result)
+        self.assertNotIn("LLVMFuzzerTestOneInput", result)
+
     def test_crash_tester_same_logic(self):
         """The crash_tester.py copy of extract_stack_trace should produce the same result."""
-        result_runner = extract_stack_trace(SAMPLE_ASAN_OUTPUT)
-        result_tester = ct_extract_stack_trace(SAMPLE_ASAN_OUTPUT)
+        result_runner = extract_stack_trace(
+            SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+            harness_path="/tmp/case/custom_harness.cpp",
+        )
+        result_tester = ct_extract_stack_trace(
+            SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+            harness_path="/tmp/case/custom_harness.cpp",
+        )
         self.assertEqual(result_runner, result_tester)
 
 
@@ -410,7 +440,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
             mock_run.return_value.stdout = "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
             mock_run.return_value.stderr = ""
 
-            pattern = extract_crash_pattern_from_output(None)
+            pattern = extract_crash_pattern_from_output(None, harness_path="harness.cpp")
 
             self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
             self.assertFalse(os.path.exists(trace_file))

@@ -24,6 +24,7 @@ TINY_HARNESS_ITERATION = 1          # interval when lines < TINY_HARNESS_LINE_TH
 from harnessreducer.reducer_runner import (
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
+    _frame_matches_harness_source,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
@@ -46,10 +47,11 @@ def phase3_replay_flags(fdp_trace: str | None) -> list[str]:
     return [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
 
 
-def extract_stack_trace(output: str) -> str | None:
+def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
     """Extract the first stack trace from symbolized sanitizer output.
 
-    Parses stack frames, truncates at LLVMFuzzerTestOneInput.
+    Parses stack frames, truncates at the first harness frame when
+    ``harness_path`` is provided, otherwise falls back to LLVMFuzzerTestOneInput.
     Only the first stack trace is kept.
     Returns None if no stack frames are found.
     """
@@ -58,6 +60,8 @@ def extract_stack_trace(output: str) -> str | None:
     for line in output.splitlines():
         if STACK_FRAME_PATTERN.match(line):
             in_first_trace = True
+            if _frame_matches_harness_source(line, harness_path):
+                break
             if LLVMFuzzerTestOneInput_PATTERN.search(line):
                 break
             frames.append(line)
@@ -197,7 +201,7 @@ def _check_stack_trace(
         print("[*] No stored stack trace pattern; skipping stack trace check.")
         return True
 
-    raw_trace = extract_stack_trace(run_log)
+    raw_trace = extract_stack_trace(run_log, harness_path=source_path)
     if raw_trace is None:
         print("[-] No stack trace found in symbolized output.")
         return False

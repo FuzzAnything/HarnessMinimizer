@@ -225,7 +225,10 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     validate_phase3_mode(config.phase3_mode)
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
-    crash_pattern = extract_crash_pattern_from_output(config.crash_input)
+    crash_pattern = extract_crash_pattern_from_output(
+        config.crash_input,
+        harness_path=config.harness_path,
+    )
     if not crash_pattern:
         return ReductionResult(
             reduced_harness="",
