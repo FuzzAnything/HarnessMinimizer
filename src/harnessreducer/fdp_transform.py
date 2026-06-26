@@ -503,16 +503,16 @@ def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> 
 
 
 def _value_names(key: int) -> tuple[str, str]:
-    return f"hr_values_{key}", f"hr_index_{key}"
+    return f"fuzz_values_{key}", f"fuzz_index_{key}"
 
 
 def _byte_buffer_names(key: int) -> tuple[str, str]:
-    values_name = f"hr_bytes_{key}"
+    values_name = f"fuzz_bytes_{key}"
     return values_name, f"{values_name}_size"
 
 
 def _string_buffer_names(key: int) -> tuple[str, str]:
-    values_name = f"hr_string_{key}"
+    values_name = f"fuzz_string_{key}"
     return values_name, f"{values_name}_size"
 
 
