@@ -40,6 +40,7 @@ STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
 STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVM_COV_SHOW_LINE_PATTERN = re.compile(r"^\s*(\d+)\|\s*([^|]*)\|")
 
 
@@ -405,11 +406,36 @@ def normalize_crash_signature(signature: str, escape: bool = False) -> str:
 
     return MEMORY_ADDRESS_PATTERN.sub(r"0x[0-9a-fA-F]+", signature)
 
-def extract_stack_trace(output: str) -> str | None:
+def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> bool:
+    if not harness_path:
+        return False
+
+    harness_resolved = str(Path(harness_path).resolve())
+    if harness_resolved in frame_line:
+        return True
+
+    match = SOURCE_LOCATION_PATTERN.search(frame_line)
+    if not match:
+        return Path(harness_path).name in frame_line
+
+    frame_source = match.group(1)
+    try:
+        if Path(frame_source).resolve() == Path(harness_path).resolve():
+            return True
+    except OSError:
+        pass
+    return Path(frame_source).name == Path(harness_path).name
+
+
+def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
     """Extract the first stack trace from symbolized sanitizer output.
 
-    Parses stack frames (lines matching ``#N 0xADDR in ...``), truncates at
-    ``LLVMFuzzerTestOneInput``, and returns the raw text of those frames.
+    Parses stack frames (lines matching ``#N 0xADDR in ...``) and returns the
+    first stack trace, truncated before the harness frames. When ``harness_path``
+    is provided, truncation happens at the first frame whose source location
+    belongs to that harness file. Otherwise it falls back to truncating at
+    ``LLVMFuzzerTestOneInput``.
+
     Only the *first* stack trace is kept (ASan may emit multiple — e.g., one
     for the overflow and one for the allocation site).
     Returns None if no stack frames are found.
@@ -419,7 +445,9 @@ def extract_stack_trace(output: str) -> str | None:
     for line in output.splitlines():
         if STACK_FRAME_PATTERN.match(line):
             in_first_trace = True
-            # Stop if this frame belongs to the harness / fuzzer infrastructure.
+            if _frame_matches_harness_source(line, harness_path):
+                break
+            # Backward-compatible / robustness fallback.
             if LLVMFuzzerTestOneInput_PATTERN.search(line):
                 break
             frames.append(line)
@@ -654,7 +682,10 @@ def apply_coverage_guided_slice(
         print(f"[!] Coverage-guided slicing skipped: {exc}")
         return harness_path
 
-def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
+def extract_crash_pattern_from_output(
+    crash_input: str | None,
+    harness_path: str | None = None,
+) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
     cmd = [output_bin]
@@ -670,7 +701,7 @@ def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
         return None
 
     # Extract and save the first stack trace (normalized) for periodic validation.
-    raw_stack_trace = extract_stack_trace(output)
+    raw_stack_trace = extract_stack_trace(output, harness_path=harness_path)
     if raw_stack_trace:
         normalized_trace = normalize_crash_signature(raw_stack_trace, escape=True)
         trace_file = get_stack_trace_file()

@@ -344,7 +344,8 @@ def run_case(args: argparse.Namespace) -> int:
     # using the production extractor. This script intentionally does not
     # duplicate the regex logic from reducer_runner.py.
     crash_pattern = extract_crash_pattern_from_output(
-        str(crash_input) if crash_input else None
+        str(crash_input) if crash_input else None,
+        harness_path=str(harness),
     )
     if not crash_pattern:
         print("[-] Could not extract a crash pattern from the original harness.")

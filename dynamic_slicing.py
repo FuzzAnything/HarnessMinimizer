@@ -229,7 +229,10 @@ def run_case(args: argparse.Namespace) -> int:
     print("[+] Phase 1: compiling original harness...")
     check_harness_compilation(str(harness), compile_flags, link_flags)
     print("[+] Phase 1: extracting crash pattern and recording stack trace...")
-    crash_pattern = extract_crash_pattern_from_output(str(crash_input) if crash_input else None)
+    crash_pattern = extract_crash_pattern_from_output(
+        str(crash_input) if crash_input else None,
+        harness_path=str(harness),
+    )
     if not crash_pattern:
         print("[-] Could not extract a crash pattern from the original harness.")
         return 1
