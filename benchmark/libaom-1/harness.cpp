@@ -86,7 +86,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     cfg.g_timebase.den = fdp.ConsumeIntegralInRange<uint32_t>(1, 120);
     
     // Initialize encoder
-    if (aom_codec_enc_init(&encoder, encoder_iface, &cfg, 0) != AOM_CODEC_OK) {
+    if (aom_codec_enc_init(&encoder, encoder_iface, &cfg, 0) != AOM_CODEC_OK) { // line 89
         return 0;
     }
     

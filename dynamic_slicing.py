@@ -17,9 +17,9 @@ from harnessreducer.reducer_runner import (
     compile_coverage_harness,
     configure_work_dir,
     extract_crash_pattern_from_output,
+    generate_harness_coverage_reports,
     get_stack_trace_file,
     reset_stack_trace_state,
-    symbolize_harness_coverage_reports,
     validate_stack_trace,
 )
 
@@ -167,23 +167,25 @@ def _case_flags(
 
 def _write_coverage_artifacts(
     work_dir: Path,
-    reports: list[tuple[str, str]],
+    reports: dict[str, str],
     covered_lines: list[int],
-    all_point_lines: list[int],
+    executable_lines: list[int],
 ) -> tuple[list[Path], Path]:
     report_paths: list[Path] = []
-    for index, (_sancov_path, report_text) in enumerate(reports, start=1):
-        path = work_dir / f"coverage_report_{index}.symbolized.json"
+    for filename, report_text in reports.items():
+        path = work_dir / filename
         path.write_text(report_text, encoding="utf-8")
         report_paths.append(path)
 
     summary_path = work_dir / "coverage_summary.json"
+    uncovered_lines = [line for line in executable_lines if line not in set(covered_lines)]
     summary_path.write_text(
         json.dumps(
             {
                 "covered_lines": covered_lines,
-                "all_point_lines": all_point_lines,
-                "uncovered_lines": [line for line in all_point_lines if line not in set(covered_lines)],
+                "executable_lines": executable_lines,
+                "all_point_lines": executable_lines,
+                "uncovered_lines": uncovered_lines,
             },
             indent=2,
             sort_keys=True,
@@ -260,23 +262,21 @@ def run_case(args: argparse.Namespace) -> int:
         str(harness),
         str(crash_input) if crash_input else None,
     )
-    reports = symbolize_harness_coverage_reports(str(coverage_bin))
+    reports = generate_harness_coverage_reports(str(coverage_bin), str(harness))
     covered_lines = sorted(coverage.covered_lines)
-    all_point_lines = sorted(coverage.all_point_lines)
+    executable_lines = sorted(coverage.executable_lines)
     report_paths, summary_path = _write_coverage_artifacts(
         work_dir,
         reports,
         covered_lines,
-        all_point_lines,
+        executable_lines,
     )
 
-    print(f"[+] Coverage point lines: {all_point_lines}")
+    print(f"[+] Executable lines:     {executable_lines}")
     print(f"[+] Covered lines:        {covered_lines}")
-    print(
-        f"[+] Uncovered lines:      {[line for line in all_point_lines if line not in set(covered_lines)]}"
-    )
+    print(f"[+] Uncovered lines:      {[line for line in executable_lines if line not in set(covered_lines)]}")
     for path in report_paths:
-        print(f"[+] Symbolized coverage report: {path}")
+        print(f"[+] Coverage report:       {path}")
     print(f"[+] Coverage summary:           {summary_path}")
 
     source = harness.read_text(encoding="utf-8", errors="ignore")
