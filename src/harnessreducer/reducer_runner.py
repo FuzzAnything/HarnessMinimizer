@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import glob
 import os
 import re
 import shutil
@@ -8,6 +9,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from harnessreducer.dynamic_slicer import CoverageMap, parse_symbolized_sancov_json, slice_source_by_coverage
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -21,6 +24,8 @@ PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
+COVERAGE_BIN_FILE_NAME = "poc_cov.out"
+SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 STACK_TRACE_COUNTER_FILE_NAME = "stack_trace.counter"
@@ -326,6 +331,30 @@ def check_harness_compilation(
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
 
+
+def compile_coverage_harness(
+    harness_path: str,
+    compile_flags: str | None,
+    link_flags: str | None,
+) -> str:
+    """Compile a sanitizer-coverage-instrumented harness binary for pre-slicing."""
+    work_dir = get_work_dir()
+    output_bin = os.path.join(work_dir, COVERAGE_BIN_FILE_NAME)
+    compile_cmd = [
+        "clang++",
+        "-fsanitize=address,fuzzer,undefined",
+        "-fsanitize-coverage=bb,no-prune,trace-pc-guard",
+        "-g",
+        "-O0",
+        *_split_flags(compile_flags),
+        harness_path,
+        "-o",
+        output_bin,
+        *_split_flags(link_flags),
+    ]
+    run_command(compile_cmd, "Failed to compile coverage-enabled harness")
+    return output_bin
+
 def normalize_crash_signature(signature: str, escape: bool = False) -> str:
     signature = signature.strip()
     if escape:
@@ -383,6 +412,115 @@ def reset_stack_trace_state() -> None:
             os.remove(path)
         except FileNotFoundError:
             pass
+
+
+def _clear_sancov_artifacts(binary_path: str) -> None:
+    for path in glob.glob(f"{binary_path}.*.sancov"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def collect_harness_coverage(
+    coverage_bin: str,
+    harness_path: str,
+    crash_input: str | None,
+) -> CoverageMap:
+    """Run the crashing input under sanitizer coverage and return point-line sets."""
+    work_dir = get_work_dir()
+    _clear_sancov_artifacts(coverage_bin)
+
+    env = os.environ.copy()
+    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize=0:handle_abort=1:coverage=1:coverage_dir={work_dir}"
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
+    cmd = [coverage_bin]
+    if crash_input:
+        cmd.append(crash_input)
+    run_command(
+        cmd,
+        "Failed to execute coverage-enabled harness",
+        env=env,
+        ignore_errors=True,
+    )
+
+    sancov_files = sorted(glob.glob(f"{coverage_bin}.*.sancov"))
+    if not sancov_files:
+        raise RuntimeError("No sanitizer coverage files were produced.")
+
+    all_lines: set[int] = set()
+    covered_lines: set[int] = set()
+    for sancov_file in sancov_files:
+        proc = run_command(
+            ["sancov", "-symbolize", coverage_bin, sancov_file],
+            "Failed to symbolize sanitizer coverage",
+        )
+        coverage = parse_symbolized_sancov_json(proc.stdout, harness_path)
+        all_lines.update(coverage.all_point_lines)
+        covered_lines.update(coverage.covered_lines)
+
+    return CoverageMap(
+        all_point_lines=frozenset(all_lines),
+        covered_lines=frozenset(covered_lines),
+    )
+
+
+def apply_coverage_guided_slice(
+    harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    phase3_mode: str = PHASE3_DIRECT,
+) -> str:
+    """Conservatively prune uncovered harness code before tree reduction.
+
+    If coverage collection, slicing, or validation fails, the original harness
+    path is returned unchanged.
+    """
+    try:
+        coverage_bin = compile_coverage_harness(harness_path, compile_flags, link_flags)
+        coverage = collect_harness_coverage(coverage_bin, harness_path, crash_input)
+        if not coverage.all_point_lines:
+            print("[*] Coverage-guided slicing skipped: no harness coverage points were found.")
+            return harness_path
+
+        source = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
+        slice_result = slice_source_by_coverage(source, coverage)
+        if slice_result.removed_nodes == 0 or slice_result.source == source:
+            print("[*] Coverage-guided slicing found no removable uncovered blocks.")
+            return harness_path
+
+        source_path = Path(harness_path)
+        sliced_path = Path(get_work_dir()) / f"{source_path.stem}{SLICED_HARNESS_SUFFIX}{source_path.suffix or '.cpp'}"
+        sliced_path.write_text(slice_result.source, encoding="utf-8")
+
+        check_reducer_crash_pattern(
+            str(sliced_path),
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            phase3_mode=phase3_mode,
+        )
+        if not validate_stack_trace(
+            str(sliced_path),
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            phase3_mode=phase3_mode,
+        ):
+            print("[!] Coverage-guided slicing changed the stack trace. Falling back to the original harness.")
+            return harness_path
+
+        print(
+            f"[+] Coverage-guided slicing removed {slice_result.removed_nodes} uncovered nodes: {sliced_path}"
+        )
+        return str(sliced_path)
+    except Exception as exc:
+        print(f"[!] Coverage-guided slicing skipped: {exc}")
+        return harness_path
 
 def extract_crash_pattern_from_output(crash_input: str | None) -> str | None:
     work_dir = get_work_dir()

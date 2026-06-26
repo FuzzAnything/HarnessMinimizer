@@ -1,8 +1,10 @@
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from harnessreducer import reducer_runner
+from harnessreducer.dynamic_slicer import CoverageMap
 
 
 class _Proc:
@@ -68,6 +70,96 @@ class TestReducerRunner(unittest.TestCase):
         self.assertEqual(reducer_runner.TREEDUCER_DIR, "/tmp/hr_auto")
         self.assertFalse(reducer_runner._IS_USER_WORK_DIR)
         mock_mkdtemp.assert_called_once()
+
+    @patch("harnessreducer.reducer_runner.validate_stack_trace")
+    @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")
+    @patch("harnessreducer.reducer_runner.collect_harness_coverage")
+    @patch("harnessreducer.reducer_runner.compile_coverage_harness")
+    def test_apply_coverage_guided_slice_returns_sliced_path_on_validation_success(
+        self,
+        mock_compile_cov,
+        mock_collect_cov,
+        mock_check_pattern,
+        mock_validate_trace,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            source_path = Path(tmpdir) / "harness.cpp"
+            source_path.write_text(
+                "extern \"C\" int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size) {\n"
+                "  if (size) {\n"
+                "    live();\n"
+                "  } else {\n"
+                "    dead();\n"
+                "  }\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            mock_compile_cov.return_value = str(Path(tmpdir) / "poc_cov.out")
+            mock_collect_cov.return_value = CoverageMap(
+                all_point_lines=frozenset({1, 2, 4, 7}),
+                covered_lines=frozenset({1, 2, 7}),
+            )
+            mock_validate_trace.return_value = True
+
+            out = reducer_runner.apply_coverage_guided_slice(
+                str(source_path),
+                "AddressSanitizer",
+                "seed.bin",
+                "-std=c++17",
+                "-lm",
+            )
+
+            self.assertTrue(out.endswith(".sliced.cpp"))
+            self.assertTrue(Path(out).exists())
+            self.assertNotIn("else", Path(out).read_text(encoding="utf-8"))
+            mock_check_pattern.assert_called_once()
+            mock_validate_trace.assert_called_once()
+
+    @patch("harnessreducer.reducer_runner.validate_stack_trace")
+    @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")
+    @patch("harnessreducer.reducer_runner.collect_harness_coverage")
+    @patch("harnessreducer.reducer_runner.compile_coverage_harness")
+    def test_apply_coverage_guided_slice_falls_back_on_stack_trace_mismatch(
+        self,
+        mock_compile_cov,
+        mock_collect_cov,
+        mock_check_pattern,
+        mock_validate_trace,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            source_path = Path(tmpdir) / "harness.cpp"
+            source_path.write_text(
+                "extern \"C\" int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size) {\n"
+                "  if (size) {\n"
+                "    live();\n"
+                "  } else {\n"
+                "    dead();\n"
+                "  }\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            mock_compile_cov.return_value = str(Path(tmpdir) / "poc_cov.out")
+            mock_collect_cov.return_value = CoverageMap(
+                all_point_lines=frozenset({1, 2, 4, 7}),
+                covered_lines=frozenset({1, 2, 7}),
+            )
+            mock_validate_trace.return_value = False
+
+            out = reducer_runner.apply_coverage_guided_slice(
+                str(source_path),
+                "AddressSanitizer",
+                "seed.bin",
+                None,
+                None,
+            )
+
+            self.assertEqual(out, str(source_path))
+            mock_check_pattern.assert_called_once()
+            mock_validate_trace.assert_called_once()
 
 
 if __name__ == "__main__":

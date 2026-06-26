@@ -1,6 +1,6 @@
 # Crash Equivalence in HarnessReducer
 
-This document describes in detail how HarnessReducer determines that a reduced harness preserves the **same crash** as the original. The mechanism has multiple layers: extracting a crash signature, capturing a reference stack trace, compiling and running the candidate, matching the output against the signature, and periodically validating the full stack trace.
+This document describes in detail how HarnessReducer determines that a reduced harness preserves the **same crash** as the original. The mechanism has multiple layers: extracting a crash signature, capturing a reference stack trace, performing a conservative coverage-guided pre-slice, compiling and running the candidate, matching the output against the signature, and periodically validating the full stack trace.
 
 ---
 
@@ -77,6 +77,31 @@ This stored pattern enables **periodic deep validation** during reduction: by co
 ### 1.5 Pattern Validation
 
 `check_reducer_crash_pattern()` immediately validates the extracted pattern by running `crash_tester.py` against the **original** (unmodified) harness. If the pattern doesn't match even on the original, the tool aborts with an error — this prevents proceeding with a bad pattern.
+
+### 1.6 Coverage-Guided Pre-Slicing
+
+Before FDP tagging and tree reduction, HarnessReducer now attempts a **dynamic harness slice** on the original harness:
+
+1. `compile_coverage_harness()` builds `poc_cov.out` with the same user compile/link flags as Phase 1 plus sanitizer coverage instrumentation:
+
+   ```
+   clang++ -fsanitize=address,fuzzer,undefined \
+     -fsanitize-coverage=bb,no-prune,trace-pc-guard \
+     -g -O0 <compile_flags> <harness.cpp> -o poc_cov.out <link_flags>
+   ```
+
+2. The crashing input is executed once with sanitizer coverage enabled (`ASAN_OPTIONS=...:coverage=1:coverage_dir=<workdir>`), producing `.sancov` files.
+3. `sancov -symbolize` maps those coverage points back to source lines in the harness file.
+4. `apply_coverage_guided_slice()` uses a conservative tree-sitter pass to prune only obviously uncovered syntax while preserving validity. The current slicer removes:
+   - uncovered helper function definitions outside `LLVMFuzzerTestOneInput`
+   - uncovered `else` branches
+   - uncovered `if` consequence bodies by replacing them with `{}` (preserving the control expression)
+   - uncovered standalone statements inside compound blocks **only when that statement has its own coverage point**
+5. The sliced candidate is then validated with both:
+   - `check_reducer_crash_pattern()` — same crash pattern
+   - `validate_stack_trace()` — same stored reference stack trace
+
+If either validation fails, the slice is discarded and the pipeline continues from the original harness. There is **no iterative retry with smaller removal sets** in the current implementation.
 
 ---
 
@@ -287,11 +312,12 @@ After FDP literal inlining (which replaces FDP calls with their recorded constan
 
 ## 5. When Crash Equivalence Is Checked in the Pipeline
 
-Crash equivalence is verified at **up to six** points in the reduction pipeline:
+Crash equivalence is verified at **up to seven** points in the reduction pipeline:
 
 | Step | Function | Context | Uses FDP Trace? | Stack Trace Check? |
 |---|---|---|---|---|
 | Pattern validation | `check_reducer_crash_pattern()` | After extraction, confirms pattern works on original harness | No | No |
+| Coverage pre-slice validation | `check_reducer_crash_pattern()` + `validate_stack_trace()` | After conservative uncovered-code deletion, before FDP tagging | No | Yes |
 | Tree reduction (fast) | `crash_tester.py` (via `treereduce-c`) | Most candidates during AST reduction | Yes | No (symbolize=0) |
 | Tree reduction (periodic) | `crash_tester.py` (via `treereduce-c`) | Every N-th candidate when `--iteration` is set | Yes | Yes (symbolize=1) |
 | Post-reduction validation | `validate_stack_trace()` | After treereduce-c completes (only with `--iteration`) | Yes | Yes (symbolize=1) |
@@ -301,6 +327,7 @@ Crash equivalence is verified at **up to six** points in the reduction pipeline:
 ### Fallback Behavior
 
 If a later step fails crash equivalence:
+- **Coverage-guided pre-slice validation fails** → Discards the sliced candidate and continues from the original harness.
 - **Periodic stack trace check fails during treereduce-c** → `crash_tester.py` returns "not interesting", treereduce-c rejects the candidate and continues.
 - **Final stack trace check fails after treereduce-c** → Restores the last backup from `stack_trace.backup.cpp`.
 - **Inline validation fails** → Falls back to the tree-reduced harness (without FDP inlining). The tree-reduced harness is already validated, so the fallback is safe. A `.validation.log` artifact is written with the returncode, stdout, and stderr.

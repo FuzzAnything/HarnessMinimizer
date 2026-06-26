@@ -47,14 +47,15 @@ Defines ReductionConfig and ReductionResult dataclasses, plus the main pipeline 
 2. Check prerequisites — check_tree_reducer(), check_harness_compilation()
 3. Extract crash pattern — Run the harness with symbolize=1, parse ASan/UBSan/leak/runtime-error/abort/assert output for a regex pattern; memory addresses are normalized via normalize_crash_signature(). Additionally, the first symbolized stack trace is extracted, truncated at LLVMFuzzerTestOneInput, normalized via normalize_crash_signature(escape=True), and saved to stack_trace.pattern in the work dir
 4. Validate crash pattern — check_reducer_crash_pattern() via crash_tester.py using the selected Phase 3 mode (--direct by default, or --pch)
-5. Tag FDP callsites — tag_harness_with_fdp_ids() which calls fdp_transform.inject_ids()
-6. Compile dump-mode binary — compile_dump_mode_harness()
-7. Dump FDP trace — dump_fdp_trace() — runs the tagged binary with FDP_TRACE_PATH env var
-8. Tree-reduce — run_treereducer() — invokes treereduce-c which calls crash_tester.py for each candidate. In --pch mode, this first creates fahm_prefix.h/fahm_prefix.pch, strips include lines from the candidate body during reduction, and restores the moved includes to the reduced output.
-9. Format — format_reduced_harness() via clang-format
-10. Inline FDP literals — inline_literals_in_reduced_harness() which calls fdp_transform.inline_source_with_report() and fdp_transform.strip_injected_ids()
-11. Validate inlined harness — Runs crash_tester.py on the inlined version using the selected Phase 3 mode
-12. (Optional) LLM reduction — apply_llm_reduction() if --llm flag is set; validation also uses the selected Phase 3 mode
+5. Coverage-guided pre-slice — apply_coverage_guided_slice() compiles a separate sanitizer-coverage-enabled harness binary, runs the crashing input once to identify covered harness blocks, removes a conservative set of uncovered AST nodes, then validates the candidate against the original crash pattern and stack trace. If validation fails, it falls back to the original harness.
+6. Tag FDP callsites — tag_harness_with_fdp_ids() which calls fdp_transform.inject_ids()
+7. Compile dump-mode binary — compile_dump_mode_harness()
+8. Dump FDP trace — dump_fdp_trace() — runs the tagged binary with FDP_TRACE_PATH env var
+9. Tree-reduce — run_treereducer() — invokes treereduce-c which calls crash_tester.py for each candidate. In --pch mode, this first creates fahm_prefix.h/fahm_prefix.pch, strips include lines from the candidate body during reduction, and restores the moved includes to the reduced output.
+10. Format — format_reduced_harness() via clang-format
+11. Inline FDP literals — inline_literals_in_reduced_harness() which calls fdp_transform.inline_source_with_report() and fdp_transform.strip_injected_ids()
+12. Validate inlined harness — Runs crash_tester.py on the inlined version using the selected Phase 3 mode
+13. (Optional) LLM reduction — apply_llm_reduction() if --llm flag is set; validation also uses the selected Phase 3 mode
 
 Also defines:
 - ADDITIONAL_HEADERS — A list of 12 standard C++ headers that get prepended to the fallback harness if missing.
@@ -119,12 +120,15 @@ Key functions:
 - run_command(cmd, error_prefix, env, ignore_errors) — Generic subprocess runner with error handling.
 - check_tree_reducer() — Verifies treereduce-c is installed and in PATH.
 - check_harness_compilation(harness_path, compile_flags, link_flags) — Phase 1 compilation (see below).
+- compile_coverage_harness(harness_path, compile_flags, link_flags) — Builds `poc_cov.out`, a sanitizer-coverage-enabled binary used only for the dynamic pre-slice step.
 - normalize_crash_signature(signature, escape=False) — Normalizes a crash signature by replacing memory addresses (0x...) with the regex pattern 0x[0-9a-fA-F]+. When escape=True, it also re.escapes the rest of the signature (used for runtime error patterns that contain regex-special characters like colons).
 - extract_crash_pattern_from_output(crash_input) — Runs the compiled harness with symbolize=1 and parses the output to extract a crash regex pattern from ASan/UBSan/leak/abort/assert/runtime-error/libFuzzer output. All extracted signatures are passed through normalize_crash_signature() to scrub non-deterministic memory addresses. Also extracts and saves the normalized first stack trace to stack_trace.pattern.
 - extract_stack_trace(output) — Extracts the first symbolized stack trace from sanitizer output, truncating at LLVMFuzzerTestOneInput. Returns the raw frame text or None.
 - get_stack_trace_file() / get_stack_trace_counter_file() / get_stack_trace_backup_file() — Return paths for the stack trace pattern file, invocation counter, and backup source in the work dir.
 - stack_trace_tester_args(iteration) — Builds the extra crash_tester.py arguments for periodic stack trace validation (--stack-trace-file, --iteration, --counter-file, --backup-file).
 - validate_stack_trace(harness_path, crash_pattern, ...) — Runs a symbolize=1 check via crash_tester.py and compares the resulting stack trace against the stored pattern. Returns True if the trace matches (or no stored pattern exists).
+- collect_harness_coverage(coverage_bin, harness_path, crash_input) — Runs the crashing input under sanitizer coverage, symbolizes the generated `.sancov` files with `sancov`, and records which harness lines have coverage points and which were actually covered.
+- apply_coverage_guided_slice(harness_path, crash_pattern, crash_input, compile_flags, link_flags, phase3_mode) — Applies a conservative tree-sitter-based slice that deletes only clearly uncovered harness code (for example, uncovered helper functions, uncovered `else` branches, and standalone uncovered statements that have their own coverage point), then validates the sliced candidate and falls back on any failure.
 - check_reducer_crash_pattern(harness_path, crash_pattern, crash_input, compile_flags, link_flags, phase3_mode) — Validates the crash pattern by running crash_tester.py in direct or PCH mode.
 - compile_dump_mode_harness(harness_path, compile_flags, link_flags) — Phase 2 compilation (see below).
 - dump_fdp_trace(harness_bin, crash_input) — Runs the dump-mode binary with FDP_TRACE_PATH env var to produce the FDP trace log.
@@ -232,7 +236,7 @@ Sends the reduced harness to an OpenAI-compatible LLM API for semantic minimizat
 
 ## Compilation Details: Flags, Headers, and Libraries
 
-There are three distinct compilation contexts in the tool. Phase 1 and Phase 2 are fixed; Phase 3 now has two selectable backends (--direct and --pch). Each path uses clang++ but with different flags depending on the phase/backend.
+There are four distinct compilation contexts in the tool. Phase 1, the coverage pre-slice build, and Phase 2 are fixed; Phase 3 now has two selectable backends (--direct and --pch). Each path uses clang++ but with different flags depending on the phase/backend.
 
 ### Phase 1: Initial Compilation Check
 
@@ -247,6 +251,20 @@ Purpose: Verify the original harness compiles before starting the pipeline.
 - Linking: -fsanitize=fuzzer automatically links libFuzzer; -fsanitize=address,undefined links the sanitizer runtimes
 - Define macros: None
 - Output: <work_dir>/poc.out
+
+### Coverage Pre-Slice Compilation
+
+Function: reducer_runner.py:compile_coverage_harness()
+Purpose: Build a second binary that enables sanitizer coverage so the crashing input can identify unexecuted harness blocks before tree reduction.
+
+  clang++ -fsanitize=address,fuzzer,undefined -fsanitize-coverage=bb,no-prune,trace-pc-guard -g -O0 [--compile-flags...] <harness.cpp> -o <work_dir>/poc_cov.out [--link-flags...]
+
+- Flags: Same sanitizer/debug baseline as Phase 1, plus `-fsanitize-coverage=bb,no-prune,trace-pc-guard`
+- User flags: Same placement as Phase 1
+- Define macros: None
+- Output: <work_dir>/poc_cov.out
+- Runtime behavior: Executed once with `ASAN_OPTIONS=...:coverage=1:coverage_dir=<work_dir>` to emit `.sancov` files, which are symbolized with `sancov -symbolize`
+- Scope: Only the harness translation unit compiled in this step is instrumented by the tool; prebuilt linked libraries remain uninstrumented unless they were already built with sanitizer coverage
 
 ### Phase 2: Tagged Harness Dump Mode Compilation
 
@@ -460,6 +478,9 @@ When using a temp dir (default), the working directory contains:
   +-- *.fahm_body.cpp             # Include-stripped sources tested with the PCH (--pch mode)
   +-- tagged_harness.out          # Dump-mode compiled binary
   +-- poc.out                     # Phase 1 compiled binary
+  +-- poc_cov.out                 # Coverage-guided pre-slice binary
+  +-- *.sancov                    # Sanitizer coverage artifacts from poc_cov.out
+  +-- *.sliced.cpp                # Accepted coverage-guided pre-sliced harness (if validation passes)
   +-- fdp_trace.log               # FDP trace from dump mode
   +-- reduced_harness.cpp         # Tree-reduced harness
   +-- reduced_harness.inline.cpp  # After FDP literal inlining
