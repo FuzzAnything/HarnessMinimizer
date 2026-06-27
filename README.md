@@ -54,8 +54,8 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
 | `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
-| `--direct` | No | Use the default Phase 3 direct compile/link path. |
-| `--pch` | No | Use Phase 3 precompiled-header mode for faster repeated candidate testing. |
+| `--direct` | No | Use the default direct compile/link path. |
+| `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
 ## What the Main Options Do
@@ -78,7 +78,7 @@ These thresholds are currently hardcoded in `tests/crash_tester.py`.
 
 ### `--pch`
 
-Uses a precompiled-header Phase 3 path for candidate testing:
+Uses a precompiled-header for candidate testing:
 
 - includes are moved into a generated prefix header
 - a `.pch` is built once

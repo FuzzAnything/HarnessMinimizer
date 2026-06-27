@@ -50,6 +50,21 @@ A regex-based signature is extracted in this priority order:
 7. Abseil `Check failed:` condition
 8. libFuzzer signal summary
 
+More explicitly, the current extraction order in `extract_crash_pattern_from_output()` is:
+
+| Priority | Pattern name | Regex / source | Returned value |
+|---|---|---|---|
+| 1 | Abort/assert location | `ABORT_ASSERT_LOCATION_PATTERN` | `file:line` portion of the assertion failure |
+| 2 | ASan summary | `ASAN_SUMMARY_PATTERN` | full matched summary line |
+| 3 | ASan error | `ASAN_ERROR_PATTERN` | full matched error line |
+| 4 | Leak summary | `LEAK_PATTERN` | full matched leak summary |
+| 5 | Runtime error | `RUNTIME_ERROR_PATTERN` | full matched runtime-error line |
+| 6 | UBSan summary | `UBSAN_PATTERN` | full matched UBSan summary |
+| 7 | Abseil CHECK | `ABSL_CHECK_PATTERN` | extracted failed condition text |
+| 8 | libFuzzer signal | `LIBFUZZER_SIGNAL_PATTERN` | extracted signal description |
+
+The function returns the **first successful match only**.
+
 All extracted signatures pass through `normalize_crash_signature()`:
 
 - strips surrounding whitespace
