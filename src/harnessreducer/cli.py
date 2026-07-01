@@ -79,6 +79,15 @@ def build_parser() -> argparse.ArgumentParser:
             "active when --iteration is not set."
         ),
     )
+    parser.add_argument(
+        "--slice",
+        action="store_true",
+        help=(
+            "Enable coverage-guided dynamic slicing before tree reduction. "
+            "When omitted, the original harness is passed directly into the "
+            "rest of the pipeline."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -113,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         phase3_mode=args.phase3_mode,
         iteration=args.iteration,
         statistics=args.statistics,
+        slice_enabled=args.slice,
     )
     result = reduce_with_config(config)
     if not result.success:

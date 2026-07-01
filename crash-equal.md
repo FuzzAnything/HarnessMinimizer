@@ -104,7 +104,7 @@ This stored value is a regex pattern, not a raw stack dump.
 
 ## 2. Dynamic Slicing Before Tree Reduction
 
-HarnessReducer now performs a conservative **dynamic slicing** step before FDP tagging and tree reduction.
+When `--slice` is enabled, HarnessReducer performs a conservative **dynamic slicing** step before FDP tagging and tree reduction.
 
 ### 2.1 Coverage build
 

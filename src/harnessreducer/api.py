@@ -60,6 +60,7 @@ class ReductionConfig:
     phase3_mode: str = "direct"
     iteration: int | None = None
     statistics: bool = False
+    slice_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -255,14 +256,17 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
         phase3_mode=validation_phase3_mode,
     )
-    effective_harness_path = apply_coverage_guided_slice(
-        config.harness_path,
-        crash_pattern,
-        config.crash_input,
-        config.compile_flags,
-        config.link_flags,
-        phase3_mode=validation_phase3_mode,
-    )
+    if config.slice_enabled:
+        effective_harness_path = apply_coverage_guided_slice(
+            config.harness_path,
+            crash_pattern,
+            config.crash_input,
+            config.compile_flags,
+            config.link_flags,
+            phase3_mode=validation_phase3_mode,
+        )
+    else:
+        effective_harness_path = config.harness_path
     tagged_harness_file = tag_harness_with_fdp_ids(
         effective_harness_path,
         start_id=config.start_id,
@@ -353,6 +357,7 @@ def process(
     phase3_mode: str = "direct",
     iteration: int | None = None,
     statistics: bool = False,
+    slice_enabled: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -364,6 +369,7 @@ def process(
         phase3_mode=phase3_mode,
         iteration=iteration,
         statistics=statistics,
+        slice_enabled=slice_enabled,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

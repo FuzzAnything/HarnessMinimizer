@@ -6,7 +6,7 @@ HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving crash be
 
 1. original crash-pattern extraction
 2. reference stack-trace recording
-3. conservative dynamic slicing using source-based coverage
+3. optional conservative dynamic slicing using source-based coverage
 4. FDP callsite tagging
 5. FDP trace dump/replay
 6. tree-based reduction with `treereduce-c`
@@ -85,7 +85,7 @@ The crash pattern is intentionally coarse enough to tolerate cosmetic changes, w
 
 ### 5. Dynamic slicing (coverage-guided pre-slice)
 
-`apply_coverage_guided_slice()` is now a first-class pre-reduction step.
+`apply_coverage_guided_slice()` is an optional pre-reduction step enabled by `slice_enabled=True` / `--slice`.
 
 #### Coverage backend
 
