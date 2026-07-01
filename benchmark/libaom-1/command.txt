@@ -6,3 +6,11 @@ harnessreducer harness.cpp \
   --pch \
   --statistics \
   -o reduced.cpp
+
+
+--pch
+real    6m59.774s
+user    274m15.215s
+sys     57m22.067s
+
+--direct
