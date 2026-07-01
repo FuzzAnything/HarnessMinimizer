@@ -91,11 +91,19 @@ def build_parser() -> argparse.ArgumentParser:
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
+        "--single-step",
         dest="phase3_mode",
         action="store_const",
         const="direct",
         default="direct",
-        help="Use the original one-step Phase 3 compile/link path (default).",
+        help="Use the single-step Phase 3 compile/link path (default).",
+    )
+    phase3_group.add_argument(
+        "--split",
+        dest="phase3_mode",
+        action="store_const",
+        const="split",
+        help="Use two-step Phase 3 mode: compile the full source to an object, then link it.",
     )
     phase3_group.add_argument(
         "--pch",

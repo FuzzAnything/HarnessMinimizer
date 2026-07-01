@@ -98,6 +98,25 @@ class TestReducerRunner(unittest.TestCase):
         self.assertNotIn("--statistics-file", cmd)
         mock_initialize_statistics.assert_not_called()
 
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_uses_split_mode_flag(self, mock_run, mock_exists):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file="/tmp/trace.log",
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags=None,
+            crash_input=None,
+            phase3_mode="split",
+        )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--split", cmd)
+
     @patch("harnessreducer.reducer_runner.tempfile.mkdtemp")
     def test_configure_work_dir_uses_user_dir_without_tmp_create(self, mock_mkdtemp):
         work_dir = "/tmp/hr_fixed"
@@ -136,6 +155,12 @@ class TestReducerRunner(unittest.TestCase):
         self.assertFalse(reducer_runner._coverage_count_is_nonzero("0"))
         self.assertFalse(reducer_runner._coverage_count_is_nonzero("0.0k"))
         self.assertFalse(reducer_runner._coverage_count_is_nonzero(""))
+
+    def test_validate_phase3_mode_accepts_single_step_alias(self):
+        self.assertEqual(
+            reducer_runner.validate_phase3_mode("single-step"),
+            reducer_runner.PHASE3_DIRECT,
+        )
 
     def test_initialize_statistics_file_writes_zeroed_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:

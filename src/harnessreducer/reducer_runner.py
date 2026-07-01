@@ -17,10 +17,13 @@ _IS_USER_WORK_DIR = False
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 PHASE3_DIRECT = "direct"
+PHASE3_DIRECT_ALIAS = "single-step"
+PHASE3_SPLIT = "split"
 PHASE3_PCH = "pch"
-PHASE3_MODES = {PHASE3_DIRECT, PHASE3_PCH}
+PHASE3_MODES = {PHASE3_DIRECT, PHASE3_SPLIT, PHASE3_PCH}
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
+PHASE3_SPLIT_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
@@ -107,10 +110,12 @@ def get_crash_tester_path() -> str:
 
 
 def validate_phase3_mode(mode: str) -> str:
+    if mode == PHASE3_DIRECT_ALIAS:
+        return PHASE3_DIRECT
     if mode not in PHASE3_MODES:
         raise ValueError(
             f"Unsupported phase 3 compilation mode {mode!r}; "
-            f"expected one of: {', '.join(sorted(PHASE3_MODES))}"
+            f"expected one of: {', '.join(sorted(PHASE3_MODES | {PHASE3_DIRECT_ALIAS}))}"
         )
     return mode
 
@@ -267,7 +272,9 @@ def restore_pch_includes(harness_path: str, artifacts: PchArtifacts) -> None:
 def pch_tester_args(artifacts: PchArtifacts | None, phase3_mode: str) -> list[str]:
     mode = validate_phase3_mode(phase3_mode)
     if mode == PHASE3_DIRECT:
-        return ["--direct"]
+        return ["--single-step"]
+    if mode == PHASE3_SPLIT:
+        return ["--split"]
     if artifacts is None:
         raise ValueError("PCH Phase 3 mode requires prepared PCH artifacts.")
     return ["--pch", "--pch-path", artifacts.pch_file]
