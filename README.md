@@ -53,6 +53,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--crash-input <file>` | No | Crash input passed to the harness binary. |
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
+| `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
 | `--direct` | No | Use the default direct compile/link path. |
@@ -60,6 +61,17 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
 ## What the Main Options Do
+
+### `--slice`
+
+Enables the optional dynamic-slicing pre-pass:
+
+- builds a separate source-coverage binary
+- identifies uncovered executable regions
+- tries a conservative syntax-preserving pre-slice
+- validates the sliced result before continuing
+
+If `--slice` is omitted, this pre-pass is skipped entirely.
 
 ### `--iteration`
 
@@ -134,6 +146,7 @@ harnessreducer harness.cpp \
 
 ```bash
 harnessreducer harness.cpp \
+  --slice \
   --crash-input crash-input \
   --iteration 100 \
   -o reduced.cpp
@@ -143,6 +156,7 @@ harnessreducer harness.cpp \
 
 ```bash
 harnessreducer harness.cpp \
+  --slice \
   --pch \
   --crash-input crash-input \
   --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
@@ -154,6 +168,7 @@ harnessreducer harness.cpp \
 
 ```bash
 harnessreducer harness.cpp \
+  --slice \
   --pch \
   --stable \
   --iteration 100 \

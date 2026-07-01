@@ -50,6 +50,7 @@ class TestApiPipeline(unittest.TestCase):
             work_dir="/tmp/workdir",
             start_id=123,
             marker="M",
+            slice_enabled=True,
         )
 
         result = reduce_with_config(config)
@@ -151,6 +152,7 @@ class TestApiPipeline(unittest.TestCase):
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
             phase3_mode="pch",
+            slice_enabled=True,
         )
 
         reduce_with_config(config)
@@ -193,6 +195,55 @@ class TestApiPipeline(unittest.TestCase):
         reduced = process(cfg.harness_path, cfg.compile_flags, cfg.crash_input, link_flags=cfg.link_flags)
         self.assertEqual(reduced, expected_reduced)
         mock_reduce_with_config.assert_called_once()
+
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.apply_coverage_guided_slice")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_skips_dynamic_slicing_by_default(
+        self,
+        mock_check,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_slice,
+        mock_compile,
+        mock_dump,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+    ):
+        mock_tag.return_value = "/tmp/tagged.cpp"
+        mock_compile.return_value = "/tmp/tagged.out"
+        mock_dump.return_value = "/tmp/fdp_trace.log"
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            compile_flags="-std=c++17",
+            link_flags="-lm",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+        )
+
+        reduce_with_config(config)
+
+        mock_slice.assert_not_called()
+        mock_tag.assert_called_once_with("a.cpp", start_id=100000, marker="FDP_ID")
 
 
 if __name__ == "__main__":
