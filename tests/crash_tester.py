@@ -14,8 +14,8 @@ __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
-PHASE3_SPLIT_OPT_FLAGS = ["-O1", "-gline-tables-only"]
-PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
+PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
+PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 
 # Stack trace validation thresholds (tune these values as needed).
 SMALL_HARNESS_LINE_THRESHOLD = 75   # below this, iteration interval shrinks

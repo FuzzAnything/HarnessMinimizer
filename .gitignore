@@ -13,3 +13,4 @@ pattern_extraction_work
 dynamic_slicing_work
 statistics-pch
 statistics-direct
+statistics-split
