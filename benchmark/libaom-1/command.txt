@@ -4,13 +4,56 @@ harnessreducer harness.cpp \
   --work-dir ./statistics \
   --crash-input crash-input \
   --pch \
-  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "$(pwd)/build/sanitizer/lib/libaom.a" \
+  --work-dir ./statistics \
+  --crash-input crash-input \
+  --pch \
+  --slice \
   -o reduced.cpp
 
 
 --pch
-real    6m59.774s
-user    274m15.215s
-sys     57m22.067s
+
+
+
+
+--pch --slice
+
+
+
 
 --direct
+real    9m15.926s
+user    322m6.773s
+sys     86m44.062s
+
+time for reduction: 9m03.73s
+
+(.venv) lihaiying@security.datascience.hku.hk:/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/libaom-1/statistics-direct$ time clang++ -g -O1     -fsanitize=fuzzer,address,undefined     -I../build/sanitizer/include reduced_harness.inline.cpp -o harness     -L../build/sani
+tizer/lib -Wl,-Bstatic -laom -Wl,-Bdynamic
+reduced_harness.inline.cpp:71:1: warning: non-void function does not return a value [-Wreturn-type]
+   71 | }
+      | ^
+1 warning generated.
+
+real    0m1.600s
+user    0m1.153s
+sys     0m0.445s
+(.venv) lihaiying@security.datascience.hku.hk:/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/libaom-1/statistics-direct$ time clang++ -c -g -O1     -fsanitize=fuzzer,address,undefined     -I../build/sanitizer/include reduced_harness.inline.cpp -o harness.o
+reduced_harness.inline.cpp:71:1: warning: non-void function does not return a value [-Wreturn-type]
+   71 | }
+      | ^
+1 warning generated.
+
+real    0m0.766s
+user    0m0.671s
+sys     0m0.094s
+(.venv) lihaiying@security.datascience.hku.hk:/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/libaom-1/statistics-direct$ time clang++ -fsanitize=address,undefined,fuzzer     harness.o -o harness     -L../build/sanitizer/lib -Wl,-Bstatic -laom -Wl,-Bdynamic
+
+real    0m0.804s
+user    0m0.484s
+sys     0m0.321s
