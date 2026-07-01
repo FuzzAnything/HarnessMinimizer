@@ -7,6 +7,7 @@ from pathlib import Path
 
 from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
+    PHASE3_DIRECT,
     get_crash_tester_path,
     apply_coverage_guided_slice,
     run_command,
@@ -229,6 +230,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         if config.iteration is not None:
             print("[*] Statistics collection is disabled when --iteration is set.")
     validate_phase3_mode(config.phase3_mode)
+    validation_phase3_mode = PHASE3_DIRECT
+    reduction_phase3_mode = config.phase3_mode
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
     crash_pattern = extract_crash_pattern_from_output(
@@ -250,7 +253,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.crash_input,
         config.compile_flags,
         config.link_flags,
-        phase3_mode=config.phase3_mode,
+        phase3_mode=validation_phase3_mode,
     )
     effective_harness_path = apply_coverage_guided_slice(
         config.harness_path,
@@ -258,7 +261,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.crash_input,
         config.compile_flags,
         config.link_flags,
-        phase3_mode=config.phase3_mode,
+        phase3_mode=validation_phase3_mode,
     )
     tagged_harness_file = tag_harness_with_fdp_ids(
         effective_harness_path,
@@ -279,7 +282,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
         config.crash_input,
         stable=config.stable,
-        phase3_mode=config.phase3_mode,
+        phase3_mode=reduction_phase3_mode,
         iteration=config.iteration,
         statistics=config.statistics,
     )
@@ -293,7 +296,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.compile_flags,
             config.link_flags,
             fdp_trace_file=fdp_trace_file,
-            phase3_mode=config.phase3_mode,
+            phase3_mode=validation_phase3_mode,
         ):
             backup_file = get_stack_trace_backup_file()
             if os.path.exists(backup_file):
@@ -313,7 +316,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.compile_flags,
         config.link_flags,
         config.start_id,
-        phase3_mode=config.phase3_mode,
+        phase3_mode=validation_phase3_mode,
         iteration=config.iteration,
     )
 
@@ -326,7 +329,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.compile_flags,
             config.link_flags,
             fdp_trace_file,
-            phase3_mode=config.phase3_mode,
+            phase3_mode=validation_phase3_mode,
         )
     else:
         final_harness = post_inline_harness
