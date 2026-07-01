@@ -107,6 +107,71 @@ class TestApiPipeline(unittest.TestCase):
         )
         mock_check.assert_called_once()
 
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.apply_coverage_guided_slice")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_pch_mode_is_used_only_for_tree_reduction(
+        self,
+        mock_check,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_slice,
+        mock_compile,
+        mock_dump,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+    ):
+        mock_tag.return_value = "/tmp/tagged.cpp"
+        mock_compile.return_value = "/tmp/tagged.out"
+        mock_dump.return_value = "/tmp/fdp_trace.log"
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
+        mock_slice.return_value = "/tmp/sliced.cpp"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            compile_flags="-std=c++17",
+            link_flags="-lm",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+            phase3_mode="pch",
+        )
+
+        reduce_with_config(config)
+
+        self.assertEqual(
+            mock_check_pattern.call_args.kwargs["phase3_mode"],
+            "direct",
+        )
+        self.assertEqual(
+            mock_slice.call_args.kwargs["phase3_mode"],
+            "direct",
+        )
+        self.assertEqual(
+            mock_reduce.call_args.kwargs["phase3_mode"],
+            "pch",
+        )
+        self.assertEqual(
+            mock_inline.call_args.kwargs["phase3_mode"],
+            "direct",
+        )
+
     @patch("harnessreducer.api.reduce_with_config")
     def test_process_compat_wrapper(self, mock_reduce_with_config):
         cfg = ReductionConfig(

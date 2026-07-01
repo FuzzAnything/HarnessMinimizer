@@ -199,6 +199,8 @@ Important options:
 - optional periodic stack-trace validation wired through `--iteration`
 - optional return-code statistics wired through `--statistics` when `iteration is None`
 
+When `phase3_mode="pch"`, the PCH path is now used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
+
 ### 9. Formatting
 
 `format_reduced_harness()` runs `clang-format -i --style=LLVM`.

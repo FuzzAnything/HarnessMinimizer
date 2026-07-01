@@ -89,11 +89,13 @@ The counts and probabilities are written to `statistics.txt` in the work directo
 
 ### `--pch`
 
-Uses a precompiled-header for candidate testing:
+Uses a precompiled-header for the tree-reduction candidate-testing loop:
 
 - includes are moved into a generated prefix header
 - a `.pch` is built once
 - each candidate body is compiled against that PCH and then linked
+
+One-off validation steps outside the main reduction loop still use direct compilation.
 
 This can substantially reduce repeated compile cost for large harnesses with heavy includes.
 
