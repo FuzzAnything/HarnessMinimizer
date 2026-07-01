@@ -53,6 +53,51 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--fdp-trace", cmd)
         self.assertIn("/tmp/trace.log", cmd)
 
+    @patch("harnessreducer.reducer_runner.initialize_statistics_file")
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_adds_statistics_file_only_without_iteration(
+        self,
+        mock_run,
+        mock_exists,
+        mock_initialize_statistics,
+    ):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+        mock_initialize_statistics.return_value = "/tmp/work/statistics.txt"
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file="/tmp/trace.log",
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags=None,
+            crash_input=None,
+            statistics=True,
+        )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--statistics-file", cmd)
+        self.assertIn("/tmp/work/statistics.txt", cmd)
+
+        mock_run.reset_mock()
+        mock_initialize_statistics.reset_mock()
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file="/tmp/trace.log",
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags=None,
+            crash_input=None,
+            statistics=True,
+            iteration=100,
+        )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertNotIn("--statistics-file", cmd)
+        mock_initialize_statistics.assert_not_called()
+
     @patch("harnessreducer.reducer_runner.tempfile.mkdtemp")
     def test_configure_work_dir_uses_user_dir_without_tmp_create(self, mock_mkdtemp):
         work_dir = "/tmp/hr_fixed"
@@ -91,6 +136,16 @@ class TestReducerRunner(unittest.TestCase):
         self.assertFalse(reducer_runner._coverage_count_is_nonzero("0"))
         self.assertFalse(reducer_runner._coverage_count_is_nonzero("0.0k"))
         self.assertFalse(reducer_runner._coverage_count_is_nonzero(""))
+
+    def test_initialize_statistics_file_writes_zeroed_summary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            path = reducer_runner.initialize_statistics_file()
+            text = Path(path).read_text(encoding="utf-8")
+            self.assertIn("total: 0", text)
+            self.assertIn("count_77: 0", text)
+            self.assertIn("count_1: 0", text)
+            self.assertIn("count_-1: 0", text)
 
     @patch("harnessreducer.reducer_runner.validate_stack_trace")
     @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")

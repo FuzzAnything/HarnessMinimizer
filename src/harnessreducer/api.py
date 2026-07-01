@@ -21,6 +21,7 @@ from harnessreducer.reducer_runner import (
     get_work_dir,
     pch_tester_args,
     prepare_phase3_pch_harness,
+    reset_statistics_state,
     reset_stack_trace_state,
     run_treereducer,
     validate_phase3_mode,
@@ -57,6 +58,7 @@ class ReductionConfig:
     stable: bool = False
     phase3_mode: str = "direct"
     iteration: int | None = None
+    statistics: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +224,10 @@ def inline_literals_in_reduced_harness(
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     reset_stack_trace_state()
+    if config.statistics:
+        reset_statistics_state()
+        if config.iteration is not None:
+            print("[*] Statistics collection is disabled when --iteration is set.")
     validate_phase3_mode(config.phase3_mode)
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
@@ -275,6 +281,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         stable=config.stable,
         phase3_mode=config.phase3_mode,
         iteration=config.iteration,
+        statistics=config.statistics,
     )
     format_reduced_harness(reduced_harness)
     # Final stack trace validation after tree reduction.
@@ -342,6 +349,7 @@ def process(
     use_llm: bool = False,
     phase3_mode: str = "direct",
     iteration: int | None = None,
+    statistics: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -352,6 +360,7 @@ def process(
         use_llm=use_llm,
         phase3_mode=phase3_mode,
         iteration=iteration,
+        statistics=statistics,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

@@ -30,6 +30,7 @@ SOURCE_COVERAGE_RAW_FILE_NAME = "coverage.profraw"
 SOURCE_COVERAGE_DATA_FILE_NAME = "coverage.profdata"
 SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
 SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
+STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
@@ -469,6 +470,10 @@ def get_stack_trace_backup_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_BACKUP_FILE_NAME)
 
 
+def get_statistics_file() -> str:
+    return os.path.join(get_work_dir(), STATISTICS_FILE_NAME)
+
+
 def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
     for path in (
@@ -480,6 +485,40 @@ def reset_stack_trace_state() -> None:
             os.remove(path)
         except FileNotFoundError:
             pass
+
+
+def reset_statistics_state() -> None:
+    try:
+        os.remove(get_statistics_file())
+    except FileNotFoundError:
+        pass
+
+
+def _format_statistics_text(
+    count_77: int,
+    count_1: int,
+    count_neg1: int,
+) -> str:
+    total = count_77 + count_1 + count_neg1
+
+    def probability(count: int) -> float:
+        return 0.0 if total == 0 else count / total
+
+    return (
+        f"total: {total}\n"
+        f"count_77: {count_77}\n"
+        f"count_1: {count_1}\n"
+        f"count_-1: {count_neg1}\n"
+        f"probability_77: {probability(count_77):.6f}\n"
+        f"probability_1: {probability(count_1):.6f}\n"
+        f"probability_-1: {probability(count_neg1):.6f}\n"
+    )
+
+
+def initialize_statistics_file() -> str:
+    path = get_statistics_file()
+    Path(path).write_text(_format_statistics_text(0, 0, 0), encoding="utf-8")
+    return path
 
 
 def _source_coverage_raw_path() -> Path:
@@ -842,6 +881,7 @@ def run_treereducer(
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
     iteration: int | None = None,
+    statistics: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -890,6 +930,8 @@ def run_treereducer(
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(stack_trace_tester_args(iteration))
+    if statistics and iteration is None:
+        cmd.extend(["--statistics-file", initialize_statistics_file()])
 
     proc = subprocess.run(
         cmd,

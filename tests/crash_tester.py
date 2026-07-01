@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import fcntl
 import os
 import re
 import shutil
@@ -94,6 +95,65 @@ def _read_counter(counter_file: str) -> int:
 
 def _write_counter(counter_file: str, value: int) -> None:
     Path(counter_file).write_text(str(value), encoding="utf-8")
+
+
+def _statistics_counts_from_text(text: str) -> dict[int, int]:
+    counts = {77: 0, 1: 0, -1: 0}
+    patterns = {
+        77: re.compile(r"^count_77:\s*(\d+)\s*$", re.MULTILINE),
+        1: re.compile(r"^count_1:\s*(\d+)\s*$", re.MULTILINE),
+        -1: re.compile(r"^count_-1:\s*(\d+)\s*$", re.MULTILINE),
+    }
+    for code, pattern in patterns.items():
+        match = pattern.search(text)
+        if match:
+            counts[code] = int(match.group(1))
+    return counts
+
+
+def _format_statistics_text(counts: dict[int, int]) -> str:
+    count_77 = counts.get(77, 0)
+    count_1 = counts.get(1, 0)
+    count_neg1 = counts.get(-1, 0)
+    total = count_77 + count_1 + count_neg1
+
+    def probability(count: int) -> float:
+        return 0.0 if total == 0 else count / total
+
+    return (
+        f"total: {total}\n"
+        f"count_77: {count_77}\n"
+        f"count_1: {count_1}\n"
+        f"count_-1: {count_neg1}\n"
+        f"probability_77: {probability(count_77):.6f}\n"
+        f"probability_1: {probability(count_1):.6f}\n"
+        f"probability_-1: {probability(count_neg1):.6f}\n"
+    )
+
+
+def _update_statistics_file(statistics_file: str, result_code: int) -> None:
+    if result_code not in {77, 1, -1}:
+        return
+
+    stats_path = Path(statistics_file)
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    with stats_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        counts = _statistics_counts_from_text(handle.read())
+        counts[result_code] = counts.get(result_code, 0) + 1
+        handle.seek(0)
+        handle.truncate()
+        handle.write(_format_statistics_text(counts))
+        handle.flush()
+        os.fsync(handle.fileno())
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
+    if args.statistics_file and args.iteration is None:
+        _update_statistics_file(args.statistics_file, result_code)
+    return result_code
 
 
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
@@ -235,6 +295,7 @@ def main() -> int:
     parser.add_argument("--iteration", type=int, default=None, help="Base iteration interval for periodic symbolize=1 checks")
     parser.add_argument("--counter-file", type=str, default=None, help="Path to the counter file tracking invocation count")
     parser.add_argument("--backup-file", type=str, default=None, help="Path to save source backup on successful stack trace check")
+    parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -248,7 +309,7 @@ def main() -> int:
         else:
             compile_status, object_path = compile_direct(args, output_path)
         if compile_status != 0:
-            return -1
+            return _finalize_result(args, -1)
 
         # Determine whether this invocation should use symbolize=1.
         force_symbolize = args.symbolize
@@ -290,17 +351,17 @@ def main() -> int:
         # First: crash pattern must match.
         if status != 77 or re.search(args.crash_pattern, run_log) is None:
             print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
-            return 1
+            return _finalize_result(args, 1)
 
         # Crash pattern matched.  If symbolized, also validate stack trace.
         if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
             if not _check_stack_trace(run_log, args.stack_trace_file, args.source, args.backup_file):
-                return 1
+                return _finalize_result(args, 1)
 
         print("execution log: ")
         print(run_log)
         print("Crash behavior preserved.")
-        return 77
+        return _finalize_result(args, 77)
     finally:
         if object_path:
             try:

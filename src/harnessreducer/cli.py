@@ -70,6 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
             "reduction (no periodic checks)."
         ),
     )
+    parser.add_argument(
+        "--statistics",
+        action="store_true",
+        help=(
+            "Collect crash_tester return-code statistics during treereduce and "
+            "write them to statistics.txt in the work directory. This is only "
+            "active when --iteration is not set."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -103,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         stable=args.stable,
         phase3_mode=args.phase3_mode,
         iteration=args.iteration,
+        statistics=args.statistics,
     )
     result = reduce_with_config(config)
     if not result.success:
