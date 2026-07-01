@@ -1,0 +1,8 @@
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "$(pwd)/build/sanitizer/lib/libaom.a" \
+  --work-dir ./statistics \
+  --crash-input crash-input \
+  --pch \
+  --statistics \
+  -o reduced.cpp
