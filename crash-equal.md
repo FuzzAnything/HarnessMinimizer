@@ -211,7 +211,7 @@ There is currently **no retry with a smaller removal set**.
 - final explicit stack-trace validation
 - some helper scripts
 
-In the normal pipeline, PCH mode is reserved for the main `treereduce-c` candidate-testing loop. One-off validation checks around that loop use direct compilation.
+In the normal pipeline, non-default Phase 3 modes are reserved for the main `treereduce-c` candidate-testing loop. One-off validation checks around that loop use direct compilation.
 
 It returns:
 
@@ -223,11 +223,28 @@ When optional statistics collection is enabled (and `--iteration` is not set), t
 
 ### 3.1 Candidate compilation modes
 
-#### Direct mode
+#### Direct / single-step mode
 
 ```bash
 clang++ [replay flags] -fsanitize=address,fuzzer,undefined -g -O0 \
   <compile_flags> <source.cpp> -o <output> <link_flags>
+```
+
+#### Split mode
+
+Compile object:
+
+```bash
+clang++ -Qunused-arguments [replay flags] \
+  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -c <compile_flags> <source.cpp> -o <object.o>
+```
+
+Then link:
+
+```bash
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined \
+  <object.o> -o <output> <link_flags>
 ```
 
 #### PCH mode

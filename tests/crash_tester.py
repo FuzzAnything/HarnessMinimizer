@@ -14,6 +14,7 @@ __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
+PHASE3_SPLIT_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
 
 # Stack trace validation thresholds (tune these values as needed).
@@ -183,6 +184,59 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
     return 0, None
 
 
+def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
+    pid = os.getpid()
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
+        object_path = obj_file.name
+
+    compile_cmd = [
+        "clang++",
+        "-Qunused-arguments",
+        *phase3_replay_flags(args.fdp_trace),
+        *PHASE3_SANITIZER_FLAGS,
+        *PHASE3_SPLIT_OPT_FLAGS,
+        "-c",
+        *split_flags(args.compile_flags),
+        args.source,
+        "-o",
+        object_path,
+    ]
+
+    compile_proc = subprocess.run(
+        compile_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if compile_proc.returncode != 0:
+        err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
+        print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
+        return -1, object_path
+
+    link_cmd = [
+        "clang++",
+        "-Qunused-arguments",
+        *PHASE3_SANITIZER_FLAGS,
+        object_path,
+        "-o",
+        output_path,
+        *split_flags(args.link_flags),
+    ]
+    link_proc = subprocess.run(
+        link_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if link_proc.returncode != 0:
+        err_msg = link_proc.stderr.strip() or link_proc.stdout.strip() or "Unknown link error"
+        print(f"Linking failed: {link_cmd} {err_msg}", file=sys.stderr)
+        return -1, object_path
+    return 0, object_path
+
+
 def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     if not args.pch_path:
         print("Compilation failed: --pch requires --pch-path", file=sys.stderr)
@@ -286,7 +340,8 @@ def main() -> int:
     parser.add_argument("--link-flags", type=str, default=None, help="Optional flags used while linking")
     parser.add_argument("--fdp-trace", type=str, default=None, help="Optional FDP trace path used for replay-mode execution")
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--direct", action="store_true", help="Use the original one-step Phase 3 compile/link command")
+    mode_group.add_argument("--direct", "--single-step", dest="direct", action="store_true", help="Use the single-step Phase 3 compile/link command")
+    mode_group.add_argument("--split", action="store_true", help="Use split Phase 3 mode: compile the full source to an object, then link")
     mode_group.add_argument("--pch", action="store_true", help="Use PCH Phase 3 mode: compile object with -include-pch, then link")
     parser.add_argument("--pch-path", type=str, default=None, help="Path to fahm_prefix.pch when --pch is used")
     # Stack trace validation arguments
@@ -306,6 +361,8 @@ def main() -> int:
     try:
         if args.pch:
             compile_status, object_path = compile_with_pch(args, output_path)
+        elif args.split:
+            compile_status, object_path = compile_split(args, output_path)
         else:
             compile_status, object_path = compile_direct(args, output_path)
         if compile_status != 0:

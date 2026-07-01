@@ -199,7 +199,13 @@ Important options:
 - optional periodic stack-trace validation wired through `--iteration`
 - optional return-code statistics wired through `--statistics` when `iteration is None`
 
-When `phase3_mode="pch"`, the PCH path is now used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
+Phase 3 reduction-loop modes currently are:
+
+- `direct` / `single-step`: one-step compile+link
+- `split`: compile the full source to an object, then link
+- `pch`: compile the include-stripped body against a precompiled header, then link
+
+When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
 
 ### 9. Formatting
 
@@ -264,9 +270,10 @@ This script is the reduction oracle.
 
 ### Compile modes
 
-It supports two candidate-test backends:
+It supports three candidate-test backends:
 
-- **Direct mode**: one-step compile+link
+- **Direct / single-step mode**: one-step compile+link
+- **Split mode**: compile full source to an object, then link
 - **PCH mode**: compile candidate body with `-include-pch`, then link
 
 PCH mode is prepared by `prepare_phase3_pch_harness()` and restored afterward by `restore_pch_includes()`.
@@ -351,7 +358,8 @@ Main flags:
 - `--stable`
 - `--iteration`
 - `--statistics`
-- `--direct`
+- `--direct` / `--single-step`
+- `--split`
 - `--pch`
 - `--llm`
 

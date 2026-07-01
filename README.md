@@ -56,7 +56,8 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
-| `--direct` | No | Use the default direct compile/link path. |
+| `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
+| `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
@@ -98,6 +99,17 @@ When enabled without `--iteration`, HarnessReducer records how many tree-reducer
 - `-1` — candidate could not be compiled or linked
 
 The counts and probabilities are written to `statistics.txt` in the work directory.
+
+### `--split`
+
+Uses a two-step compile/link path for the tree-reduction candidate-testing loop:
+
+- compile the full source file into an object
+- link the object into the executable
+- no PCH
+- uses `-O1 -gline-tables-only` like PCH mode
+
+This is useful when you want separate compile and link stages without the include stripping / PCH machinery.
 
 ### `--pch`
 
@@ -164,7 +176,19 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 6. Stable + PCH + periodic stack-trace checks
+### 6. Use split mode
+
+```bash
+harnessreducer harness.cpp \
+  --slice \
+  --split \
+  --crash-input crash-input \
+  --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
+  --link-flags "build/lib/libtarget.a" \
+  -o reduced.cpp
+```
+
+### 7. Stable + PCH + periodic stack-trace checks
 
 ```bash
 harnessreducer harness.cpp \
@@ -178,7 +202,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 7. Add the optional LLM post-pass
+### 8. Add the optional LLM post-pass
 
 ```bash
 harnessreducer harness.cpp \
@@ -187,7 +211,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 8. Collect crash-tester return statistics
+### 9. Collect crash-tester return statistics
 
 ```bash
 harnessreducer harness.cpp \
@@ -206,7 +230,7 @@ config = ReductionConfig(
     compile_flags="-std=c++17 -Iinclude -Ibuild/include",
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
-    phase3_mode="pch",      # or "direct"
+    phase3_mode="pch",      # or "split" / "direct"
     iteration=100,            # optional
     statistics=False,         # optional
     stable=False,
@@ -228,7 +252,7 @@ reduced = process(
     compile_flags="-std=c++17 -Iinclude -Ibuild/include",
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
-    phase3_mode="direct",
+    phase3_mode="direct",   # "single-step" alias is also accepted by the CLI
     iteration=100,
     statistics=False,
 )

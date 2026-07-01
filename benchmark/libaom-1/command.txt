@@ -4,6 +4,7 @@ harnessreducer harness.cpp \
   --work-dir ./statistics \
   --crash-input crash-input \
   --pch \
+  --stable \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
@@ -13,12 +14,14 @@ harnessreducer harness.cpp \
   --crash-input crash-input \
   --pch \
   --slice \
+  --stable \
   -o reduced.cpp
 
 
 --pch
 
 
+time for reduction: 9m03.73s
 
 
 --pch --slice
