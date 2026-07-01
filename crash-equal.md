@@ -217,6 +217,8 @@ It returns:
 - `1` → not interesting
 - `-1` → compile or link failure
 
+When optional statistics collection is enabled (and `--iteration` is not set), these logical return values are also counted and summarized in `statistics.txt` in the work directory.
+
 ### 3.1 Candidate compilation modes
 
 #### Direct mode
@@ -274,6 +276,17 @@ Then `_check_stack_trace()`:
 3. checks `re.search(stored_pattern, run_log)`
 
 If the stored stack-trace regex matches the new run log, the stack trace is treated as preserved.
+
+### 3.4 Optional return-code statistics
+
+If HarnessReducer enables `--statistics-file` for `crash_tester.py`, each candidate check also updates a shared `statistics.txt` file with:
+
+- count of logical `77` results
+- count of logical `1` results
+- count of logical `-1` results
+- probability of each outcome over the total number of recorded candidate checks
+
+This mode is only used when `--iteration` is **not** set.
 
 ---
 

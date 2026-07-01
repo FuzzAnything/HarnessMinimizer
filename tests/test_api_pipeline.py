@@ -61,7 +61,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_configure.assert_called_once_with("/tmp/workdir")
         mock_reset_stack_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
-        mock_extract.assert_called_once_with("seed.bin")
+        mock_extract.assert_called_once_with("seed.bin", harness_path="a.cpp")
         mock_check_pattern.assert_called_once_with(
             "a.cpp",
             "AddressSanitizer",
@@ -91,6 +91,7 @@ class TestApiPipeline(unittest.TestCase):
             stable=False,
             phase3_mode="direct",
             iteration=None,
+            statistics=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(

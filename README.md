@@ -54,6 +54,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
 | `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
+| `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
 | `--direct` | No | Use the default direct compile/link path. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
@@ -75,6 +76,16 @@ The effective interval becomes more aggressive for small files:
 - fewer than 50 lines: interval shrinks to 1
 
 These thresholds are currently hardcoded in `tests/crash_tester.py`.
+
+### `--statistics`
+
+When enabled without `--iteration`, HarnessReducer records how many tree-reducer candidate checks ended with:
+
+- `77` — interesting / crash preserved
+- `1` — candidate compiled but did not preserve the target crash behavior
+- `-1` — candidate could not be compiled or linked
+
+The counts and probabilities are written to `statistics.txt` in the work directory.
 
 ### `--pch`
 
@@ -159,6 +170,15 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
+### 8. Collect crash-tester return statistics
+
+```bash
+harnessreducer harness.cpp \
+  --crash-input crash-input \
+  --statistics \
+  -o reduced.cpp
+```
+
 ## Python API
 
 ```python
@@ -171,6 +191,7 @@ config = ReductionConfig(
     crash_input="crash-input",
     phase3_mode="pch",      # or "direct"
     iteration=100,            # optional
+    statistics=False,         # optional
     stable=False,
     use_llm=False,
 )
@@ -192,6 +213,7 @@ reduced = process(
     crash_input="crash-input",
     phase3_mode="direct",
     iteration=100,
+    statistics=False,
 )
 ```
 
@@ -207,6 +229,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `stack_trace.counter` — periodic validation counter
 - `stack_trace.backup.cpp` — last stack-trace-verified candidate
+- `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled without `--iteration`
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header

@@ -12,6 +12,7 @@ HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving crash be
 6. tree-based reduction with `treereduce-c`
 7. FDP literal inlining
 8. optional LLM cleanup
+9. optional tree-reduction return-code statistics
 
 The tool is intentionally conservative: when a new optimization step cannot be validated, it falls back to the last known-good harness and continues.
 
@@ -196,6 +197,7 @@ Important options:
 - `--stable --min-reduction 1` when stable mode is requested
 - `--fdp-trace <trace>` always passed during tree reduction so replay mode is active
 - optional periodic stack-trace validation wired through `--iteration`
+- optional return-code statistics wired through `--statistics` when `iteration is None`
 
 ### 9. Formatting
 
@@ -295,6 +297,20 @@ If a symbolized checkpoint fails:
 
 After tree reduction, the API performs one final explicit stack-trace check and may restore the backup.
 
+### 9. Optional tree-reduction statistics
+
+If `statistics=True` and `iteration is None`, `run_treereducer()` passes a `--statistics-file` argument to `tests/crash_tester.py`.
+
+During the `treereduce-c` run, `crash_tester.py` records the logical result of each candidate check:
+
+- `77` — candidate preserved the crash pattern
+- `1` — candidate compiled but did not preserve the crash pattern
+- `-1` — candidate failed to compile or link
+
+The aggregated counts and probabilities are written to `statistics.txt` in the work directory.
+
+This feature is intentionally disabled when `iteration` is enabled.
+
 ---
 
 ## FDP Transformation Summary
@@ -332,6 +348,7 @@ Main flags:
 - `--work-dir`
 - `--stable`
 - `--iteration`
+- `--statistics`
 - `--direct`
 - `--pch`
 - `--llm`
