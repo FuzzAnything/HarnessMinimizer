@@ -97,7 +97,10 @@ and saved to:
 
 This stored value is a regex pattern, not a raw stack dump.
 
-The same Phase 1 run also records the frame count of the **first entire** stack trace. That depth is kept in memory by the main reducer process and passed into `crash_tester.py` as a CLI argument for all normal candidate checks.
+HarnessReducer now keeps **two** reference depths in memory:
+
+- a fast-path depth from the original `symbolize=0` run, passed into `crash_tester.py` for normal candidate checks
+- a symbolized depth from a separate `symbolize=1` run, used by explicit symbolized validation paths
 
 When `--check` is enabled, HarnessReducer also records a second reference for measurement purposes:
 
@@ -109,7 +112,7 @@ These are written to `check_reference.json`.
 
 ### 1.5 Immediate validation
 
-`check_reducer_crash_pattern()` runs `tests/crash_tester.py` on the original harness to make sure the extracted crash pattern actually matches before reduction continues.
+`check_reducer_crash_pattern()` runs `tests/crash_tester.py` on the original harness to make sure the extracted crash pattern and the stored fast-path (`symbolize=0`) stack depth actually match before reduction continues.
 
 ---
 
@@ -291,7 +294,7 @@ A candidate is considered crash-equivalent in the fast path only if:
 
 1. exit code is `77`
 2. `re.search(crash_pattern, run_log)` succeeds
-3. the first stack trace has the same frame count as the original run
+3. the first stack trace has the same frame count as the original **unsymbolized** reference run
 
 ### 3.3 Symbolized deep check
 
@@ -344,7 +347,7 @@ These use `validate_stack_trace()` and therefore enforce:
 
 1. exit code `77`
 2. crash-pattern match
-3. first-stack-trace depth match
+3. first-stack-trace depth match against the stored **symbolized** reference depth
 4. pre-harness stack-trace match against `stack_trace.pattern` when that stored pattern exists
 
 This explicit path is used for:
@@ -388,7 +391,7 @@ Crash equivalence is checked at multiple points:
 
 | Stage | Check |
 |---|---|
-| Initial validation | crash pattern + first-stack-trace depth must match original harness |
+| Initial validation | crash pattern + first-stack-trace depth from the original fast-path (`symbolize=0`) run must match |
 | Dynamic slicing acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | Tree reduction normal candidates | crash pattern + first-stack-trace depth |
 | FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
@@ -402,7 +405,7 @@ The current notion of “same crash” in HarnessReducer is:
 
 1. the transformed harness still crashes under sanitizers (`exit code 77`)
 2. the runtime output still matches the extracted crash regex
-3. the first stack trace still has the same frame count as the original run
+3. the first stack trace still has the same frame count as the matching reference run (`symbolize=0` on the fast path, `symbolize=1` on explicit deep validation paths)
 4. when stack-trace validation is enabled, the first symbolized pre-harness stack trace still matches the normalized reference trace
 
 This is supported by:

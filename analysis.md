@@ -70,16 +70,19 @@ The main workflow lives in `src/harnessreducer/api.py`.
 
 ### 3. Crash pattern extraction + reference stack trace
 
-`extract_crash_pattern_from_output()` runs `poc.out` with `symbolize=1` and:
+`extract_crash_pattern_from_output()` now performs two reference runs:
 
-- extracts a crash pattern using a prioritized regex chain
+- a `symbolize=0` run to extract the crash pattern and record the **fast-path** first-stack-trace depth
+- a `symbolize=1` run to record the **symbolized** first-stack-trace depth and save the truncated symbolized stack trace
+
+From the symbolized run it:
+
 - extracts the first symbolized stack trace
-- counts the frame lines of the first entire stack trace
 - truncates the trace before the harness frame (preferred) or `LLVMFuzzerTestOneInput` (fallback)
 - normalizes the trace with `normalize_crash_signature(..., escape=True)`
 - stores it in `stack_trace.pattern`
 
-The crash pattern is intentionally coarse enough to tolerate cosmetic changes. The recorded stack depth is used in all normal candidate checks, while the stored stack-trace pattern is used for deeper symbolized equivalence checking.
+The crash pattern is intentionally coarse enough to tolerate cosmetic changes. The fast-path depth is used in normal candidate checks, while the symbolized depth plus the stored stack-trace pattern are used for deeper symbolized equivalence checking.
 
 When `--check` is enabled, the tool also performs a second reference capture pass that:
 
@@ -89,7 +92,7 @@ When `--check` is enabled, the tool also performs a second reference capture pas
 
 ### 4. Validate the extracted crash pattern
 
-`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted pattern and recorded first-stack-trace depth are valid before reduction proceeds.
+`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted pattern and recorded fast-path (`symbolize=0`) first-stack-trace depth are valid before reduction proceeds.
 
 ### 5. Dynamic slicing (coverage-guided pre-slice)
 
@@ -292,9 +295,9 @@ PCH mode is prepared by `prepare_phase3_pch_harness()` and restored afterward by
 
 ### Fast vs symbolized checks
 
-Most candidate checks use `symbolize=0` for speed, but still require the first-stack-trace depth to match the original run.
+Most candidate checks use `symbolize=0` for speed and compare against the stored fast-path reference depth from the original unsymbolized run.
 
-Explicit deeper validation paths such as `validate_stack_trace()` force `symbolize=1` and additionally compare the pre-harness stack trace against `stack_trace.pattern`.
+Explicit deeper validation paths such as `validate_stack_trace()` force `symbolize=1`, compare against the separately stored symbolized reference depth, and additionally compare the pre-harness stack trace against `stack_trace.pattern`.
 
 ### 9. Optional tree-reduction statistics
 
