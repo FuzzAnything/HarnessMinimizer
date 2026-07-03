@@ -6,13 +6,14 @@ HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving crash be
 
 1. original crash-pattern extraction
 2. reference stack-trace recording
-3. optional conservative dynamic slicing using source-based coverage
-4. FDP callsite tagging
-5. FDP trace dump/replay
-6. tree-based reduction with `treereduce-c`
-7. FDP literal inlining
-8. optional LLM cleanup
-9. optional tree-reduction return-code statistics
+3. optional check-mode full-stack insight recording
+4. optional conservative dynamic slicing using source-based coverage
+5. FDP callsite tagging
+6. FDP trace dump/replay
+7. tree-based reduction with `treereduce-c`
+8. FDP literal inlining
+9. optional LLM cleanup
+10. optional tree-reduction return-code statistics
 
 The tool is intentionally conservative: when a new optimization step cannot be validated, it falls back to the last known-good harness and continues.
 
@@ -29,6 +30,7 @@ The tool is intentionally conservative: when a new optimization step cannot be v
 | `main.py` | 6 | Legacy entry point |
 | `cli.py` | 130 | CLI parser and output copy logic |
 | `api.py` | 357 | End-to-end orchestration pipeline |
+| `check_mode.py` | new | `--check` reference recording, statistics, and treereduce wrapper |
 | `reducer_runner.py` | 984 | Compilation, execution, crash checking, coverage collection, treereduce integration |
 | `dynamic_slicer.py` | 371 | Tree-sitter-based dynamic slicing engine |
 | `fdp_transform.py` | 918 | FDP ID injection, trace-based literal inlining, cleanup |
@@ -39,6 +41,7 @@ The tool is intentionally conservative: when a new optimization step cannot be v
 | File | Role |
 |---|---|
 | `tests/crash_tester.py` | Interestingness test used by `treereduce-c` and validation steps |
+| `tests/check_tester.py` | Insight-only interestingness test used by `--check` tree reduction |
 | `pattern_extraction.py` | Helper script to test Phase 1 pattern/stack extraction |
 | `dynamic_slicing.py` | Helper script to inspect coverage artifacts and slicing results |
 | `test_fdp.py` | Helper script to inspect FDP tagging/dump/inline behavior |
@@ -78,6 +81,12 @@ The main workflow lives in `src/harnessreducer/api.py`.
 - stores it in `stack_trace.pattern`
 
 The crash pattern is intentionally coarse enough to tolerate cosmetic changes, while the stored stack trace is used for deeper equivalence checking.
+
+When `--check` is enabled, the tool also performs a second reference capture pass that:
+
+- records the **first entire** stack trace without truncating at the harness frame
+- counts its frame lines directly
+- stores both the raw full trace and its normalized regex form in `check_reference.json`
 
 ### 4. Validate the extracted crash pattern
 
@@ -191,6 +200,14 @@ These IDs are the bridge between runtime FDP trace records and source callsites.
 
 `run_treereducer()` invokes `treereduce-c` and uses `tests/crash_tester.py` as the interestingness oracle.
 
+When `--check` is enabled, `run_treereducer_with_check()` is used instead. It swaps in `tests/check_tester.py`, forces `symbolize=1` for every candidate execution, and records:
+
+- `level_same`: candidate preserved the crash pattern and the first entire stack trace had the same frame count as the original
+- `stack_same`: candidate preserved the crash pattern, matched the same frame count, and the pre-harness stack-trace prefix matched the stored `stack_trace.pattern`
+
+At the end of tree reduction, the tool prints `level_same`, `stack_same`, and `stack_same / level_same`.
+It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory.
+
 Important options:
 
 - `--fast` by default
@@ -204,6 +221,8 @@ Phase 3 reduction-loop modes currently are:
 - `direct` / `single-step`: one-step compile+link
 - `split`: compile the full source to an object, then link
 - `pch`: compile the include-stripped body against a precompiled header, then link
+
+Split and PCH candidate compilation currently use `-O0 -gline-tables-only`.
 
 When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
 

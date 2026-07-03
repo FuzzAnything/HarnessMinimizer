@@ -6,10 +6,11 @@ The current design combines:
 
 1. crash-pattern extraction
 2. reference stack-trace extraction
-3. conservative dynamic slicing with source-based coverage
-4. fast crash-pattern checks during reduction
-5. optional periodic deep stack-trace checks
-6. FDP trace replay so remaining FDP calls observe the original values
+3. optional full-stack check-mode reference recording
+4. conservative dynamic slicing with source-based coverage
+5. fast crash-pattern checks during reduction
+6. optional periodic deep stack-trace checks
+7. FDP trace replay so remaining FDP calls observe the original values
 
 ---
 
@@ -95,6 +96,14 @@ and saved to:
 - `stack_trace.pattern`
 
 This stored value is a regex pattern, not a raw stack dump.
+
+When `--check` is enabled, HarnessReducer also records a second reference for measurement purposes:
+
+- the **first entire** stack trace, without truncation at the harness frame
+- the direct count of frame lines in that first trace
+- a normalized regex form of that full trace
+
+These are written to `check_reference.json`.
 
 ### 1.5 Immediate validation
 
@@ -236,7 +245,7 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```
 
@@ -253,7 +262,7 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments -include-pch <pch> [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```
 
@@ -296,7 +305,27 @@ Then `_check_stack_trace()`:
 
 If the stored stack-trace regex matches the new run log, the stack trace is treated as preserved.
 
-### 3.4 Optional return-code statistics
+### 3.4 `--check`: full-stack insight mode
+
+When `--check` is enabled, HarnessReducer uses `tests/check_tester.py` instead of `tests/crash_tester.py` for the main tree-reduction loop.
+
+Differences from the normal oracle:
+
+- every candidate is executed with `symbolize=1`
+- the interestingness condition still remains **crash-pattern preservation**
+- after a candidate preserves the crash pattern, the checker inspects the candidate's **first entire** stack trace
+- if the frame count matches the stored count, it increments `level_same`
+- if the frame count matches and the candidate's **pre-harness** stack-trace prefix matches the stored `stack_trace.pattern`, it increments `stack_same`
+
+At the end of reduction, HarnessReducer reports:
+
+- `level_same`
+- `stack_same`
+- `stack_same / level_same`
+
+It also writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual review.
+
+### 3.5 Optional return-code statistics
 
 If HarnessReducer enables `--statistics-file` for `crash_tester.py`, each candidate check also updates a shared `statistics.txt` file with:
 

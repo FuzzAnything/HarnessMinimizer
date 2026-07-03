@@ -14,4 +14,5 @@ dynamic_slicing_work
 statistics-pch
 statistics-direct
 statistics-split
+check-level-stack
 benchmark.tar.gz

@@ -88,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
             "rest of the pipeline."
         ),
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Insight-only mode: record the first entire stack trace and its frame "
+            "count, then run tree reduction with symbolize=1 for every candidate "
+            "while tracking how often frame count and full stack trace stay the same."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -131,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         iteration=args.iteration,
         statistics=args.statistics,
         slice_enabled=args.slice,
+        check=args.check,
     )
     result = reduce_with_config(config)
     if not result.success:

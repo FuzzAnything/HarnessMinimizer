@@ -1,7 +1,17 @@
 harnessreducer harness.cpp \
   --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
   --link-flags "$(pwd)/build/sanitizer/lib/libaom.a" \
-  --work-dir ./statistics \
+  --work-dir ./check-level-stack \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --check \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "$(pwd)/build/sanitizer/lib/libaom.a" \
+  --work-dir ./statistics-pch \
   --crash-input crash-input \
   --pch \
   --stable \
