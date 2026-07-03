@@ -163,7 +163,6 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             stable=False,
             phase3_mode="direct",
-            iteration=None,
             statistics=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
@@ -176,7 +175,6 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             123,
             phase3_mode="direct",
-            iteration=None,
         )
         mock_check.assert_called_once()
 

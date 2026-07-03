@@ -58,8 +58,6 @@ The main workflow lives in `src/harnessreducer/api.py`.
 - `configure_work_dir()` creates a temp directory unless `--work-dir` is provided.
 - `reset_stack_trace_state()` deletes stale stack-trace state from previous runs:
   - `stack_trace.pattern`
-  - `stack_trace.counter`
-  - `stack_trace.backup.cpp`
 
 ### 2. Pre-flight checks
 
@@ -216,8 +214,7 @@ Important options:
 - `--fast` by default
 - `--stable --min-reduction 1` when stable mode is requested
 - `--fdp-trace <trace>` always passed during tree reduction so replay mode is active
-- optional periodic stack-trace validation wired through `--iteration`
-- optional return-code statistics wired through `--statistics` when `iteration is None`
+- optional return-code statistics wired through `--statistics`
 
 Phase 3 reduction-loop modes currently are:
 
@@ -233,15 +230,7 @@ When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction 
 
 `format_reduced_harness()` runs `clang-format -i --style=LLVM`.
 
-### 10. Final stack-trace checkpoint after tree reduction
-
-If `iteration` is enabled:
-
-- `validate_stack_trace()` runs a forced symbolized check on the reduced harness
-- if it fails and `stack_trace.backup.cpp` exists, that backup is restored
-- otherwise the current reduced harness is kept with a warning
-
-### 11. FDP literal inlining
+### 10. FDP literal inlining
 
 `inline_literals_in_reduced_harness()`:
 
@@ -253,7 +242,7 @@ If `iteration` is enabled:
 
 If validation fails, it falls back to the tree-reduced harness.
 
-### 12. Optional LLM cleanup
+### 11. Optional LLM cleanup
 
 If `use_llm=True`, `apply_llm_reduction()` performs a final semantic cleanup and validates the result. On failure, it falls back to the non-LLM harness.
 
@@ -266,7 +255,7 @@ HarnessReducer currently uses a layered notion of “same crash”:
 1. sanitizer exit code must be `77`
 2. crash output must match the extracted crash regex
 3. the first stack trace must have the same frame depth as the original run
-4. when symbolized stack checking is active, the pre-harness stack trace must also match `stack_trace.pattern`
+4. when a symbolized validation path is used, the pre-harness stack trace must also match `stack_trace.pattern`
 
 The crash regex catches the same broad bug type. The stack-depth check adds a cheap structural guard for every candidate. The symbolized stack-trace check catches deeper drift in crash location or call path.
 
@@ -305,33 +294,11 @@ PCH mode is prepared by `prepare_phase3_pch_harness()` and restored afterward by
 
 Most candidate checks use `symbolize=0` for speed, but still require the first-stack-trace depth to match the original run.
 
-If `--iteration` is supplied and stack-trace state exists, `crash_tester.py` periodically switches to `symbolize=1` and additionally compares the pre-harness stack trace against `stack_trace.pattern`.
-
-The effective interval adapts based on source line count:
-
-- `SMALL_HARNESS_LINE_THRESHOLD = 75`
-- `TINY_HARNESS_LINE_THRESHOLD = 50`
-- `SMALL_HARNESS_ITERATION = 10`
-- `TINY_HARNESS_ITERATION = 1`
-
-These constants are currently hardcoded in `tests/crash_tester.py`.
-
-### Backups
-
-On a successful symbolized checkpoint:
-
-- the candidate source is copied to `stack_trace.backup.cpp`
-
-If a symbolized checkpoint fails:
-
-- the candidate is reported “not interesting”
-- `treereduce-c` rejects it
-
-After tree reduction, the API performs one final explicit stack-trace check and may restore the backup.
+Explicit deeper validation paths such as `validate_stack_trace()` force `symbolize=1` and additionally compare the pre-harness stack trace against `stack_trace.pattern`.
 
 ### 9. Optional tree-reduction statistics
 
-If `statistics=True` and `iteration is None`, `run_treereducer()` passes a `--statistics-file` argument to `tests/crash_tester.py`.
+If `statistics=True`, `run_treereducer()` passes a `--statistics-file` argument to `tests/crash_tester.py`.
 
 During the `treereduce-c` run, `crash_tester.py` records the logical result of each candidate check:
 
@@ -340,8 +307,6 @@ During the `treereduce-c` run, `crash_tester.py` records the logical result of e
 - `-1` — candidate failed to compile or link
 
 The aggregated counts and probabilities are written to `statistics.txt` in the work directory.
-
-This feature is intentionally disabled when `iteration` is enabled.
 
 ---
 
@@ -379,7 +344,6 @@ Main flags:
 - `--crash-input`
 - `--work-dir`
 - `--stable`
-- `--iteration`
 - `--statistics`
 - `--direct` / `--single-step`
 - `--split`
@@ -407,7 +371,6 @@ Important config fields:
 - `use_llm`
 - `stable`
 - `phase3_mode`
-- `iteration`
 
 ---
 
@@ -423,8 +386,6 @@ Typical work-dir files include:
 - `coverage_show.txt`
 - `coverage_export.json`
 - `stack_trace.pattern`
-- `stack_trace.counter`
-- `stack_trace.backup.cpp`
 - `fdp_trace.log`
 - `reduced_harness.cpp`
 - `*.inline.cpp`
@@ -437,6 +398,6 @@ Typical work-dir files include:
 
 - Dynamic slicing is deliberately conservative and syntax-aware.
 - Unknown coverage is treated as keep, not delete.
-- Crash-pattern matching alone is not considered strong enough; first-stack-trace depth is enforced on every candidate, and optional symbolized stack-trace checking adds a deeper guard.
+- Crash-pattern matching alone is not considered strong enough; first-stack-trace depth is enforced on every candidate, and symbolized stack-trace checking on deeper validation paths adds a stronger guard.
 - FDP replay is essential during tree reduction; otherwise reduced harnesses would often consume different bytes and diverge.
 - The tool prefers validated fallback over aggressive transformation.

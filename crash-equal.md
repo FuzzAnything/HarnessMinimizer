@@ -9,7 +9,7 @@ The current design combines:
 3. optional full-stack check-mode reference recording
 4. conservative dynamic slicing with source-based coverage
 5. fast crash-pattern checks during reduction
-6. optional periodic deep stack-trace checks
+6. explicit symbolize=1 stack-trace checks on selected validation paths
 7. FDP trace replay so remaining FDP calls observe the original values
 
 ---
@@ -227,7 +227,7 @@ It returns:
 - `1` → not interesting
 - `-1` → compile or link failure
 
-When optional statistics collection is enabled (and `--iteration` is not set), these logical return values are also counted and summarized in `statistics.txt` in the work directory.
+When optional statistics collection is enabled, these logical return values are also counted and summarized in `statistics.txt` in the work directory.
 
 ### 3.1 Candidate compilation modes
 
@@ -295,7 +295,7 @@ A candidate is considered crash-equivalent in the fast path only if:
 
 ### 3.3 Symbolized deep check
 
-When `--symbolize` is forced, or a periodic checkpoint fires, `crash_tester.py` reruns the candidate with `symbolize=1`.
+When `--symbolize` is forced, `crash_tester.py` reruns the candidate with `symbolize=1`.
 
 Then `_check_stack_trace()`:
 
@@ -334,78 +334,23 @@ If HarnessReducer enables `--statistics-file` for `crash_tester.py`, each candid
 - count of logical `-1` results
 - probability of each outcome over the total number of recorded candidate checks
 
-This mode is only used when `--iteration` is **not** set.
-
 ---
 
-## 4. Periodic Stack-Trace Validation During Tree Reduction
+## 4. Explicit Symbolized Validation Paths
 
-`--iteration N` enables periodic symbolized stack checks during tree reduction.
+Outside the normal fast reduction loop, HarnessReducer still has explicit symbolize=1 validation paths.
 
-### 4.1 Stored state
+These use `validate_stack_trace()` and therefore enforce:
 
-The mechanism uses files in the work directory:
+1. exit code `77`
+2. crash-pattern match
+3. first-stack-trace depth match
+4. pre-harness stack-trace match against `stack_trace.pattern` when that stored pattern exists
 
-- `stack_trace.pattern`
-- `stack_trace.counter`
-- `stack_trace.backup.cpp`
+This explicit path is used for:
 
-### 4.2 How the periodic check works
-
-When all of these are present:
-
-- `--iteration`
-- `--counter-file`
-- `--stack-trace-file`
-
-`crash_tester.py`:
-
-1. reads and increments the counter
-2. computes an effective interval based on current source line count
-3. every `effective_interval` invocations, switches to `symbolize=1`
-4. validates the stack trace against `stack_trace.pattern`
-5. if it matches, copies the candidate source to `stack_trace.backup.cpp`
-6. if it does not match, returns `1` so `treereduce-c` rejects the candidate
-
-### 4.3 Adaptive interval thresholds
-
-These values are currently hardcoded in `tests/crash_tester.py`:
-
-| Constant | Default |
-|---|---:|
-| `SMALL_HARNESS_LINE_THRESHOLD` | 75 |
-| `TINY_HARNESS_LINE_THRESHOLD` | 50 |
-| `SMALL_HARNESS_ITERATION` | 10 |
-| `TINY_HARNESS_ITERATION` | 1 |
-
-Meaning:
-
-- line count `>= 75` → use the user-provided base iteration
-- line count `< 75` and `>= 50` → use `10`
-- line count `< 50` → use `1`
-
-### 4.4 When `--iteration` is omitted
-
-If the user does **not** pass `--iteration`:
-
-- Phase 1 still records `stack_trace.pattern` and the original first-stack-trace depth
-- tree reduction uses the fast `symbolize=0` checks plus the stack-depth check
-- no periodic stack checks are performed
-- no counter/backup mechanism is used
-
-### 4.5 Final rollback after tree reduction
-
-After `treereduce-c` finishes, `api.py` performs one final explicit stack-trace validation if `iteration` was enabled.
-
-If the final reduced harness fails that validation:
-
-- and `stack_trace.backup.cpp` exists → restore the backup
-- otherwise → keep the current reduced harness with a warning
-
-So the intended guarantee is:
-
-- periodic checkpoints reject candidates with the wrong stack trace
-- the final output is rolled back to the last stack-trace-verified backup when needed
+- dynamic slicing acceptance
+- inline-harness validation
 
 ---
 
@@ -446,8 +391,6 @@ Crash equivalence is checked at multiple points:
 | Initial validation | crash pattern + first-stack-trace depth must match original harness |
 | Dynamic slicing acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | Tree reduction normal candidates | crash pattern + first-stack-trace depth |
-| Tree reduction periodic checkpoints | crash pattern + first-stack-trace depth + stack trace |
-| Post-tree final checkpoint | stack trace |
 | FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
 
@@ -466,8 +409,6 @@ This is supported by:
 
 - address normalization
 - source-based dynamic slicing with conservative keep rules
-- periodic deep validation during tree reduction
-- backup and rollback
 - FDP trace replay for deterministic candidate execution
 
 The overall philosophy is conservative: when a transform cannot be validated, HarnessReducer keeps the last known-good result rather than trying to force a more aggressive reduction.

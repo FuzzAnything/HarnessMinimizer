@@ -25,15 +25,15 @@ class TestCrashTesterStatistics(unittest.TestCase):
             self.assertIn("probability_1: 0.250000", text)
             self.assertIn("probability_-1: 0.250000", text)
 
-    def test_finalize_result_skips_statistics_when_iteration_is_set(self):
+    def test_finalize_result_updates_statistics_when_enabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             stats_path = Path(tmpdir) / "statistics.txt"
-            args = Namespace(statistics_file=str(stats_path), iteration=10)
+            args = Namespace(statistics_file=str(stats_path))
 
             result = crash_tester._finalize_result(args, 77)
 
             self.assertEqual(result, 77)
-            self.assertFalse(stats_path.exists())
+            self.assertTrue(stats_path.exists())
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.initialize_statistics_file")
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
-    def test_run_treereducer_adds_statistics_file_only_without_iteration(
+    def test_run_treereducer_adds_statistics_file_when_enabled(
         self,
         mock_run,
         mock_exists,
@@ -83,24 +83,6 @@ class TestReducerRunner(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--statistics-file", cmd)
         self.assertIn("/tmp/work/statistics.txt", cmd)
-
-        mock_run.reset_mock()
-        mock_initialize_statistics.reset_mock()
-
-        reducer_runner.run_treereducer(
-            harness_path="/tmp/in.cpp",
-            fdp_trace_file="/tmp/trace.log",
-            crash_pattern="AddressSanitizer",
-            compile_flags=None,
-            link_flags=None,
-            crash_input=None,
-            statistics=True,
-            iteration=100,
-        )
-
-        cmd = mock_run.call_args.args[0]
-        self.assertNotIn("--statistics-file", cmd)
-        mock_initialize_statistics.assert_not_called()
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
