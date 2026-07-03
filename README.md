@@ -5,6 +5,7 @@ It is designed for `FuzzedDataProvider`-based harnesses and combines:
 
 - crash-pattern preservation
 - optional stack-trace preservation
+- optional check-mode stack-trace insight collection
 - FDP trace dump/replay
 - tree-based reduction
 - conservative pre-reduction dynamic slicing
@@ -56,6 +57,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
+| `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and full first stack trace stay the same. |
 | `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
@@ -100,6 +102,24 @@ When enabled without `--iteration`, HarnessReducer records how many tree-reducer
 
 The counts and probabilities are written to `statistics.txt` in the work directory.
 
+### `--check`
+
+`--check` is a measurement-only mode for stack-trace drift during tree reduction.
+
+When enabled, HarnessReducer:
+
+- still records the normal crash pattern and truncated reference stack trace used by the main tool
+- additionally records the **first entire** stack trace from the original symbolized crash
+- counts its frame lines directly
+- runs every tree-reduction candidate with `symbolize=1`
+- if a candidate preserves the crash pattern, checks whether:
+  - the first entire stack trace has the same frame count (`level_same`)
+  - the **pre-harness** stack trace prefix matches the stored `stack_trace.pattern` (`stack_same`)
+- prints `level_same`, `stack_same`, and `stack_same / level_same`
+- writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
+
+This mode is for diagnostics only; it does not tighten the main interestingness condition beyond crash-pattern preservation.
+
 ### `--split`
 
 Uses a two-step compile/link path for the tree-reduction candidate-testing loop:
@@ -107,7 +127,7 @@ Uses a two-step compile/link path for the tree-reduction candidate-testing loop:
 - compile the full source file into an object
 - link the object into the executable
 - no PCH
-- uses `-O1 -gline-tables-only` like PCH mode
+- uses `-O0 -gline-tables-only` like PCH mode
 
 This is useful when you want separate compile and link stages without the include stripping / PCH machinery.
 
@@ -220,6 +240,15 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
+### 10. Inspect stack-trace stability during reduction
+
+```bash
+harnessreducer harness.cpp \
+  --crash-input crash-input \
+  --check \
+  -o reduced.cpp
+```
+
 ## Python API
 
 ```python
@@ -233,6 +262,7 @@ config = ReductionConfig(
     phase3_mode="pch",      # or "split" / "direct"
     iteration=100,            # optional
     statistics=False,         # optional
+    check=False,              # optional insight-only mode
     stable=False,
     use_llm=False,
 )
@@ -255,6 +285,7 @@ reduced = process(
     phase3_mode="direct",   # "single-step" alias is also accepted by the CLI
     iteration=100,
     statistics=False,
+    check=False,
 )
 ```
 

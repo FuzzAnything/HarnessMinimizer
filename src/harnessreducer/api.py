@@ -5,6 +5,12 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from harnessreducer.check_mode import (
+    emit_check_statistics_summary,
+    record_check_reference,
+    reset_check_state,
+    run_treereducer_with_check,
+)
 from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
@@ -61,6 +67,7 @@ class ReductionConfig:
     iteration: int | None = None
     statistics: bool = False
     slice_enabled: bool = False
+    check: bool = False
 
 
 @dataclass(frozen=True)
@@ -226,10 +233,16 @@ def inline_literals_in_reduced_harness(
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     reset_stack_trace_state()
+    reset_check_state()
     if config.statistics:
         reset_statistics_state()
         if config.iteration is not None:
             print("[*] Statistics collection is disabled when --iteration is set.")
+    if config.check:
+        if config.iteration is not None:
+            print("[*] --iteration is ignored during tree reduction when --check is set.")
+        if config.statistics:
+            print("[*] --statistics is ignored during tree reduction when --check is set.")
     validate_phase3_mode(config.phase3_mode)
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
@@ -248,6 +261,12 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
 
     print(f"[+] Extracted crash pattern: {crash_pattern}")
+    if config.check:
+        reference = record_check_reference(config.crash_input, crash_pattern)
+        print(
+            "[+] Recorded check reference: "
+            f"{reference.frame_count} frame(s) in the first entire stack trace."
+        )
     check_reducer_crash_pattern(
         config.harness_path,
         crash_pattern,
@@ -278,18 +297,31 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
     )
     fdp_trace_file = dump_fdp_trace(tagged_harness_bin, config.crash_input)
-    reduced_harness = run_treereducer(
-        tagged_harness_file,
-        fdp_trace_file,
-        crash_pattern,
-        config.compile_flags,
-        config.link_flags,
-        config.crash_input,
-        stable=config.stable,
-        phase3_mode=reduction_phase3_mode,
-        iteration=config.iteration,
-        statistics=config.statistics,
-    )
+    if config.check:
+        reduced_harness = run_treereducer_with_check(
+            tagged_harness_file,
+            fdp_trace_file,
+            crash_pattern,
+            config.compile_flags,
+            config.link_flags,
+            config.crash_input,
+            stable=config.stable,
+            phase3_mode=reduction_phase3_mode,
+        )
+        emit_check_statistics_summary()
+    else:
+        reduced_harness = run_treereducer(
+            tagged_harness_file,
+            fdp_trace_file,
+            crash_pattern,
+            config.compile_flags,
+            config.link_flags,
+            config.crash_input,
+            stable=config.stable,
+            phase3_mode=reduction_phase3_mode,
+            iteration=config.iteration,
+            statistics=config.statistics,
+        )
     format_reduced_harness(reduced_harness)
     # Final stack trace validation after tree reduction.
     if config.iteration is not None:
@@ -358,6 +390,7 @@ def process(
     iteration: int | None = None,
     statistics: bool = False,
     slice_enabled: bool = False,
+    check: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -370,6 +403,7 @@ def process(
         iteration=iteration,
         statistics=statistics,
         slice_enabled=slice_enabled,
+        check=check,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

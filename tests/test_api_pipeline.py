@@ -5,6 +5,78 @@ from harnessreducer.api import ReductionConfig, process, reduce_with_config
 
 
 class TestApiPipeline(unittest.TestCase):
+    @patch("harnessreducer.api.emit_check_statistics_summary")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.run_treereducer_with_check")
+    @patch("harnessreducer.api.record_check_reference")
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.reset_check_state")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_uses_check_mode_runner(
+        self,
+        mock_check_tree,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_reset_check_state,
+        mock_compile,
+        mock_dump,
+        mock_format,
+        mock_inline,
+        mock_record_check_reference,
+        mock_run_with_check,
+        mock_run_normal,
+        mock_emit_check_summary,
+    ):
+        mock_tag.return_value = "/tmp/tagged.cpp"
+        mock_compile.return_value = "/tmp/tagged.out"
+        mock_dump.return_value = "/tmp/fdp_trace.log"
+        mock_extract.return_value = "AddressSanitizer"
+        mock_run_with_check.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_record_check_reference.return_value = type(
+            "Reference",
+            (),
+            {"frame_count": 12},
+        )()
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+            check=True,
+        )
+
+        result = reduce_with_config(config)
+
+        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        mock_reset_check_state.assert_called_once_with()
+        mock_record_check_reference.assert_called_once_with("seed.bin", "AddressSanitizer")
+        mock_run_with_check.assert_called_once_with(
+            "/tmp/tagged.cpp",
+            "/tmp/fdp_trace.log",
+            "AddressSanitizer",
+            None,
+            None,
+            "seed.bin",
+            stable=False,
+            phase3_mode="direct",
+        )
+        mock_run_normal.assert_not_called()
+        mock_emit_check_summary.assert_called_once_with()
+
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")
     @patch("harnessreducer.api.run_treereducer")
