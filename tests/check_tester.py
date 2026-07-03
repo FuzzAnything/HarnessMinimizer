@@ -34,6 +34,7 @@ _crash_tester_spec.loader.exec_module(_crash_tester)
 compile_direct = _crash_tester.compile_direct
 compile_split = _crash_tester.compile_split
 compile_with_pch = _crash_tester.compile_with_pch
+update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
 def _evaluate_check_candidate(
@@ -80,6 +81,7 @@ def main() -> int:
     parser.add_argument("--check-statistics-file", type=str, required=True, help="Path to the check statistics file")
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
+    parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     args = parser.parse_args()
 
     pid = os.getpid()
@@ -154,6 +156,7 @@ def main() -> int:
         if not level_same:
             return 1
 
+        update_last_interesting_file(args.source, args.last_interesting_file)
         return 77
     finally:
         if object_path:

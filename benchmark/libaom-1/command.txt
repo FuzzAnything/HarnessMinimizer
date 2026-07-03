@@ -56,3 +56,8 @@ clang -g -O0 \
 reduced_harness.cpp \
 $(pwd)/../build/sanitizer/lib/libaom.a \
 -o harness
+
+crash_pattern_matched: True
+frame_count: 25
+level_same: True
+stack_same: True

@@ -57,6 +57,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("/tmp/trace.log", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
+        self.assertIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.reducer_runner.initialize_statistics_file")
     @patch("harnessreducer.reducer_runner.os.path.exists")

@@ -212,6 +212,21 @@ When `--check` is enabled, `run_treereducer_with_check()` is used instead. It sw
 
 At the end of tree reduction, the tool prints `level_same`, `stack_same`, and `stack_same / level_same`.
 It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory.
+Both `tests/crash_tester.py` and `tests/check_tester.py` also maintain a stable `last_interesting.cpp` snapshot by overwriting it only when a candidate returns `77` and its contents differ from the previous snapshot.
+
+### 8.1 Inline fallback strategy
+
+`inline_literals_in_reduced_harness()` still tries `reduced_harness.cpp` first:
+
+1. inline/replay FDP calls into `reduced_harness.inline.cpp`
+2. validate that inline result with `validate_stack_trace()`
+
+If that inline validation fails and `last_interesting.cpp` exists with different contents, the same inline/replay + validation flow is retried from the snapshot:
+
+3. inline/replay FDP calls into `last_interesting.inline.cpp`
+4. validate that inline result with `validate_stack_trace()`
+
+If the snapshot inline result also fails, the tool falls back to the snapshot base harness; otherwise it returns the validated snapshot inline harness.
 
 Important options:
 

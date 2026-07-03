@@ -35,6 +35,22 @@ class TestCrashTesterStatistics(unittest.TestCase):
             self.assertEqual(result, 77)
             self.assertTrue(stats_path.exists())
 
+    def test_update_last_interesting_file_copies_only_when_content_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "candidate.cpp"
+            snapshot = Path(tmpdir) / "last_interesting.cpp"
+
+            source.write_text("int a = 1;\n", encoding="utf-8")
+            crash_tester._update_last_interesting_file(str(source), str(snapshot))
+            first_mtime = snapshot.stat().st_mtime_ns
+
+            crash_tester._update_last_interesting_file(str(source), str(snapshot))
+            self.assertEqual(snapshot.stat().st_mtime_ns, first_mtime)
+
+            source.write_text("int a = 2;\n", encoding="utf-8")
+            crash_tester._update_last_interesting_file(str(source), str(snapshot))
+            self.assertEqual(snapshot.read_text(encoding="utf-8"), "int a = 2;\n")
+
 
 if __name__ == "__main__":
     unittest.main()

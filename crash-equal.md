@@ -330,6 +330,7 @@ At the end of reduction, HarnessReducer reports:
 - `stack_same / level_same`
 
 It also writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual review.
+Like the normal oracle, it also updates `last_interesting.cpp` only when a candidate returns `77` and its contents differ from the previous snapshot.
 
 ### 3.5 Optional return-code statistics
 
@@ -399,6 +400,8 @@ Crash equivalence is checked at multiple points:
 | Tree reduction normal candidates | crash pattern + first-stack-trace depth |
 | FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
+
+During both normal and `--check` tree reduction, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp`. If inline validation of `reduced_harness.inline.cpp` fails later, HarnessReducer retries the same inline/replay + validation flow from that snapshot before giving up.
 
 ---
 
