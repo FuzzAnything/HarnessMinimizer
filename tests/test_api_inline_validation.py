@@ -1,5 +1,5 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from harnessreducer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
 from harnessreducer.fdp_transform import InlineResult, InlineSkip
@@ -14,12 +14,7 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=InlineResult(source="int y = 1;\n", replaced=1),
-    ), patch("harnessreducer.api.get_crash_tester_path", return_value="/tmp/crash_tester.py"), patch(
-        "harnessreducer.api.run_command"
-    ) as mock_run:
-        proc = MagicMock()
-        proc.returncode = 77
-        mock_run.return_value = proc
+    ), patch("harnessreducer.api.validate_stack_trace", return_value=True):
 
         out = inline_literals_in_reduced_harness(
             str(reduced),
@@ -49,12 +44,7 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
-    ), patch("harnessreducer.api.get_crash_tester_path", return_value="/tmp/crash_tester.py"), patch(
-        "harnessreducer.api.run_command"
-    ) as mock_run:
-        proc = MagicMock()
-        proc.returncode = 1
-        mock_run.return_value = proc
+    ), patch("harnessreducer.api.validate_stack_trace", return_value=False):
 
         out = inline_literals_in_reduced_harness(
             str(reduced),
@@ -97,12 +87,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.get_crash_tester_path", return_value="/tmp/crash_tester.py"), patch(
-        "harnessreducer.api.run_command"
-    ) as mock_run:
-        proc = MagicMock()
-        proc.returncode = 77
-        mock_run.return_value = proc
+    ), patch("harnessreducer.api.validate_stack_trace", return_value=True):
 
         inline_literals_in_reduced_harness(
             str(reduced),
@@ -172,17 +157,20 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
+    def _write_failure_log(*args, **kwargs) -> bool:
+        Path(kwargs["validation_log_path"]).write_text(
+            "returncode: 1\n===== stdout =====\ncompile or run stdout\n===== stderr =====\ncompile or run stderr\n",
+            encoding="utf-8",
+        )
+        return False
+
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
-    ), patch("harnessreducer.api.get_crash_tester_path", return_value="/tmp/crash_tester.py"), patch(
-        "harnessreducer.api.run_command"
-    ) as mock_run:
-        proc = MagicMock()
-        proc.returncode = 1
-        proc.stdout = "compile or run stdout\n"
-        proc.stderr = "compile or run stderr\n"
-        mock_run.return_value = proc
+    ), patch(
+        "harnessreducer.api.validate_stack_trace",
+        side_effect=_write_failure_log,
+    ):
 
         out = inline_literals_in_reduced_harness(
             str(reduced),

@@ -523,6 +523,54 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
 
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_stack_trace_without_stored_pattern_still_runs(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            set_reference_stack_depth(6)
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+
+            ok = validate_stack_trace(
+                "candidate.cpp",
+                "AddressSanitizer",
+                "seed.bin",
+                "-O2",
+                "-lm",
+            )
+
+            self.assertTrue(ok)
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--symbolize", cmd)
+            self.assertIn("--stack-depth", cmd)
+            self.assertNotIn("--stack-trace-file", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_stack_trace_writes_failure_log_when_requested(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            set_reference_stack_depth(6)
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = "oops stdout\n"
+            mock_run.return_value.stderr = "oops stderr\n"
+            log_path = Path(tmpdir) / "validation.log"
+
+            ok = validate_stack_trace(
+                "candidate.cpp",
+                "AddressSanitizer",
+                "seed.bin",
+                "-O2",
+                "-lm",
+                validation_log_path=str(log_path),
+            )
+
+            self.assertFalse(ok)
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("returncode: 1", log_text)
+            self.assertIn("oops stdout", log_text)
+            self.assertIn("oops stderr", log_text)
+
 
 if __name__ == "__main__":
     unittest.main()

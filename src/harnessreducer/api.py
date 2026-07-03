@@ -14,9 +14,7 @@ from harnessreducer.check_mode import (
 from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
-    get_crash_tester_path,
     apply_coverage_guided_slice,
-    run_command,
     check_reducer_crash_pattern,
     check_tree_reducer,
     extract_crash_pattern_from_output,
@@ -26,16 +24,12 @@ from harnessreducer.reducer_runner import (
     dump_fdp_trace,
     format_reduced_harness,
     get_work_dir,
-    pch_tester_args,
-    prepare_phase3_pch_harness,
     reset_statistics_state,
     reset_stack_trace_state,
     run_treereducer,
-    stack_depth_tester_args,
     validate_phase3_mode,
     validate_stack_trace,
     get_stack_trace_backup_file,
-    stack_trace_tester_args,
 )
 
 ADDITIONAL_HEADERS = [
@@ -109,24 +103,6 @@ def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
     return reduced_harness_path
 
 
-def _write_inline_validation_failure_artifact(
-    inline_harness_path: str,
-    proc_returncode: int,
-    stdout: str,
-    stderr: str,
-) -> str:
-    artifact_path = f"{inline_harness_path}.validation.log"
-    artifact = (
-        f"returncode: {proc_returncode}\n"
-        "===== stdout =====\n"
-        f"{stdout}"
-        "\n===== stderr =====\n"
-        f"{stderr}"
-    )
-    Path(artifact_path).write_text(artifact, encoding="utf-8")
-    return artifact_path
-
-
 def inline_literals_in_reduced_harness(
     reduced_harness_path: str,
     fdp_trace_file: str,
@@ -184,33 +160,17 @@ def inline_literals_in_reduced_harness(
         return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
     print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
-    validate_phase3_mode(phase3_mode)
-    pch_artifacts = None
-    validation_source = inline_harness_path
-    if phase3_mode == "pch":
-        pch_artifacts = prepare_phase3_pch_harness(
-            inline_harness_path,
-            compile_flags,
-            use_replay=True,
-        )
-        validation_source = pch_artifacts.body_source
-
-    cmd = [
-        get_crash_tester_path(),
-        validation_source,
+    validation_log_path = f"{inline_harness_path}.validation.log"
+    if validate_stack_trace(
+        inline_harness_path,
         crash_pattern,
-        "--crash-input",
-        crash_input or "",
-        f"--compile-flags={compile_flags or ''}",
-        f"--link-flags={link_flags or ''}",
-        "--fdp-trace",
-        fdp_trace_file,
-    ]
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
-    cmd.extend(stack_depth_tester_args())
-    cmd.extend(stack_trace_tester_args(iteration))
-    proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
-    if proc.returncode == 77:
+        crash_input,
+        compile_flags,
+        link_flags,
+        fdp_trace_file=fdp_trace_file,
+        phase3_mode=phase3_mode,
+        validation_log_path=validation_log_path,
+    ):
         print("[+] Inline reduction preserved crash behavior.")
         inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
         cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
@@ -219,15 +179,9 @@ def inline_literals_in_reduced_harness(
             print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
         return inline_harness_path, tuple(generated_headers)
 
-    artifact_path = _write_inline_validation_failure_artifact(
-        inline_harness_path,
-        proc.returncode,
-        proc.stdout,
-        proc.stderr,
-    )
     print(
         "[-] Inline reduction failed to preserve crash behavior. Falling back to tree-reduced harness. "
-        f"Validation log: {artifact_path}"
+        f"Validation log: {validation_log_path}"
     )
     return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 

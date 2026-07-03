@@ -177,14 +177,12 @@ class TestReducerRunner(unittest.TestCase):
             self.assertIn("count_-1: 0", text)
 
     @patch("harnessreducer.reducer_runner.validate_stack_trace")
-    @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
     @patch("harnessreducer.reducer_runner.compile_coverage_harness")
     def test_apply_coverage_guided_slice_returns_sliced_path_on_validation_success(
         self,
         mock_compile_cov,
         mock_collect_cov,
-        mock_check_pattern,
         mock_validate_trace,
     ):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,18 +217,15 @@ class TestReducerRunner(unittest.TestCase):
             self.assertTrue(out.endswith(".sliced.cpp"))
             self.assertTrue(Path(out).exists())
             self.assertNotIn("else", Path(out).read_text(encoding="utf-8"))
-            mock_check_pattern.assert_called_once()
             mock_validate_trace.assert_called_once()
 
     @patch("harnessreducer.reducer_runner.validate_stack_trace")
-    @patch("harnessreducer.reducer_runner.check_reducer_crash_pattern")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
     @patch("harnessreducer.reducer_runner.compile_coverage_harness")
     def test_apply_coverage_guided_slice_falls_back_on_stack_trace_mismatch(
         self,
         mock_compile_cov,
         mock_collect_cov,
-        mock_check_pattern,
         mock_validate_trace,
     ):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -263,7 +258,6 @@ class TestReducerRunner(unittest.TestCase):
             )
 
             self.assertEqual(out, str(source_path))
-            mock_check_pattern.assert_called_once()
             mock_validate_trace.assert_called_once()
 
 
