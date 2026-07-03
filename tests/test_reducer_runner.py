@@ -18,6 +18,7 @@ class TestReducerRunner(unittest.TestCase):
     def setUp(self):
         reducer_runner.TREEDUCER_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
+        reducer_runner.set_reference_stack_depth(None)
 
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_command_success(self, mock_run):
@@ -36,6 +37,7 @@ class TestReducerRunner(unittest.TestCase):
     def test_run_treereducer_sets_env(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
+        reducer_runner.set_reference_stack_depth(12)
 
         out = reducer_runner.run_treereducer(
             harness_path="/tmp/in.cpp",
@@ -52,6 +54,8 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--link-flags=-lm", cmd)
         self.assertIn("--fdp-trace", cmd)
         self.assertIn("/tmp/trace.log", cmd)
+        self.assertIn("--stack-depth", cmd)
+        self.assertIn("12", cmd)
 
     @patch("harnessreducer.reducer_runner.initialize_statistics_file")
     @patch("harnessreducer.reducer_runner.os.path.exists")

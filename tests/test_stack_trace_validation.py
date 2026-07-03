@@ -14,13 +14,18 @@ from harnessreducer.reducer_runner import (
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
+    count_first_stack_trace_frames,
     extract_crash_pattern_from_output,
+    extract_first_sanitizer_stack_trace,
     extract_stack_trace,
+    get_reference_stack_depth,
     normalize_crash_signature,
     get_stack_trace_file,
     get_stack_trace_counter_file,
     get_stack_trace_backup_file,
     reset_stack_trace_state,
+    set_reference_stack_depth,
+    stack_depth_tester_args,
     stack_trace_tester_args,
     validate_stack_trace,
     configure_work_dir,
@@ -100,9 +105,24 @@ SAMPLE_ASAN_OUTPUT_WITH_HELPER = """\
 SUMMARY: AddressSanitizer: heap-buffer-overflow /src/lib.c:10:3 in crash_func
 """
 
+SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED = """\
+=================================================================
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000034
+    #0 0xaaa1  (/tmp/poc.out+0x111)
+    #1 0xbbb2  (/tmp/poc.out+0x222)
+    #2 0xccc3  (/tmp/poc.out+0x333)
+
+allocated by thread T0 here:
+    #0 0xddd4  (/tmp/poc.out+0x444)
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/poc.out+0x111)
+"""
+
 
 class TestStackFramePattern(unittest.TestCase):
     """Test the STACK_FRAME_PATTERN and LLVMFuzzerTestOneInput_PATTERN regexes."""
+
+    def setUp(self):
+        set_reference_stack_depth(None)
 
     def test_matches_standard_frame(self):
         line = "    #0 0x5ea4dfe78fe6 in av1_one_pass_cbr_svc_start_layer /root/src/file.c:444:18"
@@ -184,6 +204,20 @@ class TestExtractStackTrace(unittest.TestCase):
             harness_path="/tmp/case/custom_harness.cpp",
         )
         self.assertEqual(result_runner, result_tester)
+
+    def test_extract_first_sanitizer_stack_trace_supports_unsymbolized_output(self):
+        self.assertEqual(
+            extract_first_sanitizer_stack_trace(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED),
+            "    #0 0xaaa1  (/tmp/poc.out+0x111)\n"
+            "    #1 0xbbb2  (/tmp/poc.out+0x222)\n"
+            "    #2 0xccc3  (/tmp/poc.out+0x333)",
+        )
+
+    def test_count_first_stack_trace_frames_supports_unsymbolized_output(self):
+        self.assertEqual(
+            count_first_stack_trace_frames(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED),
+            3,
+        )
 
 
 class TestNormalizeCrashSignature(unittest.TestCase):
@@ -415,6 +449,19 @@ class TestStackTraceTesterArgs(unittest.TestCase):
             self.assertIn("--iteration", result)
             self.assertIn("100", result)
 
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = SAMPLE_ASAN_OUTPUT
+            mock_run.return_value.stderr = ""
+
+            extract_crash_pattern_from_output(None, harness_path="harness.cpp")
+
+            self.assertEqual(get_reference_stack_depth(), 6)
+            self.assertEqual(stack_depth_tester_args(), ["--stack-depth", "6"])
+
 
 class TestStackTraceStateManagement(unittest.TestCase):
     def test_reset_stack_trace_state_removes_artifacts(self):
@@ -451,6 +498,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
+            set_reference_stack_depth(6)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
             mock_run.return_value.returncode = 77
             mock_run.return_value.stdout = ""
@@ -471,6 +519,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--link-flags=-lm", cmd)
             self.assertIn("--symbolize", cmd)
             self.assertIn("--stack-trace-file", cmd)
+            self.assertIn("--stack-depth", cmd)
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
 

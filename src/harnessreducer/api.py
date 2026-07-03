@@ -31,6 +31,7 @@ from harnessreducer.reducer_runner import (
     reset_statistics_state,
     reset_stack_trace_state,
     run_treereducer,
+    stack_depth_tester_args,
     validate_phase3_mode,
     validate_stack_trace,
     get_stack_trace_backup_file,
@@ -206,6 +207,7 @@ def inline_literals_in_reduced_harness(
         fdp_trace_file,
     ]
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(stack_depth_tester_args())
     cmd.extend(stack_trace_tester_args(iteration))
     proc = run_command(cmd, "Inline reduction validation failed.", ignore_errors=True)
     if proc.returncode == 77:

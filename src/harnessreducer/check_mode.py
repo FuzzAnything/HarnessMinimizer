@@ -13,6 +13,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_PCH,
     PchArtifacts,
     STACK_FRAME_PATTERN,
+    extract_first_sanitizer_stack_trace,
     get_project_root,
     get_work_dir,
     normalize_crash_signature,
@@ -77,17 +78,7 @@ def reset_check_state() -> None:
 
 
 def extract_first_entire_stack_trace(output: str) -> str | None:
-    frames: list[str] = []
-    in_first_trace = False
-    for line in output.splitlines():
-        if STACK_FRAME_PATTERN.match(line):
-            in_first_trace = True
-            frames.append(line)
-        elif in_first_trace:
-            break
-    if not frames:
-        return None
-    return "\n".join(frames)
+    return extract_first_sanitizer_stack_trace(output)
 
 
 def count_stack_trace_frames(stack_trace: str | None) -> int:

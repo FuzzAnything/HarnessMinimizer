@@ -76,11 +76,12 @@ The main workflow lives in `src/harnessreducer/api.py`.
 
 - extracts a crash pattern using a prioritized regex chain
 - extracts the first symbolized stack trace
+- counts the frame lines of the first entire stack trace
 - truncates the trace before the harness frame (preferred) or `LLVMFuzzerTestOneInput` (fallback)
 - normalizes the trace with `normalize_crash_signature(..., escape=True)`
 - stores it in `stack_trace.pattern`
 
-The crash pattern is intentionally coarse enough to tolerate cosmetic changes, while the stored stack trace is used for deeper equivalence checking.
+The crash pattern is intentionally coarse enough to tolerate cosmetic changes. The recorded stack depth is used in all normal candidate checks, while the stored stack-trace pattern is used for deeper symbolized equivalence checking.
 
 When `--check` is enabled, the tool also performs a second reference capture pass that:
 
@@ -90,7 +91,7 @@ When `--check` is enabled, the tool also performs a second reference capture pas
 
 ### 4. Validate the extracted crash pattern
 
-`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted pattern is valid before reduction proceeds.
+`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted pattern and recorded first-stack-trace depth are valid before reduction proceeds.
 
 ### 5. Dynamic slicing (coverage-guided pre-slice)
 
@@ -262,9 +263,10 @@ HarnessReducer currently uses a layered notion of “same crash”:
 
 1. sanitizer exit code must be `77`
 2. crash output must match the extracted crash regex
-3. when symbolized stack checking is active, the first stack trace must match `stack_trace.pattern`
+3. the first stack trace must have the same frame depth as the original run
+4. when symbolized stack checking is active, the pre-harness stack trace must also match `stack_trace.pattern`
 
-The crash regex catches the same broad bug type. The stack-trace check catches drift in crash location or call path.
+The crash regex catches the same broad bug type. The stack-depth check adds a cheap structural guard for every candidate. The symbolized stack-trace check catches deeper drift in crash location or call path.
 
 ### Pattern extraction priority
 
@@ -299,9 +301,9 @@ PCH mode is prepared by `prepare_phase3_pch_harness()` and restored afterward by
 
 ### Fast vs symbolized checks
 
-Most candidate checks use `symbolize=0` for speed.
+Most candidate checks use `symbolize=0` for speed, but still require the first-stack-trace depth to match the original run.
 
-If `--iteration` is supplied and stack-trace state exists, `crash_tester.py` periodically switches to `symbolize=1`.
+If `--iteration` is supplied and stack-trace state exists, `crash_tester.py` periodically switches to `symbolize=1` and additionally compares the pre-harness stack trace against `stack_trace.pattern`.
 
 The effective interval adapts based on source line count:
 
@@ -331,7 +333,7 @@ If `statistics=True` and `iteration is None`, `run_treereducer()` passes a `--st
 
 During the `treereduce-c` run, `crash_tester.py` records the logical result of each candidate check:
 
-- `77` — candidate preserved the crash pattern
+- `77` — candidate preserved the crash pattern and first-stack-trace depth
 - `1` — candidate compiled but did not preserve the crash pattern
 - `-1` — candidate failed to compile or link
 
@@ -433,6 +435,6 @@ Typical work-dir files include:
 
 - Dynamic slicing is deliberately conservative and syntax-aware.
 - Unknown coverage is treated as keep, not delete.
-- Crash-pattern matching alone is not considered strong enough once the harness becomes very small; stack-trace checking addresses this.
+- Crash-pattern matching alone is not considered strong enough; first-stack-trace depth is enforced on every candidate, and optional symbolized stack-trace checking adds a deeper guard.
 - FDP replay is essential during tree reduction; otherwise reduced harnesses would often consume different bytes and diverge.
 - The tool prefers validated fallback over aggressive transformation.

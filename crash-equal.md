@@ -97,6 +97,8 @@ and saved to:
 
 This stored value is a regex pattern, not a raw stack dump.
 
+The same Phase 1 run also records the frame count of the **first entire** stack trace. That depth is kept in memory by the main reducer process and passed into `crash_tester.py` as a CLI argument for all normal candidate checks.
+
 When `--check` is enabled, HarnessReducer also records a second reference for measurement purposes:
 
 - the **first entire** stack trace, without truncation at the harness frame
@@ -292,6 +294,7 @@ A candidate is considered crash-equivalent in the fast path only if:
 
 1. exit code is `77`
 2. `re.search(crash_pattern, run_log)` succeeds
+3. the first stack trace has the same frame count as the original run
 
 ### 3.3 Symbolized deep check
 
@@ -388,8 +391,8 @@ Meaning:
 
 If the user does **not** pass `--iteration`:
 
-- Phase 1 still records `stack_trace.pattern`
-- tree reduction uses only the fast `symbolize=0` checks
+- Phase 1 still records `stack_trace.pattern` and the original first-stack-trace depth
+- tree reduction uses the fast `symbolize=0` checks plus the stack-depth check
 - no periodic stack checks are performed
 - no counter/backup mechanism is used
 
@@ -443,13 +446,13 @@ Crash equivalence is checked at multiple points:
 
 | Stage | Check |
 |---|---|
-| Initial validation | crash pattern must match original harness |
+| Initial validation | crash pattern + first-stack-trace depth must match original harness |
 | Dynamic slicing acceptance | crash pattern + stack trace |
-| Tree reduction normal candidates | crash pattern |
-| Tree reduction periodic checkpoints | crash pattern + stack trace |
+| Tree reduction normal candidates | crash pattern + first-stack-trace depth |
+| Tree reduction periodic checkpoints | crash pattern + first-stack-trace depth + stack trace |
 | Post-tree final checkpoint | stack trace |
-| FDP inline acceptance | crash pattern, plus periodic stack checks when enabled |
-| LLM acceptance | crash pattern, plus the normal validation path used there |
+| FDP inline acceptance | crash pattern + first-stack-trace depth, plus periodic stack checks when enabled |
+| LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
 
 ---
 
@@ -459,7 +462,8 @@ The current notion of “same crash” in HarnessReducer is:
 
 1. the transformed harness still crashes under sanitizers (`exit code 77`)
 2. the runtime output still matches the extracted crash regex
-3. when stack-trace validation is enabled, the first symbolized stack trace still matches the normalized reference trace
+3. the first stack trace still has the same frame count as the original run
+4. when stack-trace validation is enabled, the first symbolized pre-harness stack trace still matches the normalized reference trace
 
 This is supported by:
 
