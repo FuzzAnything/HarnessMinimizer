@@ -92,6 +92,9 @@ The counts and probabilities are written to `statistics.txt` in the work directo
 When enabled, HarnessReducer:
 
 - still records the normal crash pattern and truncated reference stack trace used by the main tool
+- records **two** reference stack depths for the main reducer:
+  - a fast-path depth from a `symbolize=0` run, used by normal candidate checks
+  - a symbolized depth from a `symbolize=1` run, used by slicing and inline crash-preservation validation
 - additionally records the **first entire** stack trace from the original symbolized crash
 - counts its frame lines directly
 - runs every tree-reduction candidate with `symbolize=1`
@@ -101,7 +104,7 @@ When enabled, HarnessReducer:
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
 
-This mode is for diagnostics only; it does not tighten the main interestingness condition beyond the normal crash-pattern + stack-depth preservation rule.
+This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths.
 
 ### `--split`
 

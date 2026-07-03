@@ -18,11 +18,13 @@ from harnessreducer.reducer_runner import (
     extract_crash_pattern_from_output,
     extract_first_sanitizer_stack_trace,
     extract_stack_trace,
-    get_reference_stack_depth,
+    get_normal_reference_stack_depth,
+    get_symbolized_reference_stack_depth,
     normalize_crash_signature,
     get_stack_trace_file,
     reset_stack_trace_state,
-    set_reference_stack_depth,
+    set_normal_reference_stack_depth,
+    set_symbolized_reference_stack_depth,
     stack_depth_tester_args,
     validate_stack_trace,
     configure_work_dir,
@@ -112,7 +114,8 @@ class TestStackFramePattern(unittest.TestCase):
     """Test the STACK_FRAME_PATTERN and LLVMFuzzerTestOneInput_PATTERN regexes."""
 
     def setUp(self):
-        set_reference_stack_depth(None)
+        set_normal_reference_stack_depth(None)
+        set_symbolized_reference_stack_depth(None)
 
     def test_matches_standard_frame(self):
         line = "    #0 0x5ea4dfe78fe6 in av1_one_pass_cbr_svc_start_layer /root/src/file.c:444:18"
@@ -314,14 +317,17 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
     def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
-            mock_run.return_value.returncode = 77
-            mock_run.return_value.stdout = SAMPLE_ASAN_OUTPUT
-            mock_run.return_value.stderr = ""
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT, "stderr": ""})(),
+            ]
 
             extract_crash_pattern_from_output(None, harness_path="harness.cpp")
 
-            self.assertEqual(get_reference_stack_depth(), 6)
-            self.assertEqual(stack_depth_tester_args(), ["--stack-depth", "6"])
+            self.assertEqual(get_normal_reference_stack_depth(), 3)
+            self.assertEqual(get_symbolized_reference_stack_depth(), 6)
+            self.assertEqual(stack_depth_tester_args(symbolized=False), ["--stack-depth", "3"])
+            self.assertEqual(stack_depth_tester_args(symbolized=True), ["--stack-depth", "6"])
 
 
 class TestStackTraceStateManagement(unittest.TestCase):
@@ -340,9 +346,10 @@ class TestStackTraceStateManagement(unittest.TestCase):
             configure_work_dir(tmpdir)
             trace_file = get_stack_trace_file()
             Path(trace_file).write_text("stale-pattern", encoding="utf-8")
-            mock_run.return_value.returncode = 77
-            mock_run.return_value.stdout = "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
-            mock_run.return_value.stderr = ""
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
+            ]
 
             pattern = extract_crash_pattern_from_output(None, harness_path="harness.cpp")
 
@@ -355,7 +362,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
-            set_reference_stack_depth(6)
+            set_symbolized_reference_stack_depth(6)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
             mock_run.return_value.returncode = 77
             mock_run.return_value.stdout = ""
@@ -384,7 +391,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
     def test_validate_stack_trace_without_stored_pattern_still_runs(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
-            set_reference_stack_depth(6)
+            set_symbolized_reference_stack_depth(6)
             mock_run.return_value.returncode = 77
             mock_run.return_value.stdout = ""
             mock_run.return_value.stderr = ""
@@ -407,7 +414,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
     def test_validate_stack_trace_writes_failure_log_when_requested(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
-            set_reference_stack_depth(6)
+            set_symbolized_reference_stack_depth(6)
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = "oops stdout\n"
             mock_run.return_value.stderr = "oops stderr\n"
