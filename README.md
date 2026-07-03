@@ -55,9 +55,9 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
-| `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, but reduction uses fast `symbolize=0` checks only. |
+| `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, and normal reduction uses fast `symbolize=0` checks plus first-stack-trace depth matching. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
-| `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and full first stack trace stay the same. |
+| `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
@@ -80,7 +80,10 @@ If `--slice` is omitted, this pre-pass is skipped entirely.
 
 Turns on deeper crash-equivalence checking during tree reduction:
 
-- HarnessReducer always records an initial reference stack trace.
+- HarnessReducer always records an initial reference stack trace and its first-stack-trace depth.
+- Even without `--iteration`, normal candidate checks require both:
+  - the crash pattern to match
+  - the first stack-trace depth to match
 - With `--iteration N`, `crash_tester.py` periodically reruns candidates with `symbolize=1` and compares the stack trace against that reference.
 - Matching candidates are backed up.
 - If the final reduced result no longer matches, the last backup is restored.
@@ -96,7 +99,7 @@ These thresholds are currently hardcoded in `tests/crash_tester.py`.
 
 When enabled without `--iteration`, HarnessReducer records how many tree-reducer candidate checks ended with:
 
-- `77` — interesting / crash preserved
+- `77` — candidate preserved the crash pattern and first-stack-trace depth
 - `1` — candidate compiled but did not preserve the target crash behavior
 - `-1` — candidate could not be compiled or linked
 
@@ -118,7 +121,7 @@ When enabled, HarnessReducer:
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
 
-This mode is for diagnostics only; it does not tighten the main interestingness condition beyond crash-pattern preservation.
+This mode is for diagnostics only; it does not tighten the main interestingness condition beyond the normal crash-pattern + stack-depth preservation rule.
 
 ### `--split`
 

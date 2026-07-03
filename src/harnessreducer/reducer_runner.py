@@ -39,10 +39,12 @@ SLICED_HARNESS_SUFFIX = ".sliced"
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 STACK_TRACE_COUNTER_FILE_NAME = "stack_trace.counter"
 STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"
+REFERENCE_STACK_DEPTH: int | None = None
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
 STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
+STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVM_COV_SHOW_LINE_PATTERN = re.compile(r"^\s*(\d+)\|\s*([^|]*)\|")
@@ -467,6 +469,43 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
         return None
     return "\n".join(frames)
 
+
+def extract_first_sanitizer_stack_trace(output: str) -> str | None:
+    """Extract the first contiguous sanitizer-style stack trace block.
+
+    This helper is used for frame-depth counting and does not truncate at
+    harness frames. It recognizes the common sanitizer frame shape
+    ``#N 0x...`` and therefore works for both symbolized and unsymbolized
+    sanitizer output, including ASan and UBSan traces that use that format.
+    """
+    frames: list[str] = []
+    in_first_trace = False
+    for line in output.splitlines():
+        if STACK_FRAME_COUNT_PATTERN.match(line):
+            in_first_trace = True
+            frames.append(line)
+        elif in_first_trace:
+            break
+    if not frames:
+        return None
+    return "\n".join(frames)
+
+
+def count_first_stack_trace_frames(output: str) -> int:
+    trace = extract_first_sanitizer_stack_trace(output)
+    if not trace:
+        return 0
+    return sum(1 for line in trace.splitlines() if STACK_FRAME_COUNT_PATTERN.match(line))
+
+
+def set_reference_stack_depth(depth: int | None) -> None:
+    global REFERENCE_STACK_DEPTH
+    REFERENCE_STACK_DEPTH = depth
+
+
+def get_reference_stack_depth() -> int | None:
+    return REFERENCE_STACK_DEPTH
+
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
@@ -483,6 +522,7 @@ def get_statistics_file() -> str:
 
 def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
+    set_reference_stack_depth(None)
     for path in (
         get_stack_trace_file(),
         get_stack_trace_counter_file(),
@@ -744,7 +784,15 @@ def extract_crash_pattern_from_output(
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
+        set_reference_stack_depth(None)
         return None
+
+    reference_stack_depth = count_first_stack_trace_frames(output)
+    set_reference_stack_depth(reference_stack_depth or None)
+    if reference_stack_depth:
+        print(f"[+] Recorded first stack trace depth: {reference_stack_depth}")
+    else:
+        print("[!] No stack-trace frames found for reference depth extraction.")
 
     # Extract and save the first stack trace (normalized) for periodic validation.
     raw_stack_trace = extract_stack_trace(output, harness_path=harness_path)
@@ -834,6 +882,7 @@ def check_reducer_crash_pattern(
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
     ]
+    cmd.extend(stack_depth_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
     if proc.returncode != 77:
@@ -936,6 +985,7 @@ def run_treereducer(
         "--fdp-trace", fdp_trace_file,
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(stack_depth_tester_args())
     cmd.extend(stack_trace_tester_args(iteration))
     if statistics and iteration is None:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
@@ -979,6 +1029,13 @@ def stack_trace_tester_args(
     args.extend(["--counter-file", get_stack_trace_counter_file()])
     args.extend(["--backup-file", get_stack_trace_backup_file()])
     return args
+
+
+def stack_depth_tester_args() -> list[str]:
+    depth = get_reference_stack_depth()
+    if depth is None:
+        return []
+    return ["--stack-depth", str(depth)]
 
 
 def validate_stack_trace(
@@ -1025,6 +1082,7 @@ def validate_stack_trace(
         "--symbolize",  # force symbolize=1 for this check
         "--stack-trace-file", stack_trace_file,
     ]
+    cmd.extend(stack_depth_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))

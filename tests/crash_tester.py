@@ -27,6 +27,7 @@ from harnessreducer.reducer_runner import (
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
+    count_first_stack_trace_frames,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
@@ -347,6 +348,7 @@ def main() -> int:
     # Stack trace validation arguments
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--iteration", type=int, default=None, help="Base iteration interval for periodic symbolize=1 checks")
     parser.add_argument("--counter-file", type=str, default=None, help="Path to the counter file tracking invocation count")
     parser.add_argument("--backup-file", type=str, default=None, help="Path to save source backup on successful stack trace check")
@@ -409,6 +411,15 @@ def main() -> int:
         if status != 77 or re.search(args.crash_pattern, run_log) is None:
             print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
             return _finalize_result(args, 1)
+
+        if args.stack_depth is not None:
+            candidate_stack_depth = count_first_stack_trace_frames(run_log)
+            if candidate_stack_depth != args.stack_depth:
+                print(
+                    "Stack depth did not match. "
+                    f"Expected {args.stack_depth}, got {candidate_stack_depth}."
+                )
+                return _finalize_result(args, 1)
 
         # Crash pattern matched.  If symbolized, also validate stack trace.
         if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
