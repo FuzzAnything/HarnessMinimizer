@@ -202,10 +202,7 @@ Currently implemented rules:
 
 ### 2.5 Validation and fallback
 
-A sliced harness candidate is accepted only if both checks pass:
-
-1. `check_reducer_crash_pattern()`
-2. `validate_stack_trace()`
+A sliced harness candidate is accepted only if `validate_stack_trace()` passes.
 
 If slicing fails at any point, the tool falls back to the original harness and continues.
 
@@ -447,11 +444,11 @@ Crash equivalence is checked at multiple points:
 | Stage | Check |
 |---|---|
 | Initial validation | crash pattern + first-stack-trace depth must match original harness |
-| Dynamic slicing acceptance | crash pattern + stack trace |
+| Dynamic slicing acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | Tree reduction normal candidates | crash pattern + first-stack-trace depth |
 | Tree reduction periodic checkpoints | crash pattern + first-stack-trace depth + stack trace |
 | Post-tree final checkpoint | stack trace |
-| FDP inline acceptance | crash pattern + first-stack-trace depth, plus periodic stack checks when enabled |
+| FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
 
 ---

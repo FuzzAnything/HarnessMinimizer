@@ -72,7 +72,7 @@ Enables the optional dynamic-slicing pre-pass:
 - builds a separate source-coverage binary
 - identifies uncovered executable regions
 - tries a conservative syntax-preserving pre-slice
-- validates the sliced result before continuing
+- validates the sliced result with the same symbolize=1 crash-preservation check used for deeper stack-trace validation before continuing
 
 If `--slice` is omitted, this pre-pass is skipped entirely.
 
@@ -312,5 +312,5 @@ During reduction, the work directory may also contain artifacts such as:
 ## Notes
 
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If inline validation fails, the tool falls back to the tree-reduced harness.
+- If inline validation fails, the tool falls back to the tree-reduced harness. Inline validation now uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
 - If LLM validation fails, the tool falls back to the non-LLM harness.

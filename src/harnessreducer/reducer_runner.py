@@ -741,14 +741,6 @@ def apply_coverage_guided_slice(
         sliced_path = Path(get_work_dir()) / f"{source_path.stem}{SLICED_HARNESS_SUFFIX}{source_path.suffix or '.cpp'}"
         sliced_path.write_text(slice_result.source, encoding="utf-8")
 
-        check_reducer_crash_pattern(
-            str(sliced_path),
-            crash_pattern,
-            crash_input,
-            compile_flags,
-            link_flags,
-            phase3_mode=phase3_mode,
-        )
         if not validate_stack_trace(
             str(sliced_path),
             crash_pattern,
@@ -757,7 +749,7 @@ def apply_coverage_guided_slice(
             link_flags,
             phase3_mode=phase3_mode,
         ):
-            print("[!] Coverage-guided slicing changed the stack trace. Falling back to the original harness.")
+            print("[!] Coverage-guided slicing failed crash-preservation validation. Falling back to the original harness.")
             return harness_path
 
         print(
@@ -1046,20 +1038,24 @@ def validate_stack_trace(
     link_flags: str | None,
     fdp_trace_file: str | None = None,
     phase3_mode: str = PHASE3_DIRECT,
+    validation_log_path: str | None = None,
 ) -> bool:
-    """Run a symbolize=1 check and compare the stack trace against the stored pattern.
+    """Run a symbolize=1 crash-preservation check.
 
-    Returns True if the stack trace matches (or no stored pattern exists).
+    This always validates crash pattern preservation and first-stack-trace
+    depth. When a stored non-empty ``stack_trace.pattern`` exists, it also
+    validates the pre-harness stack trace against that pattern.
     """
     stack_trace_file = get_stack_trace_file()
+    stack_trace_arg: list[str] = []
     if not os.path.exists(stack_trace_file):
-        print("[*] No stored stack trace pattern; skipping stack trace validation.")
-        return True
-
-    stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8")
-    if not stored_pattern.strip():
-        print("[*] Stored stack trace pattern is empty; skipping stack trace validation.")
-        return True
+        print("[*] No stored stack trace pattern; running crash/depth validation only.")
+    else:
+        stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8")
+        if not stored_pattern.strip():
+            print("[*] Stored stack trace pattern is empty; running crash/depth validation only.")
+        else:
+            stack_trace_arg = ["--stack-trace-file", stack_trace_file]
 
     validate_phase3_mode(phase3_mode)
     pch_artifacts: PchArtifacts | None = None
@@ -1080,12 +1076,21 @@ def validate_stack_trace(
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
         "--symbolize",  # force symbolize=1 for this check
-        "--stack-trace-file", stack_trace_file,
     ]
+    cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
 
     proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
+    if validation_log_path is not None and proc.returncode != 77:
+        artifact = (
+            f"returncode: {proc.returncode}\n"
+            "===== stdout =====\n"
+            f"{proc.stdout}"
+            "\n===== stderr =====\n"
+            f"{proc.stderr}"
+        )
+        Path(validation_log_path).write_text(artifact, encoding="utf-8")
     return proc.returncode == 77

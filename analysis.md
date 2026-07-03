@@ -174,8 +174,10 @@ It can remove or rewrite these constructs:
 
 After slicing, the candidate is validated with:
 
-- crash-pattern check
-- stack-trace check
+- one `validate_stack_trace()` call, which checks:
+  - crash pattern
+  - first-stack-trace depth
+  - pre-harness stack trace when a stored `stack_trace.pattern` exists
 
 If compilation, coverage collection, slicing, crash validation, or stack-trace validation fails, the tool discards the sliced version and continues with the original harness.
 
@@ -247,7 +249,7 @@ If `iteration` is enabled:
 - replaces FDP calls with concrete literals where possible
 - writes `<reduced>.inline.cpp`
 - optionally emits `harness_values.h` for large buffers
-- validates the inlined result with `crash_tester.py`
+- validates the inlined result with `validate_stack_trace()`
 
 If validation fails, it falls back to the tree-reduced harness.
 
