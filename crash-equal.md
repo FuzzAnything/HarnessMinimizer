@@ -315,7 +315,10 @@ When `--check` is enabled, HarnessReducer uses `tests/check_tester.py` instead o
 Differences from the normal oracle:
 
 - every candidate is executed with `symbolize=1`
-- the interestingness condition still remains **crash-pattern preservation**
+- the interestingness condition matches the normal tool except under `symbolize=1`:
+  - exit code `77`
+  - crash-pattern match
+  - first entire stack-trace depth match against `check_reference.json`
 - after a candidate preserves the crash pattern, the checker inspects the candidate's **first entire** stack trace
 - if the frame count matches the stored count, it increments `level_same`
 - if the frame count matches and the candidate's **pre-harness** stack-trace prefix matches the stored `stack_trace.pattern`, it increments `stack_same`

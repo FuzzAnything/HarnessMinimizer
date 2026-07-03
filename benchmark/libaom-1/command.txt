@@ -49,3 +49,10 @@ harnessreducer harness.cpp \
 
 --direct
 [INFO] Total time: 543140ms
+
+clang -g -O0 \
+-fsanitize=fuzzer,address,undefined \
+-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/../build/sanitizer/include \
+reduced_harness.cpp \
+$(pwd)/../build/sanitizer/lib/libaom.a \
+-o harness

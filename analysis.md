@@ -89,6 +89,7 @@ When `--check` is enabled, the tool also performs a second reference capture pas
 - records the **first entire** stack trace without truncating at the harness frame
 - counts its frame lines directly
 - stores both the raw full trace and its normalized regex form in `check_reference.json`
+- runs tree reduction with a checker whose interestingness rule matches the normal reducer except that candidate execution uses `symbolize=1`
 
 ### 4. Validate the extracted crash pattern
 
