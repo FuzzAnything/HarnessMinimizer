@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,12 +22,10 @@ from harnessreducer.reducer_runner import (
     dump_fdp_trace,
     format_reduced_harness,
     get_work_dir,
-    reset_statistics_state,
     reset_stack_trace_state,
     run_treereducer,
     validate_phase3_mode,
     validate_stack_trace,
-    get_stack_trace_backup_file,
 )
 
 ADDITIONAL_HEADERS = [
@@ -59,7 +55,6 @@ class ReductionConfig:
     use_llm: bool = False
     stable: bool = False
     phase3_mode: str = "direct"
-    iteration: int | None = None
     statistics: bool = False
     slice_enabled: bool = False
     check: bool = False
@@ -112,7 +107,6 @@ def inline_literals_in_reduced_harness(
     link_flags: str | None,
     start_id: int = 100000,
     phase3_mode: str = "direct",
-    iteration: int | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     streams = load_trace(Path(fdp_trace_file))
@@ -191,14 +185,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     reset_stack_trace_state()
     reset_check_state()
     if config.statistics:
+        from harnessreducer.reducer_runner import reset_statistics_state
         reset_statistics_state()
-        if config.iteration is not None:
-            print("[*] Statistics collection is disabled when --iteration is set.")
-    if config.check:
-        if config.iteration is not None:
-            print("[*] --iteration is ignored during tree reduction when --check is set.")
-        if config.statistics:
-            print("[*] --statistics is ignored during tree reduction when --check is set.")
     validate_phase3_mode(config.phase3_mode)
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
@@ -275,31 +263,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             stable=config.stable,
             phase3_mode=reduction_phase3_mode,
-            iteration=config.iteration,
             statistics=config.statistics,
         )
     format_reduced_harness(reduced_harness)
-    # Final stack trace validation after tree reduction.
-    if config.iteration is not None:
-        if not validate_stack_trace(
-            reduced_harness,
-            crash_pattern,
-            config.crash_input,
-            config.compile_flags,
-            config.link_flags,
-            fdp_trace_file=fdp_trace_file,
-            phase3_mode=validation_phase3_mode,
-        ):
-            backup_file = get_stack_trace_backup_file()
-            if os.path.exists(backup_file):
-                print(f"[!] Final stack trace check failed. Restoring last backup: {backup_file}")
-                shutil.copy2(backup_file, reduced_harness)
-            else:
-                print("[!] Final stack trace check failed but no backup exists. Keeping current reduced harness.")
-        else:
-            # Save a backup at this point for potential later rollback.
-            backup_file = get_stack_trace_backup_file()
-            shutil.copy2(reduced_harness, backup_file)
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
         reduced_harness,
         fdp_trace_file,
@@ -309,7 +275,6 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
         config.start_id,
         phase3_mode=validation_phase3_mode,
-        iteration=config.iteration,
     )
 
     if config.use_llm:
@@ -343,7 +308,6 @@ def process(
     work_dir: str | None = None,
     use_llm: bool = False,
     phase3_mode: str = "direct",
-    iteration: int | None = None,
     statistics: bool = False,
     slice_enabled: bool = False,
     check: bool = False,
@@ -356,7 +320,6 @@ def process(
         work_dir=work_dir,
         use_llm=use_llm,
         phase3_mode=phase3_mode,
-        iteration=iteration,
         statistics=statistics,
         slice_enabled=slice_enabled,
         check=check,

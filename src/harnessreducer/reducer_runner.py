@@ -37,8 +37,6 @@ STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
-STACK_TRACE_COUNTER_FILE_NAME = "stack_trace.counter"
-STACK_TRACE_BACKUP_FILE_NAME = "stack_trace.backup.cpp"
 REFERENCE_STACK_DEPTH: int | None = None
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
@@ -509,13 +507,6 @@ def get_reference_stack_depth() -> int | None:
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
-def get_stack_trace_counter_file() -> str:
-    return os.path.join(get_work_dir(), STACK_TRACE_COUNTER_FILE_NAME)
-
-def get_stack_trace_backup_file() -> str:
-    return os.path.join(get_work_dir(), STACK_TRACE_BACKUP_FILE_NAME)
-
-
 def get_statistics_file() -> str:
     return os.path.join(get_work_dir(), STATISTICS_FILE_NAME)
 
@@ -523,11 +514,7 @@ def get_statistics_file() -> str:
 def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
     set_reference_stack_depth(None)
-    for path in (
-        get_stack_trace_file(),
-        get_stack_trace_counter_file(),
-        get_stack_trace_backup_file(),
-    ):
+    for path in (get_stack_trace_file(),):
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -786,7 +773,7 @@ def extract_crash_pattern_from_output(
     else:
         print("[!] No stack-trace frames found for reference depth extraction.")
 
-    # Extract and save the first stack trace (normalized) for periodic validation.
+    # Extract and save the first stack trace (normalized) for deeper symbolized validation.
     raw_stack_trace = extract_stack_trace(output, harness_path=harness_path)
     if raw_stack_trace:
         normalized_trace = normalize_crash_signature(raw_stack_trace, escape=True)
@@ -928,7 +915,6 @@ def run_treereducer(
     crash_input: str | None,
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
-    iteration: int | None = None,
     statistics: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
@@ -978,8 +964,7 @@ def run_treereducer(
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(stack_depth_tester_args())
-    cmd.extend(stack_trace_tester_args(iteration))
-    if statistics and iteration is None:
+    if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
 
     proc = subprocess.run(
@@ -1005,22 +990,6 @@ def format_reduced_harness(reduced_harness_path: str) -> None:
         ["clang-format", "-i", "--style=LLVM", reduced_harness_path],
         "Failed to format reduced harness with clang-format",
     )
-
-
-def stack_trace_tester_args(
-    iteration: int | None,
-) -> list[str]:
-    """Build extra crash_tester.py args for stack trace validation."""
-    if iteration is None:
-        return []
-    args: list[str] = []
-    stack_trace_file = get_stack_trace_file()
-    if os.path.exists(stack_trace_file):
-        args.extend(["--stack-trace-file", stack_trace_file])
-    args.extend(["--iteration", str(iteration)])
-    args.extend(["--counter-file", get_stack_trace_counter_file()])
-    args.extend(["--backup-file", get_stack_trace_backup_file()])
-    return args
 
 
 def stack_depth_tester_args() -> list[str]:

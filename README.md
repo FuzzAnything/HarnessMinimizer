@@ -55,8 +55,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
-| `--iteration <N>` | No | Enable periodic symbolized stack-trace validation every `N` crash-tester invocations during tree reduction. If omitted, a reference stack trace is still recorded initially, and normal reduction uses fast `symbolize=0` checks plus first-stack-trace depth matching. |
-| `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. Only active when `--iteration` is not set. |
+| `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
@@ -76,28 +75,9 @@ Enables the optional dynamic-slicing pre-pass:
 
 If `--slice` is omitted, this pre-pass is skipped entirely.
 
-### `--iteration`
-
-Turns on deeper crash-equivalence checking during tree reduction:
-
-- HarnessReducer always records an initial reference stack trace and its first-stack-trace depth.
-- Even without `--iteration`, normal candidate checks require both:
-  - the crash pattern to match
-  - the first stack-trace depth to match
-- With `--iteration N`, `crash_tester.py` periodically reruns candidates with `symbolize=1` and compares the stack trace against that reference.
-- Matching candidates are backed up.
-- If the final reduced result no longer matches, the last backup is restored.
-
-The effective interval becomes more aggressive for small files:
-
-- fewer than 75 lines: interval shrinks to 10
-- fewer than 50 lines: interval shrinks to 1
-
-These thresholds are currently hardcoded in `tests/crash_tester.py`.
-
 ### `--statistics`
 
-When enabled without `--iteration`, HarnessReducer records how many tree-reducer candidate checks ended with:
+When enabled, HarnessReducer records how many tree-reducer candidate checks ended with:
 
 - `77` — candidate preserved the crash pattern and first-stack-trace depth
 - `1` — candidate compiled but did not preserve the target crash behavior
@@ -177,17 +157,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 4. Enable periodic stack-trace validation
-
-```bash
-harnessreducer harness.cpp \
-  --slice \
-  --crash-input crash-input \
-  --iteration 100 \
-  -o reduced.cpp
-```
-
-### 5. Use PCH mode
+### 4. Use PCH mode
 
 ```bash
 harnessreducer harness.cpp \
@@ -199,7 +169,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 6. Use split mode
+### 5. Use split mode
 
 ```bash
 harnessreducer harness.cpp \
@@ -211,21 +181,20 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 7. Stable + PCH + periodic stack-trace checks
+### 6. Stable + PCH
 
 ```bash
 harnessreducer harness.cpp \
   --slice \
   --pch \
   --stable \
-  --iteration 100 \
   --crash-input crash-input \
   --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
   --link-flags "build/lib/libtarget.a" \
   -o reduced.cpp
 ```
 
-### 8. Add the optional LLM post-pass
+### 7. Add the optional LLM post-pass
 
 ```bash
 harnessreducer harness.cpp \
@@ -234,7 +203,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 9. Collect crash-tester return statistics
+### 8. Collect crash-tester return statistics
 
 ```bash
 harnessreducer harness.cpp \
@@ -243,7 +212,7 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-### 10. Inspect stack-trace stability during reduction
+### 9. Inspect stack-trace stability during reduction
 
 ```bash
 harnessreducer harness.cpp \
@@ -263,7 +232,6 @@ config = ReductionConfig(
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
     phase3_mode="pch",      # or "split" / "direct"
-    iteration=100,            # optional
     statistics=False,         # optional
     check=False,              # optional insight-only mode
     stable=False,
@@ -286,7 +254,6 @@ reduced = process(
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
     phase3_mode="direct",   # "single-step" alias is also accepted by the CLI
-    iteration=100,
     statistics=False,
     check=False,
 )
@@ -302,9 +269,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `poc_cov.out` — source-coverage binary used for dynamic slicing
 - `coverage.profraw`, `coverage.profdata`, `coverage_show.txt`, `coverage_export.json` — dynamic slicing coverage artifacts
 - `stack_trace.pattern` — stored normalized reference stack trace
-- `stack_trace.counter` — periodic validation counter
-- `stack_trace.backup.cpp` — last stack-trace-verified candidate
-- `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled without `--iteration`
+- `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header

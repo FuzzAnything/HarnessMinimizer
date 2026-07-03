@@ -2,7 +2,6 @@
 import fcntl
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,12 +15,6 @@ PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
 PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
-
-# Stack trace validation thresholds (tune these values as needed).
-SMALL_HARNESS_LINE_THRESHOLD = 75   # below this, iteration interval shrinks
-TINY_HARNESS_LINE_THRESHOLD = 50    # below this, every candidate is checked
-SMALL_HARNESS_ITERATION = 10        # interval when lines < SMALL_HARNESS_LINE_THRESHOLD
-TINY_HARNESS_ITERATION = 1          # interval when lines < TINY_HARNESS_LINE_THRESHOLD
 
 from harnessreducer.reducer_runner import (
     STACK_FRAME_PATTERN,
@@ -73,30 +66,6 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
     if not frames:
         return None
     return "\n".join(frames)
-
-
-def _effective_iteration(base_iteration: int, source_path: str) -> int:
-    try:
-        with open(source_path, encoding="utf-8", errors="ignore") as f:
-            line_count = sum(1 for _ in f)
-    except OSError:
-        return base_iteration
-    if line_count < TINY_HARNESS_LINE_THRESHOLD:
-        return TINY_HARNESS_ITERATION
-    if line_count < SMALL_HARNESS_LINE_THRESHOLD:
-        return SMALL_HARNESS_ITERATION
-    return base_iteration
-
-
-def _read_counter(counter_file: str) -> int:
-    try:
-        return int(Path(counter_file).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return 0
-
-
-def _write_counter(counter_file: str, value: int) -> None:
-    Path(counter_file).write_text(str(value), encoding="utf-8")
 
 
 def _statistics_counts_from_text(text: str) -> dict[int, int]:
@@ -153,7 +122,7 @@ def _update_statistics_file(statistics_file: str, result_code: int) -> None:
 
 
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
-    if args.statistics_file and args.iteration is None:
+    if args.statistics_file:
         _update_statistics_file(args.statistics_file, result_code)
     return result_code
 
@@ -304,13 +273,8 @@ def _check_stack_trace(
     run_log: str,
     stack_trace_file: str,
     source_path: str,
-    backup_file: str | None,
 ) -> bool:
-    """Check the stack trace from a symbolize=1 run against the stored pattern.
-
-    Returns True if the stack trace matches. If backup_file is provided and
-    the check passes, the current source is saved as the new backup.
-    """
+    """Check the stack trace from a symbolize=1 run against the stored pattern."""
     stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8").strip()
     if not stored_pattern:
         print("[*] No stored stack trace pattern; skipping stack trace check.")
@@ -323,9 +287,6 @@ def _check_stack_trace(
 
     if re.search(stored_pattern, run_log) is not None:
         print("[+] Stack trace validation passed.")
-        if backup_file:
-            shutil.copy2(source_path, backup_file)
-            print(f"[+] Stack trace backup saved to {backup_file}")
         return True
 
     print("[-] Stack trace does not match the stored pattern.")
@@ -349,9 +310,6 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
-    parser.add_argument("--iteration", type=int, default=None, help="Base iteration interval for periodic symbolize=1 checks")
-    parser.add_argument("--counter-file", type=str, default=None, help="Path to the counter file tracking invocation count")
-    parser.add_argument("--backup-file", type=str, default=None, help="Path to save source backup on successful stack trace check")
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     args = parser.parse_args()
     pid = os.getpid()
@@ -370,18 +328,7 @@ def main() -> int:
         if compile_status != 0:
             return _finalize_result(args, -1)
 
-        # Determine whether this invocation should use symbolize=1.
-        force_symbolize = args.symbolize
-        periodic_check = False
-        if not force_symbolize and args.iteration is not None and args.counter_file and args.stack_trace_file:
-            counter = _read_counter(args.counter_file)
-            counter += 1
-            _write_counter(args.counter_file, counter)
-            effective = _effective_iteration(args.iteration, args.source)
-            if counter % effective == 0:
-                periodic_check = True
-
-        use_symbolize = force_symbolize or periodic_check
+        use_symbolize = args.symbolize
 
         env = os.environ.copy()
         if use_symbolize:
@@ -423,7 +370,7 @@ def main() -> int:
 
         # Crash pattern matched.  If symbolized, also validate stack trace.
         if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
-            if not _check_stack_trace(run_log, args.stack_trace_file, args.source, args.backup_file):
+            if not _check_stack_trace(run_log, args.stack_trace_file, args.source):
                 return _finalize_result(args, 1)
 
         print("execution log: ")

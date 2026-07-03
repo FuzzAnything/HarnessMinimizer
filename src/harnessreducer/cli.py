@@ -60,23 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use stable reduction mode (no randomization, deterministic output).",
     )
     parser.add_argument(
-        "--iteration",
-        type=int,
-        default=None,
-        help=(
-            "Enable periodic stack trace validation every N crash-tester "
-            "invocations during reduction. When omitted, the stack trace is "
-            "still recorded at startup but symbolize=0 is used throughout "
-            "reduction (no periodic checks)."
-        ),
-    )
-    parser.add_argument(
         "--statistics",
         action="store_true",
         help=(
             "Collect crash_tester return-code statistics during treereduce and "
-            "write them to statistics.txt in the work directory. This is only "
-            "active when --iteration is not set."
+            "write them to statistics.txt in the work directory."
         ),
     )
     parser.add_argument(
@@ -137,7 +125,6 @@ def main(argv: list[str] | None = None) -> int:
         use_llm=args.llm,
         stable=args.stable,
         phase3_mode=args.phase3_mode,
-        iteration=args.iteration,
         statistics=args.statistics,
         slice_enabled=args.slice,
         check=args.check,

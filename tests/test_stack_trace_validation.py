@@ -1,4 +1,4 @@
-"""Unit tests for stack trace extraction, normalization, and periodic iteration logic.
+"""Unit tests for stack trace extraction, normalization, and validation logic.
 
 These tests exercise the pure-logic parts of the stack trace validation feature
 without running the full reduction pipeline or compiling any code.
@@ -21,12 +21,9 @@ from harnessreducer.reducer_runner import (
     get_reference_stack_depth,
     normalize_crash_signature,
     get_stack_trace_file,
-    get_stack_trace_counter_file,
-    get_stack_trace_backup_file,
     reset_stack_trace_state,
     set_reference_stack_depth,
     stack_depth_tester_args,
-    stack_trace_tester_args,
     validate_stack_trace,
     configure_work_dir,
 )
@@ -49,14 +46,7 @@ _ct_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_ct_module)
 
 ct_extract_stack_trace = _ct_module.extract_stack_trace
-ct_effective_iteration = _ct_module._effective_iteration
-ct_read_counter = _ct_module._read_counter
-ct_write_counter = _ct_module._write_counter
 ct_check_stack_trace = _ct_module._check_stack_trace
-SMALL_HARNESS_LINE_THRESHOLD = _ct_module.SMALL_HARNESS_LINE_THRESHOLD
-TINY_HARNESS_LINE_THRESHOLD = _ct_module.TINY_HARNESS_LINE_THRESHOLD
-SMALL_HARNESS_ITERATION = _ct_module.SMALL_HARNESS_ITERATION
-TINY_HARNESS_ITERATION = _ct_module.TINY_HARNESS_ITERATION
 
 
 # --- Sample ASan output for testing ---
@@ -250,61 +240,6 @@ class TestNormalizeCrashSignature(unittest.TestCase):
         self.assertIsNotNone(re.search(pattern, different_run))
 
 
-class TestEffectiveIteration(unittest.TestCase):
-    """Test the adaptive iteration logic in crash_tester.py."""
-
-    def test_large_file_uses_base(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".cpp", delete=False) as f:
-            f.write("\n".join(["int x;"] * 100))
-            f.flush()
-            result = ct_effective_iteration(100, f.name)
-            self.assertEqual(result, 100)
-        os.unlink(f.name)
-
-    def test_small_file_uses_small_iteration(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".cpp", delete=False) as f:
-            f.write("\n".join(["int x;"] * 60))  # between 50 and 75
-            f.flush()
-            result = ct_effective_iteration(100, f.name)
-            self.assertEqual(result, SMALL_HARNESS_ITERATION)
-        os.unlink(f.name)
-
-    def test_tiny_file_uses_tiny_iteration(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".cpp", delete=False) as f:
-            f.write("\n".join(["int x;"] * 30))  # below 50
-            f.flush()
-            result = ct_effective_iteration(100, f.name)
-            self.assertEqual(result, TINY_HARNESS_ITERATION)
-        os.unlink(f.name)
-
-    def test_missing_file_uses_base(self):
-        result = ct_effective_iteration(100, "/nonexistent/file.cpp")
-        self.assertEqual(result, 100)
-
-
-class TestCounterFile(unittest.TestCase):
-    """Test counter file read/write helpers from crash_tester.py."""
-
-    def test_read_counter_missing_file(self):
-        self.assertEqual(ct_read_counter("/nonexistent/counter.txt"), 0)
-
-    def test_read_write_roundtrip(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("42")
-            f.flush()
-            self.assertEqual(ct_read_counter(f.name), 42)
-            ct_write_counter(f.name, 43)
-            self.assertEqual(ct_read_counter(f.name), 43)
-        os.unlink(f.name)
-
-    def test_read_counter_invalid_content(self):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write("not_a_number")
-            f.flush()
-            self.assertEqual(ct_read_counter(f.name), 0)
-        os.unlink(f.name)
-
-
 class TestCheckStackTrace(unittest.TestCase):
     """Test the _check_stack_trace helper from crash_tester.py."""
 
@@ -316,22 +251,14 @@ class TestCheckStackTrace(unittest.TestCase):
             f.write(pattern)
             f.flush()
             trace_file = f.name
-        backup_file = tempfile.mktemp(suffix=".cpp")
-
-        # Create a real source file so shutil.copy2 can back it up
-        source_file = tempfile.mktemp(suffix=".cpp")
-        Path(source_file).write_text("int main() {}", encoding="utf-8")
 
         try:
             result = ct_check_stack_trace(
-                SAMPLE_ASAN_OUTPUT, trace_file, source_file, backup_file
+                SAMPLE_ASAN_OUTPUT, trace_file, "/tmp/source.cpp"
             )
             self.assertTrue(result)
         finally:
             os.unlink(trace_file)
-            os.unlink(source_file)
-            if os.path.exists(backup_file):
-                os.unlink(backup_file)
 
     def test_non_matching_trace_fails(self):
         # Store a pattern from one crash, test against different output
@@ -341,8 +268,6 @@ class TestCheckStackTrace(unittest.TestCase):
             f.write(pattern)
             f.flush()
             trace_file = f.name
-        backup_file = tempfile.mktemp(suffix=".cpp")
-
         different_output = """\
     #0 0x1111 in different_func /other/file.c:1:1
     #1 0x2222 in other_caller /other/file.c:2:2
@@ -351,13 +276,11 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
 """
         try:
             result = ct_check_stack_trace(
-                different_output, trace_file, "/fake/source.cpp", backup_file
+                different_output, trace_file, "/fake/source.cpp"
             )
             self.assertFalse(result)
         finally:
             os.unlink(trace_file)
-            if os.path.exists(backup_file):
-                os.unlink(backup_file)
 
     def test_empty_pattern_passes(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pattern", delete=False) as f:
@@ -366,7 +289,7 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
             trace_file = f.name
         try:
             result = ct_check_stack_trace(
-                "some output", trace_file, "/fake/source.cpp", None
+                "some output", trace_file, "/fake/source.cpp"
             )
             self.assertTrue(result)
         finally:
@@ -381,73 +304,11 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
             trace_file = f.name
         try:
             result = ct_check_stack_trace(
-                "No stack trace here, just SUMMARY line", trace_file, "/fake/source.cpp", None
+                "No stack trace here, just SUMMARY line", trace_file, "/fake/source.cpp"
             )
             self.assertFalse(result)
         finally:
             os.unlink(trace_file)
-
-    def test_backup_saved_on_match(self):
-        raw_trace = extract_stack_trace(SAMPLE_ASAN_OUTPUT)
-        pattern = normalize_crash_signature(raw_trace, escape=True)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".pattern", delete=False) as f:
-            f.write(pattern)
-            f.flush()
-            trace_file = f.name
-
-        # Create a fake source file to back up
-        source_file = tempfile.mktemp(suffix=".cpp")
-        with open(source_file, "w") as f:
-            f.write("int main() {}")
-        backup_file = tempfile.mktemp(suffix=".backup.cpp")
-
-        try:
-            result = ct_check_stack_trace(
-                SAMPLE_ASAN_OUTPUT, trace_file, source_file, backup_file
-            )
-            self.assertTrue(result)
-            self.assertTrue(os.path.exists(backup_file))
-            self.assertEqual(
-                Path(backup_file).read_text(), "int main() {}"
-            )
-        finally:
-            os.unlink(trace_file)
-            os.unlink(source_file)
-            if os.path.exists(backup_file):
-                os.unlink(backup_file)
-
-
-class TestStackTraceTesterArgs(unittest.TestCase):
-    """Test stack_trace_tester_args() from reducer_runner.py."""
-
-    def test_no_iteration_returns_empty(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            configure_work_dir(tmpdir)
-            result = stack_trace_tester_args(None)
-            self.assertEqual(result, [])
-
-    def test_with_iteration_includes_all_args(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            configure_work_dir(tmpdir)
-            # Create the stack trace file so it's detected
-            trace_file = get_stack_trace_file()
-            Path(trace_file).write_text("pattern", encoding="utf-8")
-
-            result = stack_trace_tester_args(100)
-            self.assertIn("--stack-trace-file", result)
-            self.assertIn("--iteration", result)
-            self.assertIn("100", result)
-            self.assertIn("--counter-file", result)
-            self.assertIn("--backup-file", result)
-
-    def test_missing_trace_file_omits_trace_arg(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            configure_work_dir(tmpdir)
-            # Don't create the stack trace file
-            result = stack_trace_tester_args(100)
-            self.assertNotIn("--stack-trace-file", result)
-            self.assertIn("--iteration", result)
-            self.assertIn("100", result)
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run):
@@ -468,14 +329,10 @@ class TestStackTraceStateManagement(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
-            Path(get_stack_trace_counter_file()).write_text("3", encoding="utf-8")
-            Path(get_stack_trace_backup_file()).write_text("int main() {}", encoding="utf-8")
 
             reset_stack_trace_state()
 
             self.assertFalse(os.path.exists(get_stack_trace_file()))
-            self.assertFalse(os.path.exists(get_stack_trace_counter_file()))
-            self.assertFalse(os.path.exists(get_stack_trace_backup_file()))
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
