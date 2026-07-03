@@ -16,4 +16,6 @@ statistics-pch
 statistics-direct
 statistics-split
 check-level-stack
+reduced.cpp
+harness_values.h
 benchmark.tar.gz
