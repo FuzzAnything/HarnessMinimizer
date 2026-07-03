@@ -16,6 +16,8 @@ from harnessreducer.reducer_runner import (
     check_reducer_crash_pattern,
     check_tree_reducer,
     extract_crash_pattern_from_output,
+    get_normal_reference_stack_depth,
+    get_symbolized_reference_stack_depth,
     check_harness_compilation,
     compile_dump_mode_harness,
     configure_work_dir,
@@ -206,6 +208,11 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 
     print(f"[+] Extracted crash pattern: {crash_pattern}")
     if config.check:
+        print(
+            "[+] Stored reference depths: "
+            f"fast(symbolize=0)={get_normal_reference_stack_depth()}, "
+            f"symbolized(symbolize=1)={get_symbolized_reference_stack_depth()}"
+        )
         reference = record_check_reference(config.crash_input, crash_pattern)
         print(
             "[+] Recorded check reference: "

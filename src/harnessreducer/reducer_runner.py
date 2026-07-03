@@ -515,15 +515,6 @@ def get_symbolized_reference_stack_depth() -> int | None:
     return SYMBOLIZED_REFERENCE_STACK_DEPTH
 
 
-def set_reference_stack_depth(depth: int | None) -> None:
-    """Backward-compatible alias for the normal fast-path reference depth."""
-    set_normal_reference_stack_depth(depth)
-
-
-def get_reference_stack_depth() -> int | None:
-    """Backward-compatible alias for the normal fast-path reference depth."""
-    return get_normal_reference_stack_depth()
-
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
