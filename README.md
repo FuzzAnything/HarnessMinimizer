@@ -107,7 +107,7 @@ When enabled, HarnessReducer:
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
 
-This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`.
+This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`. In both normal mode and `--check` mode, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp` only when its contents differ from the previous snapshot.
 
 ### `--split`
 
@@ -276,6 +276,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `coverage.profraw`, `coverage.profdata`, `coverage_show.txt`, `coverage_export.json` — dynamic slicing coverage artifacts
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
+- `last_interesting.cpp` — latest candidate source that actually returned `77` during tree reduction
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header
@@ -283,5 +284,5 @@ During reduction, the work directory may also contain artifacts such as:
 ## Notes
 
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If inline validation fails, the tool falls back to the tree-reduced harness. Inline validation now uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
+- If inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Inline validation uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
 - If LLM validation fails, the tool falls back to the non-LLM harness.

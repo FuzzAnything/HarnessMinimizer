@@ -13,6 +13,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_PCH,
     PchArtifacts,
     STACK_FRAME_PATTERN,
+    get_last_interesting_file,
     extract_first_sanitizer_stack_trace,
     get_project_root,
     get_work_dir,
@@ -305,6 +306,8 @@ def run_treereducer_with_check(
             get_check_candidate_stack_traces_file(),
             "--stack-trace-file",
             get_stack_trace_file(),
+            "--last-interesting-file",
+            get_last_interesting_file(),
         ]
     )
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
@@ -322,5 +325,8 @@ def run_treereducer_with_check(
 
     if pch_artifacts is not None:
         restore_pch_includes(reduced_harness, pch_artifacts)
+        last_interesting_file = get_last_interesting_file()
+        if os.path.exists(last_interesting_file):
+            restore_pch_includes(last_interesting_file, pch_artifacts)
 
     return reduced_harness

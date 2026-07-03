@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import fcntl
 import os
+import filecmp
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,6 +127,23 @@ def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
     if args.statistics_file:
         _update_statistics_file(args.statistics_file, result_code)
     return result_code
+
+
+def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -> None:
+    if not snapshot_path:
+        return
+
+    snapshot = Path(snapshot_path)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if snapshot.exists() and filecmp.cmp(source_path, snapshot_path, shallow=False):
+            return
+    except FileNotFoundError:
+        pass
+
+    tmp_snapshot = snapshot.with_suffix(snapshot.suffix + ".tmp")
+    shutil.copyfile(source_path, tmp_snapshot)
+    os.replace(tmp_snapshot, snapshot)
 
 
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
@@ -311,6 +330,7 @@ def main() -> int:
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
+    parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -373,6 +393,7 @@ def main() -> int:
             if not _check_stack_trace(run_log, args.stack_trace_file, args.source):
                 return _finalize_result(args, 1)
 
+        _update_last_interesting_file(args.source, args.last_interesting_file)
         print("execution log: ")
         print(run_log)
         print("Crash behavior preserved.")

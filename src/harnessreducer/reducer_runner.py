@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import filecmp
 import json
 import os
 import re
@@ -37,6 +38,7 @@ STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
+LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 # Matches symbolized stack frames like:
@@ -518,6 +520,9 @@ def get_symbolized_reference_stack_depth() -> int | None:
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
+def get_last_interesting_file() -> str:
+    return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
+
 def get_statistics_file() -> str:
     return os.path.join(get_work_dir(), STATISTICS_FILE_NAME)
 
@@ -531,6 +536,20 @@ def reset_stack_trace_state() -> None:
             os.remove(path)
         except FileNotFoundError:
             pass
+
+
+def reset_last_interesting_state() -> None:
+    try:
+        os.remove(get_last_interesting_file())
+    except FileNotFoundError:
+        pass
+
+
+def candidate_files_match(path_a: str, path_b: str) -> bool:
+    try:
+        return filecmp.cmp(path_a, path_b, shallow=False)
+    except FileNotFoundError:
+        return False
 
 
 def reset_statistics_state() -> None:
@@ -1012,6 +1031,7 @@ def run_treereducer(
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
         "--fdp-trace", fdp_trace_file,
+        "--last-interesting-file", get_last_interesting_file(),
     ])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(stack_depth_tester_args(symbolized=False))
@@ -1031,6 +1051,9 @@ def run_treereducer(
 
     if pch_artifacts is not None:
         restore_pch_includes(reduced_harness, pch_artifacts)
+        last_interesting_file = get_last_interesting_file()
+        if os.path.exists(last_interesting_file):
+            restore_pch_includes(last_interesting_file, pch_artifacts)
 
     return reduced_harness
 

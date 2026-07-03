@@ -14,6 +14,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
     @patch("harnessreducer.api.reset_check_state")
+    @patch("harnessreducer.api.reset_last_interesting_state")
     @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
@@ -30,6 +31,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag,
         mock_configure,
         mock_reset_stack_state,
+        mock_reset_last_interesting_state,
         mock_reset_check_state,
         mock_compile,
         mock_dump,
@@ -62,6 +64,7 @@ class TestApiPipeline(unittest.TestCase):
         result = reduce_with_config(config)
 
         self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        mock_reset_last_interesting_state.assert_called_once_with()
         mock_reset_check_state.assert_called_once_with()
         mock_record_check_reference.assert_called_once_with("seed.bin", "AddressSanitizer")
         mock_run_with_check.assert_called_once_with(
@@ -83,6 +86,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
     @patch("harnessreducer.api.apply_coverage_guided_slice")
+    @patch("harnessreducer.api.reset_last_interesting_state")
     @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
@@ -99,6 +103,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag,
         mock_configure,
         mock_reset_stack_state,
+        mock_reset_last_interesting_state,
         mock_slice,
         mock_compile,
         mock_dump,
@@ -133,6 +138,7 @@ class TestApiPipeline(unittest.TestCase):
 
         mock_configure.assert_called_once_with("/tmp/workdir")
         mock_reset_stack_state.assert_called_once_with()
+        mock_reset_last_interesting_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
         mock_extract.assert_called_once_with("seed.bin", harness_path="a.cpp")
         mock_check_pattern.assert_called_once_with(
@@ -184,6 +190,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
     @patch("harnessreducer.api.apply_coverage_guided_slice")
+    @patch("harnessreducer.api.reset_last_interesting_state")
     @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
@@ -200,6 +207,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag,
         mock_configure,
         mock_reset_stack_state,
+        mock_reset_last_interesting_state,
         mock_slice,
         mock_compile,
         mock_dump,
@@ -272,6 +280,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.dump_fdp_trace")
     @patch("harnessreducer.api.compile_dump_mode_harness")
     @patch("harnessreducer.api.apply_coverage_guided_slice")
+    @patch("harnessreducer.api.reset_last_interesting_state")
     @patch("harnessreducer.api.reset_stack_trace_state")
     @patch("harnessreducer.api.configure_work_dir")
     @patch("harnessreducer.api.tag_harness_with_fdp_ids")
@@ -288,6 +297,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag,
         mock_configure,
         mock_reset_stack_state,
+        mock_reset_last_interesting_state,
         mock_slice,
         mock_compile,
         mock_dump,

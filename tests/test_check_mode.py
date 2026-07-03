@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from harnessreducer.check_mode import (
     CheckReference,
@@ -8,10 +9,13 @@ from harnessreducer.check_mode import (
     count_stack_trace_frames,
     extract_first_entire_stack_trace,
     get_check_candidate_stack_traces_file,
+    get_check_reference_file,
+    get_check_statistics_file,
     initialize_check_statistics_file,
     read_check_statistics,
     reset_check_state,
     record_check_statistics,
+    run_treereducer_with_check,
     write_check_reference,
 )
 from harnessreducer import reducer_runner
@@ -106,3 +110,40 @@ class TestCheckModeHelpers(unittest.TestCase):
             log_path.write_text("data", encoding="utf-8")
             reset_check_state()
             self.assertFalse(log_path.exists())
+
+    @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
+    @patch("harnessreducer.check_mode.subprocess.run")
+    def test_run_treereducer_with_check_passes_last_interesting_file(
+        self,
+        mock_run,
+        _mock_exists,
+    ):
+        mock_run.return_value = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            write_check_reference(
+                CheckReference(
+                    crash_pattern="AddressSanitizer",
+                    full_stack_trace="#0 ...",
+                    full_stack_trace_pattern="\\#0.*",
+                    frame_count=1,
+                )
+            )
+            initialize_check_statistics_file()
+
+            out = run_treereducer_with_check(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file="/tmp/trace.log",
+                crash_pattern="AddressSanitizer",
+                compile_flags="-std=c++17",
+                link_flags="-lm",
+                crash_input="seed.bin",
+            )
+
+            self.assertTrue(out.endswith("reduced_harness.cpp"))
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--check-reference-file", cmd)
+            self.assertIn(get_check_reference_file(), cmd)
+            self.assertIn("--check-statistics-file", cmd)
+            self.assertIn("--last-interesting-file", cmd)
+            self.assertIn(reducer_runner.get_last_interesting_file(), cmd)

@@ -190,3 +190,79 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
     assert "compile or run stderr" in log_content
     captured = capsys.readouterr()
     assert str(log_path) in captured.out
+
+
+def test_inline_literals_retries_last_interesting_snapshot_when_primary_inline_fails(
+    tmp_path: Path,
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text("int primary = 0;\n", encoding="utf-8")
+    snapshot = tmp_path / "last_interesting.cpp"
+    snapshot.write_text("int backup = 1;\n", encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        side_effect=[
+            InlineResult(source="int broken = 1;\n", replaced=1),
+            InlineResult(source="int fixed = 1;\n", replaced=1),
+        ],
+    ), patch(
+        "harnessreducer.api.validate_stack_trace",
+        side_effect=[False, True],
+    ), patch(
+        "harnessreducer.api.get_last_interesting_file",
+        return_value=str(snapshot),
+    ):
+        out, _headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    assert out == str(snapshot.with_suffix(".inline.cpp"))
+    assert Path(out).exists()
+
+
+def test_inline_literals_falls_back_to_snapshot_base_when_snapshot_inline_fails(
+    tmp_path: Path,
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text("int primary = 0;\n", encoding="utf-8")
+    snapshot = tmp_path / "last_interesting.cpp"
+    snapshot.write_text(
+        "auto bytes = fdp->ConsumeBytes<uint8_t>(length, 100001);\n",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        side_effect=[
+            InlineResult(source="int broken = 1;\n", replaced=1),
+            InlineResult(source="int also_broken = 1;\n", replaced=1),
+        ],
+    ), patch(
+        "harnessreducer.api.validate_stack_trace",
+        side_effect=[False, False],
+    ), patch(
+        "harnessreducer.api.get_last_interesting_file",
+        return_value=str(snapshot),
+    ):
+        out, _headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    assert out == str(snapshot)
+    content = snapshot.read_text(encoding="utf-8")
+    assert "100001" not in content
