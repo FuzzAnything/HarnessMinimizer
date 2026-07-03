@@ -98,13 +98,16 @@ When enabled, HarnessReducer:
 - additionally records the **first entire** stack trace from the original symbolized crash
 - counts its frame lines directly
 - runs every tree-reduction candidate with `symbolize=1`
-- if a candidate preserves the crash pattern, checks whether:
+- uses the same interestingness rule as the normal reducer, except under `symbolize=1`:
+  - crash pattern must match
+  - the first entire stack trace must have the same frame count
+- for diagnostics, if a candidate preserves the crash pattern, also checks whether:
   - the first entire stack trace has the same frame count (`level_same`)
   - the **pre-harness** stack trace prefix matches the stored `stack_trace.pattern` (`stack_same`)
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
 
-This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths.
+This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`.
 
 ### `--split`
 

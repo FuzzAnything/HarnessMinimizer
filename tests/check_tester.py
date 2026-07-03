@@ -36,6 +36,33 @@ compile_split = _crash_tester.compile_split
 compile_with_pch = _crash_tester.compile_with_pch
 
 
+def _evaluate_check_candidate(
+    *,
+    run_returncode: int,
+    run_log: str,
+    crash_pattern: str,
+    stored_compare_pattern: str,
+    reference_frame_count: int,
+    candidate_source: str,
+) -> tuple[bool, int, bool, bool, str | None, str | None]:
+    candidate_full_trace = extract_first_entire_stack_trace(run_log)
+    candidate_compare_trace = extract_stack_trace(run_log, harness_path=candidate_source)
+    candidate_frames = count_stack_trace_frames(candidate_full_trace)
+    crash_pattern_matched = run_returncode == 77 and re.search(crash_pattern, run_log) is not None
+    level_same = crash_pattern_matched and candidate_frames == reference_frame_count
+    stack_same = level_same and bool(stored_compare_pattern) and candidate_compare_trace is not None and (
+        re.search(stored_compare_pattern, candidate_compare_trace) is not None
+    )
+    return (
+        crash_pattern_matched,
+        candidate_frames,
+        level_same,
+        stack_same,
+        candidate_full_trace,
+        candidate_compare_trace,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -89,13 +116,20 @@ def main() -> int:
         stored_compare_pattern = Path(args.stack_trace_file).read_text(encoding="utf-8").strip()
         reference = load_check_reference(args.check_reference_file)
         run_log = run_proc.stdout + run_proc.stderr
-        candidate_full_trace = extract_first_entire_stack_trace(run_log)
-        candidate_compare_trace = extract_stack_trace(run_log, harness_path=args.source)
-        candidate_frames = count_stack_trace_frames(candidate_full_trace)
-        crash_pattern_matched = run_proc.returncode == 77 and re.search(args.crash_pattern, run_log) is not None
-        level_same = crash_pattern_matched and candidate_frames == reference.frame_count
-        stack_same = level_same and bool(stored_compare_pattern) and candidate_compare_trace is not None and (
-            re.search(stored_compare_pattern, candidate_compare_trace) is not None
+        (
+            crash_pattern_matched,
+            candidate_frames,
+            level_same,
+            stack_same,
+            candidate_full_trace,
+            candidate_compare_trace,
+        ) = _evaluate_check_candidate(
+            run_returncode=run_proc.returncode,
+            run_log=run_log,
+            crash_pattern=args.crash_pattern,
+            stored_compare_pattern=stored_compare_pattern,
+            reference_frame_count=reference.frame_count,
+            candidate_source=args.source,
         )
         append_candidate_stack_trace(
             args.check_stack_log_file,
@@ -111,12 +145,14 @@ def main() -> int:
         if not crash_pattern_matched:
             return 1
 
-        if candidate_full_trace:
-            record_check_statistics(
-                args.check_statistics_file,
-                level_same=level_same,
-                stack_same=stack_same,
-            )
+        record_check_statistics(
+            args.check_statistics_file,
+            level_same=level_same,
+            stack_same=stack_same,
+        )
+
+        if not level_same:
+            return 1
 
         return 77
     finally:
