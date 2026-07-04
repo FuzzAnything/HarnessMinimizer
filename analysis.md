@@ -65,7 +65,7 @@ The main workflow lives in `src/harnessreducer/api.py`.
 - `check_harness_compilation()` builds the original harness into `poc.out` using:
   - `clang++`
   - `-fsanitize=address,fuzzer,undefined`
-  - `-g -O0`
+  - `-g -O1 -Werror=uninitialized`
   - user `compile_flags` and `link_flags`
 
 ### 3. Crash pattern extraction + reference stack trace
@@ -211,8 +211,8 @@ When `--check` is enabled, `run_treereducer_with_check()` is used instead. It sw
 - `stack_same`: candidate preserved the crash pattern, matched the same frame count, and the pre-harness stack-trace prefix matched the stored `stack_trace.pattern`
 
 At the end of tree reduction, the tool prints `level_same`, `stack_same`, and `stack_same / level_same`.
-It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory. For candidates that return `77`, the candidate source text is also embedded in that log for manual inspection.
-Both `tests/crash_tester.py` and `tests/check_tester.py` also maintain a stable `last_interesting.cpp` snapshot by overwriting it only when a candidate returns `77` and its contents differ from the previous snapshot.
+It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory. Each log entry also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic. For candidates that return `77`, the candidate source text is also embedded in that log for manual inspection.
+When `--snapshot` is enabled, `tests/crash_tester.py` and `tests/check_tester.py` also maintain a stable `last_interesting.cpp` snapshot by overwriting it only when a candidate returns `77` and its contents differ from the previous snapshot.
 
 ### 8.1 Inline fallback strategy
 
@@ -221,12 +221,12 @@ Both `tests/crash_tester.py` and `tests/check_tester.py` also maintain a stable 
 1. inline/replay FDP calls into `reduced_harness.inline.cpp`
 2. validate that inline result with `validate_stack_trace()`
 
-If that inline validation fails and `last_interesting.cpp` exists with different contents, the same inline/replay + validation flow is retried from the snapshot:
+If `--snapshot` is enabled and `last_interesting.cpp` exists with different contents, the same inline/replay + validation flow is retried from the snapshot:
 
 3. inline/replay FDP calls into `last_interesting.inline.cpp`
 4. validate that inline result with `validate_stack_trace()`
 
-If the snapshot inline result also fails, the tool falls back to the snapshot base harness; otherwise it returns the validated snapshot inline harness.
+If the snapshot inline result also fails, the tool falls back to the snapshot base harness; otherwise it returns the validated snapshot inline harness. Without `--snapshot`, the tool skips this retry path and falls back directly to the tree-reduced harness.
 
 Important options:
 
@@ -241,7 +241,11 @@ Phase 3 reduction-loop modes currently are:
 - `split`: compile the full source to an object, then link
 - `pch`: compile the include-stripped body against a precompiled header, then link
 
-Split and PCH candidate compilation currently use `-O0 -gline-tables-only`.
+All Phase 3 modes now add `-Werror=uninitialized` and use `-O1` while keeping their mode-specific debug flags:
+
+- direct / single-step: `-g -O1 -Werror=uninitialized`
+- split: `-O1 -gline-tables-only -Werror=uninitialized`
+- pch: `-O1 -gline-tables-only -Werror=uninitialized`
 
 When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
 
@@ -364,6 +368,7 @@ Main flags:
 - `--work-dir`
 - `--stable`
 - `--statistics`
+- `--snapshot`
 - `--direct` / `--single-step`
 - `--split`
 - `--pch`

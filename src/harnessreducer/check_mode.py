@@ -206,6 +206,9 @@ def append_candidate_stack_trace(
     stack_same: bool,
     full_stack_trace: str | None,
     compare_stack_trace: str | None,
+    compile_failed: bool = False,
+    uninitialized_compile_error: bool | None = False,
+    compile_error: str | None = None,
     candidate_code: str | None = None,
 ) -> None:
     path = Path(log_file)
@@ -219,11 +222,16 @@ def append_candidate_stack_trace(
         f"frame_count: {frame_count}\n"
         f"level_same: {level_same}\n"
         f"stack_same: {stack_same}\n"
+        f"compile_failed: {compile_failed}\n"
         "full_stack_trace:\n"
         f"{full_trace_text}\n"
         "compare_stack_trace:\n"
         f"{compare_trace_text}\n"
     )
+    if uninitialized_compile_error is not None:
+        entry += f"uninitialized_compile_error: {uninitialized_compile_error}\n"
+    if compile_error is not None:
+        entry += "compile_error:\n" f"{compile_error}\n"
     if candidate_code is not None:
         entry += "candidate_code:\n" f"{candidate_code}\n"
     entry += "=== end candidate ===\n\n"
@@ -255,6 +263,7 @@ def run_treereducer_with_check(
     crash_input: str | None,
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
+    snapshot: bool = False,
 ) -> str:
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
@@ -309,10 +318,10 @@ def run_treereducer_with_check(
             get_check_candidate_stack_traces_file(),
             "--stack-trace-file",
             get_stack_trace_file(),
-            "--last-interesting-file",
-            get_last_interesting_file(),
         ]
     )
+    if snapshot:
+        cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
 
     proc = subprocess.run(
@@ -328,8 +337,9 @@ def run_treereducer_with_check(
 
     if pch_artifacts is not None:
         restore_pch_includes(reduced_harness, pch_artifacts)
-        last_interesting_file = get_last_interesting_file()
-        if os.path.exists(last_interesting_file):
-            restore_pch_includes(last_interesting_file, pch_artifacts)
+        if snapshot:
+            last_interesting_file = get_last_interesting_file()
+            if os.path.exists(last_interesting_file):
+                restore_pch_includes(last_interesting_file, pch_artifacts)
 
     return reduced_harness

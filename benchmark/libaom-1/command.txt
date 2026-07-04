@@ -6,6 +6,7 @@ harnessreducer harness.cpp \
   --pch \
   --stable \
   --check \
+  --snapshot \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
@@ -16,6 +17,7 @@ harnessreducer harness.cpp \
   --pch \
   --stable \
   --statistics \
+  --snapshot \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
@@ -25,6 +27,7 @@ harnessreducer harness.cpp \
   --crash-input crash-input \
   --pch \
   --stable \
+  --snapshot \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
@@ -35,6 +38,7 @@ harnessreducer harness.cpp \
   --pch \
   --slice \
   --stable \
+  --snapshot \
   -o reduced.cpp
 
 
@@ -50,7 +54,7 @@ harnessreducer harness.cpp \
 --direct
 [INFO] Total time: 543140ms
 
-clang -g -O0 \
+clang -g -O1 -Werror=uninitialized \
 -fsanitize=fuzzer,address,undefined \
 -I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/../build/sanitizer/include \
 last_interesting.inline.cpp \

@@ -57,6 +57,25 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("/tmp/trace.log", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
+        self.assertNotIn("--last-interesting-file", cmd)
+
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_passes_snapshot_flag_when_enabled(self, mock_run, mock_exists):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file="/tmp/trace.log",
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags=None,
+            crash_input=None,
+            snapshot=True,
+        )
+
+        cmd = mock_run.call_args.args[0]
         self.assertIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.reducer_runner.initialize_statistics_file")
@@ -149,6 +168,12 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.validate_phase3_mode("single-step"),
             reducer_runner.PHASE3_DIRECT,
         )
+
+    def test_phase3_compile_flags_use_o1_and_uninitialized_error(self):
+        self.assertEqual(reducer_runner.PHASE3_DIRECT_OPT_FLAGS, ["-g", "-O1"])
+        self.assertEqual(reducer_runner.PHASE3_SPLIT_OPT_FLAGS, ["-O1", "-gline-tables-only"])
+        self.assertEqual(reducer_runner.PHASE3_PCH_OPT_FLAGS, ["-O1", "-gline-tables-only"])
+        self.assertEqual(reducer_runner.PHASE3_WARNING_FLAGS, ["-Werror=uninitialized"])
 
     def test_initialize_statistics_file_writes_zeroed_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:

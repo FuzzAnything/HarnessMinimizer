@@ -49,6 +49,7 @@ _spec.loader.exec_module(_ct_module)
 
 ct_extract_stack_trace = _ct_module.extract_stack_trace
 ct_check_stack_trace = _ct_module._check_stack_trace
+ct_compile_error_mentions_uninitialized = _ct_module.compile_error_mentions_uninitialized
 
 
 # --- Sample ASan output for testing ---
@@ -263,6 +264,7 @@ class TestCheckStackTrace(unittest.TestCase):
         finally:
             os.unlink(trace_file)
 
+
     def test_non_matching_trace_fails(self):
         # Store a pattern from one crash, test against different output
         raw_trace = extract_stack_trace(SAMPLE_ASAN_OUTPUT)
@@ -284,6 +286,22 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
             self.assertFalse(result)
         finally:
             os.unlink(trace_file)
+
+
+class TestCrashTesterCompileDiagnostics(unittest.TestCase):
+    def test_compile_error_mentions_uninitialized_detects_warning_error(self):
+        self.assertTrue(
+            ct_compile_error_mentions_uninitialized(
+                "error: variable 'mode' is uninitialized when used here [-Wuninitialized]"
+            )
+        )
+
+    def test_compile_error_mentions_uninitialized_ignores_other_errors(self):
+        self.assertFalse(
+            ct_compile_error_mentions_uninitialized(
+                "error: use of undeclared identifier 'foo'"
+            )
+        )
 
     def test_empty_pattern_passes(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pattern", delete=False) as f:

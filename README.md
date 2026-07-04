@@ -57,6 +57,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
+| `--snapshot` | No | Enable `last_interesting.cpp` snapshotting during tree reduction and allow snapshot-based retry/fallback after reduction if inline validation fails. Disabled by default. |
 | `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
@@ -81,7 +82,7 @@ When enabled, HarnessReducer records how many tree-reducer candidate checks ende
 
 - `77` — candidate preserved the crash pattern and first-stack-trace depth
 - `1` — candidate compiled but did not preserve the target crash behavior
-- `-1` — candidate could not be compiled or linked
+- `-1` — candidate could not be compiled or linked, including `-Werror=uninitialized` failures
 
 The counts and probabilities are written to `statistics.txt` in the work directory.
 
@@ -107,7 +108,18 @@ When enabled, HarnessReducer:
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection; when a candidate returns `77`, its source code is also pasted into that log entry
 
-This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`. In both normal mode and `--check` mode, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp` only when its contents differ from the previous snapshot.
+This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`. During `--check`, each candidate log entry also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic.
+
+### `--snapshot`
+
+Enables optional last-interesting snapshot behavior:
+
+- during tree reduction, candidates that actually return `77` may update `last_interesting.cpp`
+- after reduction, if inline validation of the tree-reduced result fails, HarnessReducer may retry from that snapshot and fall back to it if needed
+
+When `--snapshot` is omitted, no snapshot file is maintained and no snapshot-based fallback is attempted.
+
+For all Phase 3 compile paths, HarnessReducer now keeps the existing debug info style for that mode but uses `-O1` and adds `-Werror=uninitialized`.
 
 ### `--split`
 
@@ -116,7 +128,7 @@ Uses a two-step compile/link path for the tree-reduction candidate-testing loop:
 - compile the full source file into an object
 - link the object into the executable
 - no PCH
-- uses `-O0 -gline-tables-only` like PCH mode
+- uses `-O1 -gline-tables-only -Werror=uninitialized` like PCH mode
 
 This is useful when you want separate compile and link stages without the include stripping / PCH machinery.
 
@@ -127,6 +139,7 @@ Uses a precompiled-header for the tree-reduction candidate-testing loop:
 - includes are moved into a generated prefix header
 - a `.pch` is built once
 - each candidate body is compiled against that PCH and then linked
+- both the generated `.pch` and the candidate-body compile use `-O1 -gline-tables-only -Werror=uninitialized`
 
 One-off validation steps outside the main reduction loop still use direct compilation.
 
@@ -227,6 +240,17 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
+### 10. Enable snapshot-based fallback
+
+```bash
+harnessreducer harness.cpp \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --snapshot \
+  -o reduced.cpp
+```
+
 ## Python API
 
 ```python
@@ -240,6 +264,7 @@ config = ReductionConfig(
     phase3_mode="pch",      # or "split" / "direct"
     statistics=False,         # optional
     check=False,              # optional insight-only mode
+    snapshot=False,           # optional snapshot-based fallback
     stable=False,
     use_llm=False,
 )
@@ -262,6 +287,7 @@ reduced = process(
     phase3_mode="direct",   # "single-step" alias is also accepted by the CLI
     statistics=False,
     check=False,
+    snapshot=False,
 )
 ```
 
@@ -276,7 +302,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `coverage.profraw`, `coverage.profdata`, `coverage_show.txt`, `coverage_export.json` — dynamic slicing coverage artifacts
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
-- `last_interesting.cpp` — latest candidate source that actually returned `77` during tree reduction
+- `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header
@@ -284,5 +310,5 @@ During reduction, the work directory may also contain artifacts such as:
 ## Notes
 
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Inline validation uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
+- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. Inline validation uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
 - If LLM validation fails, the tool falls back to the non-LLM harness.

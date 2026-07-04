@@ -23,7 +23,7 @@ Before any reduction, HarnessReducer compiles the original harness with sanitize
 `check_harness_compilation()` builds `poc.out` with:
 
 ```bash
-clang++ -fsanitize=address,fuzzer,undefined -g -O0 \
+clang++ -fsanitize=address,fuzzer,undefined -g -O1 -Werror=uninitialized \
   <compile_flags> <harness.cpp> -o poc.out <link_flags>
 ```
 
@@ -127,7 +127,7 @@ A separate helper binary `poc_cov.out` is compiled by `compile_coverage_harness(
 ```bash
 clang++ -fsanitize=address,undefined,fuzzer-no-link \
   -fprofile-instr-generate -fcoverage-mapping \
-  -g -O0 <compile_flags> <harness.cpp> coverage_driver.cpp \
+  -g -O1 -Werror=uninitialized <compile_flags> <harness.cpp> coverage_driver.cpp \
   -o poc_cov.out <link_flags>
 ```
 
@@ -237,7 +237,8 @@ When optional statistics collection is enabled, these logical return values are 
 #### Direct / single-step mode
 
 ```bash
-clang++ [replay flags] -fsanitize=address,fuzzer,undefined -g -O0 \
+clang++ [replay flags] -fsanitize=address,fuzzer,undefined -g -O1 \
+  -Werror=uninitialized \
   <compile_flags> <source.cpp> -o <output> <link_flags>
 ```
 
@@ -247,7 +248,8 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -Werror=uninitialized \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```
 
@@ -264,7 +266,8 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments -include-pch <pch> [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -Werror=uninitialized \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```
 
@@ -330,8 +333,9 @@ At the end of reduction, HarnessReducer reports:
 - `stack_same / level_same`
 
 It also writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual review.
+Each log entry now also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic.
 For candidates that return `77`, the same log entry also includes the candidate source text.
-Like the normal oracle, it also updates `last_interesting.cpp` only when a candidate returns `77` and its contents differ from the previous snapshot.
+When `--snapshot` is enabled, it also updates `last_interesting.cpp` only when a candidate returns `77` and its contents differ from the previous snapshot.
 
 ### 3.5 Optional return-code statistics
 
@@ -339,7 +343,7 @@ If HarnessReducer enables `--statistics-file` for `crash_tester.py`, each candid
 
 - count of logical `77` results
 - count of logical `1` results
-- count of logical `-1` results
+- count of logical `-1` results, including compile failures caused by `-Werror=uninitialized`
 - probability of each outcome over the total number of recorded candidate checks
 
 ---
@@ -402,7 +406,7 @@ Crash equivalence is checked at multiple points:
 | FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
 | LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
 
-During both normal and `--check` tree reduction, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp`. If inline validation of `reduced_harness.inline.cpp` fails later, HarnessReducer retries the same inline/replay + validation flow from that snapshot before giving up.
+When `--snapshot` is enabled, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp` during normal or `--check` tree reduction. If inline validation of `reduced_harness.inline.cpp` fails later, HarnessReducer retries the same inline/replay + validation flow from that snapshot before giving up. Without `--snapshot`, no snapshot is maintained and no snapshot-based retry is attempted.
 
 ---
 

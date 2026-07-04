@@ -85,6 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
             "while tracking how often frame count and full stack trace stay the same."
         ),
     )
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help=(
+            "Enable last-interesting snapshotting during tree reduction and allow "
+            "post-reduction fallback/retry from that snapshot if inline validation fails."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -128,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         statistics=args.statistics,
         slice_enabled=args.slice,
         check=args.check,
+        snapshot=args.snapshot,
     )
     result = reduce_with_config(config)
     if not result.success:
