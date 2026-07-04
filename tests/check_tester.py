@@ -142,6 +142,11 @@ def main() -> int:
             stack_same=stack_same,
             full_stack_trace=candidate_full_trace,
             compare_stack_trace=candidate_compare_trace,
+            candidate_code=(
+                Path(args.source).read_text(encoding="utf-8", errors="ignore")
+                if crash_pattern_matched and level_same
+                else None
+            ),
         )
 
         if not crash_pattern_matched:

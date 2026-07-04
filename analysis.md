@@ -211,7 +211,7 @@ When `--check` is enabled, `run_treereducer_with_check()` is used instead. It sw
 - `stack_same`: candidate preserved the crash pattern, matched the same frame count, and the pre-harness stack-trace prefix matched the stored `stack_trace.pattern`
 
 At the end of tree reduction, the tool prints `level_same`, `stack_same`, and `stack_same / level_same`.
-It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory.
+It also appends each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory. For candidates that return `77`, the candidate source text is also embedded in that log for manual inspection.
 Both `tests/crash_tester.py` and `tests/check_tester.py` also maintain a stable `last_interesting.cpp` snapshot by overwriting it only when a candidate returns `77` and its contents differ from the previous snapshot.
 
 ### 8.1 Inline fallback strategy

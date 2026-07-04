@@ -330,6 +330,7 @@ At the end of reduction, HarnessReducer reports:
 - `stack_same / level_same`
 
 It also writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual review.
+For candidates that return `77`, the same log entry also includes the candidate source text.
 Like the normal oracle, it also updates `last_interesting.cpp` only when a candidate returns `77` and its contents differ from the previous snapshot.
 
 ### 3.5 Optional return-code statistics
