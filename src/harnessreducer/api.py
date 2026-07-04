@@ -114,10 +114,9 @@ def inline_literals_in_reduced_harness(
     start_id: int = 100000,
     phase3_mode: str = "direct",
 ) -> tuple[str, tuple[str, ...]]:
-    streams = load_trace(Path(fdp_trace_file))
-
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        streams = load_trace(Path(fdp_trace_file))
         inline_result = inline_source_with_report(source, streams)
         transformed, count = inline_result.source, inline_result.replaced
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))

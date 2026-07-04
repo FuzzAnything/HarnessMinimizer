@@ -206,6 +206,7 @@ def append_candidate_stack_trace(
     stack_same: bool,
     full_stack_trace: str | None,
     compare_stack_trace: str | None,
+    candidate_code: str | None = None,
 ) -> None:
     path = Path(log_file)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,8 +223,10 @@ def append_candidate_stack_trace(
         f"{full_trace_text}\n"
         "compare_stack_trace:\n"
         f"{compare_trace_text}\n"
-        "=== end candidate ===\n\n"
     )
+    if candidate_code is not None:
+        entry += "candidate_code:\n" f"{candidate_code}\n"
+    entry += "=== end candidate ===\n\n"
     with path.open("a", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         handle.write(entry)

@@ -202,7 +202,7 @@ def test_inline_literals_retries_last_interesting_snapshot_when_primary_inline_f
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+    with patch("harnessreducer.api.load_trace", return_value={}) as mock_load_trace, patch(
         "harnessreducer.api.inline_source_with_report",
         side_effect=[
             InlineResult(source="int broken = 1;\n", replaced=1),
@@ -226,6 +226,7 @@ def test_inline_literals_retries_last_interesting_snapshot_when_primary_inline_f
 
     assert out == str(snapshot.with_suffix(".inline.cpp"))
     assert Path(out).exists()
+    assert mock_load_trace.call_count == 2
 
 
 def test_inline_literals_falls_back_to_snapshot_base_when_snapshot_inline_fails(

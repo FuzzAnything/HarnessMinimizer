@@ -105,7 +105,7 @@ When enabled, HarnessReducer:
   - the first entire stack trace has the same frame count (`level_same`)
   - the **pre-harness** stack trace prefix matches the stored `stack_trace.pattern` (`stack_same`)
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
-- writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection
+- writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection; when a candidate returns `77`, its source code is also pasted into that log entry
 
 This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`. In both normal mode and `--check` mode, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp` only when its contents differ from the previous snapshot.
 

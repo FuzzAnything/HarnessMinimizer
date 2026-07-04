@@ -95,6 +95,7 @@ class TestCheckModeHelpers(unittest.TestCase):
                 stack_same=False,
                 full_stack_trace="#0 in foo\n#1 in bar\n#2 in harness",
                 compare_stack_trace="#0 in foo\n#1 in bar",
+                candidate_code="int main() { return 0; }\n",
             )
             text = Path(log_path).read_text(encoding="utf-8")
             self.assertIn("source: /tmp/candidate.cpp", text)
@@ -102,6 +103,8 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("frame_count: 2", text)
             self.assertIn("#0 in foo", text)
             self.assertIn("compare_stack_trace:", text)
+            self.assertIn("candidate_code:", text)
+            self.assertIn("int main() { return 0; }", text)
 
     def test_reset_check_state_removes_stack_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
