@@ -97,6 +97,19 @@ def main() -> int:
         else:
             compile_status, object_path = compile_direct(args, output_path)
         if compile_status != 0:
+            append_candidate_stack_trace(
+                args.check_stack_log_file,
+                source_path=args.source,
+                crash_pattern_matched=False,
+                frame_count=0,
+                level_same=False,
+                stack_same=False,
+                full_stack_trace=None,
+                compare_stack_trace=None,
+                compile_failed=True,
+                uninitialized_compile_error=bool(getattr(args, "_last_compile_uninitialized", False)),
+                compile_error=getattr(args, "_last_compile_error", None),
+            )
             return -1
 
         env = os.environ.copy()
@@ -142,6 +155,8 @@ def main() -> int:
             stack_same=stack_same,
             full_stack_trace=candidate_full_trace,
             compare_stack_trace=candidate_compare_trace,
+            compile_failed=False,
+            uninitialized_compile_error=False,
             candidate_code=(
                 Path(args.source).read_text(encoding="utf-8", errors="ignore")
                 if crash_pattern_matched and level_same

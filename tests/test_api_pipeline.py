@@ -76,6 +76,7 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             stable=False,
             phase3_mode="direct",
+            snapshot=False,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -170,6 +171,7 @@ class TestApiPipeline(unittest.TestCase):
             stable=False,
             phase3_mode="direct",
             statistics=False,
+            snapshot=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -181,8 +183,57 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             123,
             phase3_mode="direct",
+            snapshot=False,
         )
         mock_check.assert_called_once()
+
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.reset_last_interesting_state")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_passes_snapshot_when_enabled(
+        self,
+        mock_check,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_reset_last_interesting_state,
+        mock_compile,
+        mock_dump,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+    ):
+        mock_tag.return_value = "/tmp/tagged.cpp"
+        mock_compile.return_value = "/tmp/tagged.out"
+        mock_dump.return_value = "/tmp/fdp_trace.log"
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+            snapshot=True,
+        )
+
+        reduce_with_config(config)
+
+        self.assertTrue(mock_reduce.call_args.kwargs["snapshot"])
+        self.assertTrue(mock_inline.call_args.kwargs["snapshot"])
 
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")

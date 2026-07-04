@@ -64,6 +64,7 @@ class ReductionConfig:
     statistics: bool = False
     slice_enabled: bool = False
     check: bool = False
+    snapshot: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ def inline_literals_in_reduced_harness(
     link_flags: str | None,
     start_id: int = 100000,
     phase3_mode: str = "direct",
+    snapshot: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
@@ -190,25 +192,26 @@ def inline_literals_in_reduced_harness(
     if inline_result is not None:
         return inline_result
 
-    last_interesting_path = get_last_interesting_file()
-    if (
-        os.path.exists(last_interesting_path)
-        and not candidate_files_match(reduced_harness_path, last_interesting_path)
-    ):
-        print(
-            "[!] Retrying inline reduction from the last interesting snapshot: "
-            f"{last_interesting_path}"
-        )
-        snapshot_inline_result = _attempt_inline(
-            last_interesting_path,
-            attempt_label="last interesting snapshot",
-        )
-        if snapshot_inline_result is not None:
-            return snapshot_inline_result
-        print(
-            "[-] Snapshot inline reduction also failed. Falling back to the last interesting snapshot harness."
-        )
-        return _finalize_fallback_harness(last_interesting_path, start_id), ()
+    if snapshot:
+        last_interesting_path = get_last_interesting_file()
+        if (
+            os.path.exists(last_interesting_path)
+            and not candidate_files_match(reduced_harness_path, last_interesting_path)
+        ):
+            print(
+                "[!] Retrying inline reduction from the last interesting snapshot: "
+                f"{last_interesting_path}"
+            )
+            snapshot_inline_result = _attempt_inline(
+                last_interesting_path,
+                attempt_label="last interesting snapshot",
+            )
+            if snapshot_inline_result is not None:
+                return snapshot_inline_result
+            print(
+                "[-] Snapshot inline reduction also failed. Falling back to the last interesting snapshot harness."
+            )
+            return _finalize_fallback_harness(last_interesting_path, start_id), ()
 
     print("[-] Falling back to the tree-reduced harness.")
     return _finalize_fallback_harness(reduced_harness_path, start_id), ()
@@ -291,6 +294,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             stable=config.stable,
             phase3_mode=reduction_phase3_mode,
+            snapshot=config.snapshot,
         )
         emit_check_statistics_summary()
     else:
@@ -304,6 +308,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             stable=config.stable,
             phase3_mode=reduction_phase3_mode,
             statistics=config.statistics,
+            snapshot=config.snapshot,
         )
     format_reduced_harness(reduced_harness)
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
@@ -315,6 +320,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.link_flags,
         config.start_id,
         phase3_mode=validation_phase3_mode,
+        snapshot=config.snapshot,
     )
 
     if config.use_llm:
@@ -351,6 +357,7 @@ def process(
     statistics: bool = False,
     slice_enabled: bool = False,
     check: bool = False,
+    snapshot: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -363,6 +370,7 @@ def process(
         statistics=statistics,
         slice_enabled=slice_enabled,
         check=check,
+        snapshot=snapshot,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

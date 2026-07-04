@@ -23,9 +23,10 @@ PHASE3_SPLIT = "split"
 PHASE3_PCH = "pch"
 PHASE3_MODES = {PHASE3_DIRECT, PHASE3_SPLIT, PHASE3_PCH}
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
-PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
-PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
-PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
+PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O1"]
+PHASE3_SPLIT_OPT_FLAGS = ["-O1", "-gline-tables-only"]
+PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
+PHASE3_WARNING_FLAGS = ["-Werror=uninitialized"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
 COVERAGE_BIN_FILE_NAME = "poc_cov.out"
@@ -145,6 +146,7 @@ def _build_pch_compile_command(
         *_phase3_replay_flags(use_replay),
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_PCH_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         "-x",
         "c++-header",
         *_split_flags(compile_flags),
@@ -337,8 +339,8 @@ def check_harness_compilation(
     compile_cmd = [
         "clang++",
         "-fsanitize=address,fuzzer,undefined",
-        "-g",
-        "-O0",
+        *PHASE3_DIRECT_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         *_split_flags(compile_flags),
         harness_path,
         "-o",
@@ -395,8 +397,8 @@ int main(int argc, char **argv) {
         "-fsanitize=address,undefined,fuzzer-no-link",
         "-fprofile-instr-generate",
         "-fcoverage-mapping",
-        "-g",
-        "-O0",
+        *PHASE3_DIRECT_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         *_split_flags(compile_flags),
         harness_path,
         str(driver_source),
@@ -950,8 +952,8 @@ def compile_dump_mode_harness(
         "-DFDP_MIN_MODE_DUMP",
         f"-I{get_fdp_header_dir()}",
         "-fsanitize=address,fuzzer,undefined",
-        "-g",
-        "-O0",
+        *PHASE3_DIRECT_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         *_split_flags(compile_flags),
         harness_path,
         "-o",
@@ -986,6 +988,7 @@ def run_treereducer(
     stable: bool = False,
     phase3_mode: str = PHASE3_DIRECT,
     statistics: bool = False,
+    snapshot: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -1031,8 +1034,9 @@ def run_treereducer(
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
         "--fdp-trace", fdp_trace_file,
-        "--last-interesting-file", get_last_interesting_file(),
     ])
+    if snapshot:
+        cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(stack_depth_tester_args(symbolized=False))
     if statistics:
@@ -1051,9 +1055,10 @@ def run_treereducer(
 
     if pch_artifacts is not None:
         restore_pch_includes(reduced_harness, pch_artifacts)
-        last_interesting_file = get_last_interesting_file()
-        if os.path.exists(last_interesting_file):
-            restore_pch_includes(last_interesting_file, pch_artifacts)
+        if snapshot:
+            last_interesting_file = get_last_interesting_file()
+            if os.path.exists(last_interesting_file):
+                restore_pch_includes(last_interesting_file, pch_artifacts)
 
     return reduced_harness
 

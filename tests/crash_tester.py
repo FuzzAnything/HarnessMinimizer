@@ -14,11 +14,12 @@ __script_dir__ = os.path.dirname(os.path.realpath(__file__))
 __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
-PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O0"]
-PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
-PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 
 from harnessreducer.reducer_runner import (
+    PHASE3_DIRECT_OPT_FLAGS,
+    PHASE3_PCH_OPT_FLAGS,
+    PHASE3_SPLIT_OPT_FLAGS,
+    PHASE3_WARNING_FLAGS,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
@@ -26,6 +27,7 @@ from harnessreducer.reducer_runner import (
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+UNINITIALIZED_COMPILE_ERROR_PATTERN = re.compile(r"(?i)(?:\[-Wuninitialized\]|uninitialized)")
 
 
 def get_project_root():
@@ -146,12 +148,35 @@ def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -
     os.replace(tmp_snapshot, snapshot)
 
 
+def compile_error_mentions_uninitialized(error_text: str | None) -> bool:
+    return bool(error_text and UNINITIALIZED_COMPILE_ERROR_PATTERN.search(error_text))
+
+
+def _remember_compile_failure(
+    args: argparse.Namespace,
+    *,
+    err_msg: str,
+    compile_cmd: list[str],
+) -> None:
+    args._last_compile_error = err_msg
+    args._last_compile_cmd = list(compile_cmd)
+    args._last_compile_uninitialized = compile_error_mentions_uninitialized(err_msg)
+
+
+def _reset_compile_failure_state(args: argparse.Namespace) -> None:
+    args._last_compile_error = None
+    args._last_compile_cmd = None
+    args._last_compile_uninitialized = False
+
+
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
+    _reset_compile_failure_state(args)
     compile_cmd = [
         "clang++",
         *phase3_replay_flags(args.fdp_trace),
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_DIRECT_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         *split_flags(args.compile_flags),
         args.source,
         "-o",
@@ -168,12 +193,14 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
     )
     if compile_proc.returncode != 0:
         err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=compile_cmd)
         print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
         return -1, None
     return 0, None
 
 
 def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
+    _reset_compile_failure_state(args)
     pid = os.getpid()
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
         object_path = obj_file.name
@@ -184,6 +211,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         *phase3_replay_flags(args.fdp_trace),
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_SPLIT_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         "-c",
         *split_flags(args.compile_flags),
         args.source,
@@ -200,6 +228,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
     )
     if compile_proc.returncode != 0:
         err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=compile_cmd)
         print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
 
@@ -221,16 +250,24 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
     )
     if link_proc.returncode != 0:
         err_msg = link_proc.stderr.strip() or link_proc.stdout.strip() or "Unknown link error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=link_cmd)
         print(f"Linking failed: {link_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
     return 0, object_path
 
 
 def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
+    _reset_compile_failure_state(args)
     if not args.pch_path:
+        _remember_compile_failure(args, err_msg="--pch requires --pch-path", compile_cmd=["clang++"])
         print("Compilation failed: --pch requires --pch-path", file=sys.stderr)
         return -1, None
     if not os.path.exists(args.pch_path):
+        _remember_compile_failure(
+            args,
+            err_msg=f"PCH file does not exist: {args.pch_path}",
+            compile_cmd=["clang++", "-include-pch", args.pch_path],
+        )
         print(f"Compilation failed: PCH file does not exist: {args.pch_path}", file=sys.stderr)
         return -1, None
 
@@ -246,6 +283,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         *phase3_replay_flags(args.fdp_trace),
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_PCH_OPT_FLAGS,
+        *PHASE3_WARNING_FLAGS,
         "-c",
         *split_flags(args.compile_flags),
         args.source,
@@ -262,6 +300,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     )
     if compile_proc.returncode != 0:
         err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=compile_cmd)
         print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
 
@@ -283,6 +322,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     )
     if link_proc.returncode != 0:
         err_msg = link_proc.stderr.strip() or link_proc.stdout.strip() or "Unknown link error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=link_cmd)
         print(f"Linking failed: {link_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
     return 0, object_path

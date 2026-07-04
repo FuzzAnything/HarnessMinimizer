@@ -154,7 +154,8 @@ def _compile_harness(
         "clang++",
         "-fsanitize=address,fuzzer,undefined",
         "-g",
-        "-O0",
+        "-O1",
+        "-Werror=uninitialized",
     ]
     if dump_mode:
         cmd.append("-DFDP_MIN_MODE_DUMP")
