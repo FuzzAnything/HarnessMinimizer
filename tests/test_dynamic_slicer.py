@@ -135,6 +135,29 @@ class TestDynamicSlicer(unittest.TestCase):
 
         self.assertIn("int iter = 0;", result.source)
 
+    def test_non_ascii_text_before_edit_does_not_shift_offsets(self):
+        source = textwrap.dedent(
+            """\
+            // café
+            extern "C" int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size) {
+              live();
+              dead();
+            }
+            """
+        )
+        coverage = CoverageMap(
+            executable_lines=frozenset({3, 4}),
+            covered_lines=frozenset({3}),
+        )
+
+        result = slice_source_by_coverage(source, coverage)
+
+        self.assertEqual(result.removed_nodes, 1)
+        self.assertIn("// café", result.source)
+        self.assertIn("live();", result.source)
+        self.assertNotIn("dead();", result.source)
+        self.assertTrue(result.source.rstrip().endswith("}"))
+
 
 if __name__ == "__main__":
     unittest.main()

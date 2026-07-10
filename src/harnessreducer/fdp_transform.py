@@ -835,19 +835,21 @@ def inline_source_with_report(
     if not replacements:
         return InlineResult(source=source, replaced=0, skipped=tuple(skipped))
 
-    output = source
+    output = source.encode("utf-8")
     for start, end, literal in sorted(replacements, key=lambda item: item[0], reverse=True):
-        output = output[:start] + literal + output[end:]
+        output = output[:start] + literal.encode("utf-8") + output[end:]
+
+    output_text = output.decode("utf-8")
 
     header_source = ""
     result_header_name: str | None = None
     if header_entries:
         header_source = _build_values_header(header_entries)
-        output = _ensure_values_header_include(output, header_name)
+        output_text = _ensure_values_header_include(output_text, header_name)
         result_header_name = header_name
 
     return InlineResult(
-        source=output,
+        source=output_text,
         replaced=replaced,
         skipped=tuple(skipped),
         header_name=result_header_name,
@@ -918,8 +920,8 @@ def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
     if not replacements:
         return source, 0
 
-    output = source
+    output = source.encode("utf-8")
     for start, end, replacement in sorted(replacements, key=lambda item: item[0], reverse=True):
-        output = output[:start] + replacement + output[end:]
+        output = output[:start] + replacement.encode("utf-8") + output[end:]
 
-    return output, removed
+    return output.decode("utf-8"), removed

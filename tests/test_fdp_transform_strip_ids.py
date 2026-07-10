@@ -43,3 +43,18 @@ void f(FuzzedDataProvider* fdp) {
     assert "ConsumeBool()" in cleaned
     assert "100100" not in cleaned
     assert "FDP_ID" not in cleaned
+
+
+def test_strip_injected_ids_preserves_non_ascii_text_before_callsite() -> None:
+    source = """
+// café
+void f(FuzzedDataProvider* fdp) {
+  auto value = fdp->ConsumeBool(/*FDP_ID:100001*/ 100001);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 1
+    assert "// café" in cleaned
+    assert "ConsumeBool()" in cleaned
