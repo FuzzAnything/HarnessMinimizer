@@ -185,6 +185,25 @@ class TestReducerRunner(unittest.TestCase):
             self.assertIn("count_1: 0", text)
             self.assertIn("count_-1: 0", text)
 
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_dump_fdp_trace_clears_stale_trace_before_run(self, mock_run_command):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            trace_path = Path(tmpdir) / "fdp_trace.log"
+            trace_path.write_text("stale trace\n", encoding="utf-8")
+
+            def write_fresh_trace(*args, **kwargs):
+                self.assertFalse(trace_path.exists())
+                trace_path.write_text("S 100000 1\n", encoding="utf-8")
+                return _Proc(returncode=77)
+
+            mock_run_command.side_effect = write_fresh_trace
+
+            result = reducer_runner.dump_fdp_trace("/tmp/tagged.out", "seed.bin")
+
+            self.assertEqual(result, str(trace_path))
+            self.assertEqual(trace_path.read_text(encoding="utf-8"), "S 100000 1\n")
+
     @patch("harnessreducer.reducer_runner.validate_stack_trace")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
     @patch("harnessreducer.reducer_runner.compile_coverage_harness")
