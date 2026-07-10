@@ -144,3 +144,23 @@ void f(uint8_t* data, int size) {
     assert "std::string(fuzz_string_100006, fuzz_string_100006_size)" in result.source
     assert "static const char fuzz_string_100006[]" in result.header_source
     assert "sizeof(fuzz_string_100006) - 1" in result.header_source
+
+
+def test_inline_preserves_non_ascii_text_before_callsite() -> None:
+    source = """
+// café
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto enabled = fdp.ConsumeBool(/*FDP_ID:100007*/ 100007);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100007].append(("S", 1))
+
+    transformed, replaced = inline_source(source, streams)
+
+    assert replaced == 1
+    assert "// café" in transformed
+    assert "auto enabled = true;" in transformed
+    assert "ConsumeBool" not in transformed

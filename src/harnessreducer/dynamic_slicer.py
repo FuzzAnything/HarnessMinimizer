@@ -96,7 +96,8 @@ def _node_covered(node: Node, coverage: CoverageMap) -> bool:
 
 
 def _node_text(source: str, node: Node) -> str:
-    return source[node.start_byte : node.end_byte]
+    source_bytes = source.encode("utf-8")
+    return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
 
 def _extract_function_name(node: Node, source: str) -> str:
@@ -125,12 +126,13 @@ def _statement_delete_edit(
     kind: str = "statement",
     names: tuple[str, ...] = (),
 ) -> SliceEdit:
+    source_bytes = source.encode("utf-8")
     end = node.end_byte
-    while end < len(source) and source[end] in " \t":
+    while end < len(source_bytes) and source_bytes[end] in b" \t":
         end += 1
-    if end < len(source) and source[end] == "\r":
+    if end < len(source_bytes) and source_bytes[end] == ord("\r"):
         end += 1
-    if end < len(source) and source[end] == "\n":
+    if end < len(source_bytes) and source_bytes[end] == ord("\n"):
         end += 1
     return SliceEdit(node.start_byte, end, "", priority, kind, names)
 
@@ -365,7 +367,11 @@ def slice_source_by_coverage(source: str, coverage: CoverageMap) -> SliceResult:
     if not edits:
         return SliceResult(source=source, removed_nodes=0)
 
-    transformed = source
+    transformed = source.encode("utf-8")
     for edit in sorted(edits, key=lambda item: item.start, reverse=True):
-        transformed = transformed[: edit.start] + edit.replacement + transformed[edit.end :]
-    return SliceResult(source=transformed, removed_nodes=len(edits))
+        transformed = (
+            transformed[: edit.start]
+            + edit.replacement.encode("utf-8")
+            + transformed[edit.end :]
+        )
+    return SliceResult(source=transformed.decode("utf-8"), removed_nodes=len(edits))
