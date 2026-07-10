@@ -967,6 +967,13 @@ def compile_dump_mode_harness(
 
 def dump_fdp_trace(harness_bin: str, crash_input: str | None) -> str:
     fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
+    # The dump runtime appends trace records, so remove any trace left by an
+    # earlier run when a fixed work directory is reused.
+    try:
+        os.remove(fdp_trace_file)
+    except FileNotFoundError:
+        pass
+
     env = os.environ.copy()
     env["FDP_TRACE_PATH"] = fdp_trace_file
 

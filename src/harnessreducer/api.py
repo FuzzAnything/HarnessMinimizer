@@ -77,10 +77,15 @@ class ReductionResult:
 
 
 def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> str:
-    source = Path(harness_path).read_text(encoding="utf-8")
+    source_path = Path(harness_path)
+    source = source_path.read_text(encoding="utf-8")
     transformed, count = inject_ids(source, start_id, marker)
 
-    tagged_harness_file = str(Path(get_work_dir()) / Path(harness_path).name)
+    # Keep the instrumented source separate from the input even when the user
+    # chooses the input's directory as --work-dir.
+    suffix = source_path.suffix or ".cpp"
+    tagged_name = f"{source_path.stem}.tagged{suffix}"
+    tagged_harness_file = str(Path(get_work_dir()) / tagged_name)
     Path(tagged_harness_file).write_text(transformed, encoding="utf-8")
     print(f"Injected {count} FDP callsite IDs into {tagged_harness_file}")
     return tagged_harness_file

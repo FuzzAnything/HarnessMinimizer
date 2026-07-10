@@ -28,3 +28,18 @@ void f(FuzzedDataProvider* fdp, size_t length) {
     assert removed == 1
     assert "ConsumeBytes<uint8_t>(length)" in cleaned
     assert "100001" not in cleaned
+
+
+def test_strip_injected_ids_removes_ids_beyond_first_hundred() -> None:
+    source = """
+void f(FuzzedDataProvider* fdp) {
+  auto value = fdp->ConsumeBool(/*FDP_ID:100100*/ 100100);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 1
+    assert "ConsumeBool()" in cleaned
+    assert "100100" not in cleaned
+    assert "FDP_ID" not in cleaned
