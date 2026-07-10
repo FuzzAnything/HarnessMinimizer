@@ -16,7 +16,7 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
         return_value=InlineResult(source="int y = 1;\n", replaced=1),
     ), patch("harnessreducer.api.validate_stack_trace", return_value=True):
 
-        out = inline_literals_in_reduced_harness(
+        out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
             "AddressSanitizer",
@@ -26,6 +26,7 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
         )
 
     assert out.endswith(".inline.cpp")
+    assert generated_headers == ()
     content = Path(out).read_text(encoding="utf-8")
     for header in ADDITIONAL_HEADERS:
         assert header in content
@@ -46,7 +47,7 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
     ), patch("harnessreducer.api.validate_stack_trace", return_value=False):
 
-        out = inline_literals_in_reduced_harness(
+        out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
             "AddressSanitizer",
@@ -56,6 +57,7 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
         )
 
     assert out == str(reduced)
+    assert generated_headers == ()
     content = reduced.read_text(encoding="utf-8")
     for header in ADDITIONAL_HEADERS:
         assert header in content
@@ -78,7 +80,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
             InlineSkip(
                 key=100012,
                 method="ConsumeBytes",
-                reason="repeated-trace-id",
+                reason="unsupported-repeated-trace-id",
                 record_count=200,
             ),
         ),
@@ -99,7 +101,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
         )
 
     captured = capsys.readouterr()
-    assert "Preserved FDP callsites for replay" in captured.out
+    assert "Could not header-replay some repeated FDP callsites" in captured.out
     assert "100012(ConsumeBytes, 200 records)" in captured.out
 
 
@@ -121,7 +123,7 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
             InlineSkip(
                 key=100001,
                 method="ConsumeBytes",
-                reason="repeated-trace-id",
+                reason="unsupported-repeated-trace-id",
                 record_count=12,
             ),
         ),
@@ -130,8 +132,8 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.run_command") as mock_run:
-        out = inline_literals_in_reduced_harness(
+    ), patch("harnessreducer.api.validate_stack_trace") as mock_validate:
+        out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
             "AddressSanitizer",
@@ -141,7 +143,8 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
         )
 
     assert out == str(reduced)
-    mock_run.assert_not_called()
+    assert generated_headers == ()
+    mock_validate.assert_not_called()
     content = reduced.read_text(encoding="utf-8")
     assert "100001" not in content
     captured = capsys.readouterr()
@@ -172,7 +175,7 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
         side_effect=_write_failure_log,
     ):
 
-        out = inline_literals_in_reduced_harness(
+        out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
             "AddressSanitizer",
@@ -182,6 +185,7 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
         )
 
     assert out == str(reduced)
+    assert generated_headers == ()
     log_path = tmp_path / "reduced.inline.cpp.validation.log"
     assert log_path.exists()
     log_content = log_path.read_text(encoding="utf-8")
