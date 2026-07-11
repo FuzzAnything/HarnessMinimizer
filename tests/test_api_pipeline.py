@@ -5,6 +5,16 @@ from harnessreducer.api import ReductionConfig, process, reduce_with_config
 
 
 class TestApiPipeline(unittest.TestCase):
+    def test_amortize_link_rejects_direct_mode(self):
+        with self.assertRaisesRegex(ValueError, "requires split or PCH"):
+            reduce_with_config(
+                ReductionConfig(
+                    harness_path="a.cpp",
+                    phase3_mode="direct",
+                    amortize_link=True,
+                )
+            )
+
     @patch("harnessreducer.api.emit_check_statistics_summary")
     @patch("harnessreducer.api.run_treereducer")
     @patch("harnessreducer.api.run_treereducer_with_check")
@@ -77,6 +87,7 @@ class TestApiPipeline(unittest.TestCase):
             stable=False,
             phase3_mode="split",
             snapshot=False,
+            amortize_link=False,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -172,6 +183,7 @@ class TestApiPipeline(unittest.TestCase):
             phase3_mode="split",
             statistics=False,
             snapshot=False,
+            amortize_link=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(

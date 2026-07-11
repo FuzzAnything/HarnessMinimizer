@@ -61,6 +61,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--direct`, `--single-step` | No | Use the single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. This is the default when no Phase 3 mode is specified. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
+| `--amortize-link` | No | Reuse a persistent runner and shared target libraries during tree reduction. Works with split or PCH mode; when used alone, the default split mode applies. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
 ## What the Main Options Do
@@ -144,6 +145,27 @@ Uses a precompiled-header for the tree-reduction candidate-testing loop:
 One-off validation steps outside the main reduction loop still use direct compilation.
 
 This can substantially reduce repeated compile cost for large harnesses with heavy includes.
+
+### `--amortize-link`
+
+Enables the experimental linkage-amortization backend for the Phase 3 candidate loop:
+
+- checks that `--link-flags` identifies at least one loadable ELF shared library (`.so`)
+- rejects static archives and object files in this mode
+- builds one ASan/UBSan-enabled persistent runner
+- loads the target libraries and crash input once
+- compiles each candidate as a small position-independent plugin
+- forks a child for each execution so a crashing candidate does not kill the runner
+- recalibrates the candidate stack-depth reference through the same runner before reduction
+
+Current restrictions:
+
+- Linux/ELF only
+- incompatible with `--direct` / `--single-step`
+- target code must already be available as a sanitizer-compatible shared library
+- full `.so` paths are recommended; linker scripts are rejected because `dlopen` cannot load them
+
+`--split` and `--pch` keep their original behavior unless `--amortize-link` is present.
 
 ### `--stable`
 
@@ -251,6 +273,29 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
+### 11. Amortize linking with split mode
+
+```bash
+harnessreducer harness.cpp \
+  --amortize-link \
+  --crash-input crash-input \
+  --compile-flags "-std=c++17 -Iinclude" \
+  --link-flags "/absolute/path/libtarget_asan.so" \
+  -o reduced.cpp
+```
+
+### 12. Amortize linking with PCH
+
+```bash
+harnessreducer harness.cpp \
+  --pch \
+  --amortize-link \
+  --crash-input crash-input \
+  --compile-flags "-std=c++17 -Iinclude" \
+  --link-flags "/absolute/path/libtarget_asan.so" \
+  -o reduced.cpp
+```
+
 ## Python API
 
 ```python
@@ -262,6 +307,7 @@ config = ReductionConfig(
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
     phase3_mode="pch",      # or "split" / "direct"
+    amortize_link=False,     # requires split/PCH and shared target libraries
     statistics=False,         # optional
     check=False,              # optional insight-only mode
     snapshot=False,           # optional snapshot-based fallback
@@ -306,6 +352,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header
+- `fahm_amortized_runner` — persistent sanitizer runner built for `--amortize-link`
 
 ## Notes
 

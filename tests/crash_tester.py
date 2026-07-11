@@ -4,6 +4,7 @@ import os
 import filecmp
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_PCH_OPT_FLAGS,
     PHASE3_SPLIT_OPT_FLAGS,
     PHASE3_WARNING_FLAGS,
+    PHASE3_PLUGIN_SANITIZER_FLAGS,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
@@ -328,6 +330,103 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     return 0, object_path
 
 
+def compile_amortized_plugin(
+    args: argparse.Namespace,
+    output_path: str,
+) -> tuple[int, str | None]:
+    """Compile a candidate as a small DSO without relinking target libraries."""
+    _reset_compile_failure_state(args)
+    pid = os.getpid()
+    with tempfile.NamedTemporaryFile(
+        prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp"
+    ) as obj_file:
+        object_path = obj_file.name
+
+    compile_cmd = ["clang++", "-Qunused-arguments"]
+    if args.pch:
+        if not args.pch_path or not os.path.exists(args.pch_path):
+            err_msg = f"PCH file does not exist: {args.pch_path}"
+            _remember_compile_failure(args, err_msg=err_msg, compile_cmd=compile_cmd)
+            print(f"Compilation failed: {err_msg}", file=sys.stderr)
+            return -1, object_path
+        compile_cmd.extend(["-include-pch", args.pch_path])
+        opt_flags = PHASE3_PCH_OPT_FLAGS
+    else:
+        opt_flags = PHASE3_SPLIT_OPT_FLAGS
+    compile_cmd.extend(
+        [
+            *phase3_replay_flags(args.fdp_trace),
+            *PHASE3_PLUGIN_SANITIZER_FLAGS,
+            *opt_flags,
+            *PHASE3_WARNING_FLAGS,
+            "-fPIC",
+            "-c",
+            *split_flags(args.compile_flags),
+            args.source,
+            "-o",
+            object_path,
+        ]
+    )
+    compile_proc = subprocess.run(
+        compile_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if compile_proc.returncode != 0:
+        err_msg = compile_proc.stderr.strip() or compile_proc.stdout.strip() or "Unknown compilation error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=compile_cmd)
+        print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
+        return -1, object_path
+
+    link_cmd = [
+        "clang++",
+        "-Qunused-arguments",
+        "-shared",
+        *PHASE3_PLUGIN_SANITIZER_FLAGS,
+        object_path,
+        "-o",
+        output_path,
+    ]
+    link_proc = subprocess.run(
+        link_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if link_proc.returncode != 0:
+        err_msg = link_proc.stderr.strip() or link_proc.stdout.strip() or "Unknown plugin link error"
+        _remember_compile_failure(args, err_msg=err_msg, compile_cmd=link_cmd)
+        print(f"Plugin linking failed: {link_cmd} {err_msg}", file=sys.stderr)
+        return -1, object_path
+    return 0, object_path
+
+
+def run_with_amortized_runner(socket_path: str, plugin_path: str) -> tuple[int, str]:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(socket_path)
+        client.sendall(os.path.abspath(plugin_path).encode("utf-8") + b"\n")
+        stream = client.makefile("rb")
+        header = stream.readline()
+        if not header:
+            raise RuntimeError("Amortized-link runner closed the connection without a response.")
+        try:
+            status_text, size_text = header.decode("ascii").strip().split(" ", 1)
+            status = int(status_text)
+            expected_size = int(size_text)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise RuntimeError(f"Invalid amortized-link runner response: {header!r}") from exc
+        output = stream.read(expected_size)
+        if len(output) != expected_size:
+            raise RuntimeError(
+                "Amortized-link runner returned a truncated execution log: "
+                f"expected {expected_size} bytes, got {len(output)}."
+            )
+        return status, output.decode("utf-8", errors="replace")
+
+
 def _check_stack_trace(
     run_log: str,
     stack_trace_file: str,
@@ -371,6 +470,7 @@ def main() -> int:
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
+    parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -379,7 +479,12 @@ def main() -> int:
     object_path = None
 
     try:
-        if args.pch:
+        if args.amortized_runner_socket:
+            if args.direct:
+                print("Compilation failed: amortized linking does not support direct mode", file=sys.stderr)
+                return _finalize_result(args, -1)
+            compile_status, object_path = compile_amortized_plugin(args, output_path)
+        elif args.pch:
             compile_status, object_path = compile_with_pch(args, output_path)
         elif args.split:
             compile_status, object_path = compile_split(args, output_path)
@@ -400,19 +505,27 @@ def main() -> int:
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
 
-        exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-        run_proc = subprocess.run(
-            exec_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            check=False,
-        )
-
-        status = run_proc.returncode
-
-        run_log = run_proc.stdout + run_proc.stderr
+        if args.amortized_runner_socket:
+            try:
+                status, run_log = run_with_amortized_runner(
+                    args.amortized_runner_socket,
+                    output_path,
+                )
+            except Exception as exc:
+                print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
+                return _finalize_result(args, 1)
+        else:
+            exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
+            run_proc = subprocess.run(
+                exec_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+            status = run_proc.returncode
+            run_log = run_proc.stdout + run_proc.stderr
 
         # First: crash pattern must match.
         if status != 77 or re.search(args.crash_pattern, run_log) is None:

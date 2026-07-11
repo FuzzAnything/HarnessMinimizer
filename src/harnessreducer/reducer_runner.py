@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager, nullcontext
 import filecmp
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +26,7 @@ PHASE3_SPLIT = "split"
 PHASE3_PCH = "pch"
 PHASE3_MODES = {PHASE3_DIRECT, PHASE3_SPLIT, PHASE3_PCH}
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
+PHASE3_PLUGIN_SANITIZER_FLAGS = ["-fsanitize=address,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-gline-tables-only", "-O0"]
 PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
@@ -40,6 +44,8 @@ SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
+AMORTIZED_RUNNER_SOURCE_NAME = "fahm_amortized_runner.cpp"
+AMORTIZED_RUNNER_BINARY_NAME = "fahm_amortized_runner"
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 # Matches symbolized stack frames like:
@@ -58,6 +64,13 @@ class PchArtifacts:
     prefix_header: str
     pch_file: str
     restore_prefix: str
+
+
+@dataclass(frozen=True)
+class AmortizedRunner:
+    socket_path: str
+    process: subprocess.Popen[str]
+    shared_libraries: tuple[str, ...]
 
 
 def cleanup() -> None:
@@ -128,6 +141,226 @@ def _split_flags(flags: str | None) -> list[str]:
     return flags.split() if flags else []
 
 
+def _is_shared_library_path(path: Path) -> bool:
+    return bool(re.search(r"\.so(?:\..+)?$", path.name))
+
+
+def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...]:
+    """Resolve shared-library inputs used by the amortized runner.
+
+    This first implementation intentionally rejects static archives and object
+    files. They cannot be made position independent at link time, and loading
+    them into the persistent process would require a separate anchor/export
+    strategy.
+    """
+    tokens = _split_flags(link_flags)
+    library_dirs: list[Path] = []
+    for index, token in enumerate(tokens):
+        if token == "-L" and index + 1 < len(tokens):
+            library_dirs.append(Path(tokens[index + 1]).expanduser().resolve())
+        elif token.startswith("-L") and len(token) > 2:
+            library_dirs.append(Path(token[2:]).expanduser().resolve())
+
+    resolved: list[str] = []
+
+    def add_library(path: Path) -> None:
+        candidate = path.expanduser().resolve()
+        if not candidate.exists():
+            raise ValueError(f"Shared library does not exist: {candidate}")
+        if not _is_shared_library_path(candidate):
+            raise ValueError(
+                "--amortize-link currently requires shared target libraries; "
+                f"unsupported link input: {candidate}"
+            )
+        try:
+            with candidate.open("rb") as handle:
+                elf_magic = handle.read(4)
+        except OSError as exc:
+            raise ValueError(f"Could not inspect shared library {candidate}: {exc}") from exc
+        if elf_magic != b"\x7fELF":
+            raise ValueError(
+                "--amortize-link requires a loadable ELF shared library, but "
+                f"{candidate} appears to be a linker script or another file type."
+            )
+        value = str(candidate)
+        if value not in resolved:
+            resolved.append(value)
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-L":
+            index += 2
+            continue
+        if token.startswith("-L"):
+            index += 1
+            continue
+        if token == "-l" and index + 1 < len(tokens):
+            library_name = tokens[index + 1]
+            index += 2
+        elif token.startswith("-l") and len(token) > 2:
+            library_name = token[2:]
+            index += 1
+        else:
+            path = Path(token)
+            if token.endswith((".a", ".o", ".lo")):
+                raise ValueError(
+                    "--amortize-link does not yet support static archives or object files: "
+                    f"{token}"
+                )
+            if _is_shared_library_path(path):
+                add_library(path)
+            index += 1
+            continue
+
+        if library_name.startswith(":"):
+            file_name = library_name[1:]
+        else:
+            file_name = f"lib{library_name}.so"
+        found = next((directory / file_name for directory in library_dirs if (directory / file_name).exists()), None)
+        if found is None:
+            # System libraries (for example -lm or -ldl) are already part of
+            # the runner's normal dynamic-loader scope or are dependencies of
+            # the target DSO. Only -l entries found in user-provided -L
+            # directories are treated as target libraries to preload.
+            continue
+        add_library(found)
+
+    if not resolved:
+        raise ValueError(
+            "--amortize-link requires at least one shared target library in --link-flags."
+            " Pass a full .so path or use -L/path -ltarget."
+        )
+    return tuple(resolved)
+
+
+def _compile_amortized_runner() -> str:
+    source = SCRIPT_DIR / AMORTIZED_RUNNER_SOURCE_NAME
+    output = Path(get_work_dir()) / AMORTIZED_RUNNER_BINARY_NAME
+    run_command(
+        [
+            "clang++",
+            "-std=c++17",
+            *PHASE3_PLUGIN_SANITIZER_FLAGS,
+            "-O1",
+            "-gline-tables-only",
+            "-fno-omit-frame-pointer",
+            str(source),
+            "-ldl",
+            "-o",
+            str(output),
+        ],
+        "Failed to compile amortized-link runner",
+    )
+    return str(output)
+
+
+@contextmanager
+def start_amortized_runner(
+    link_flags: str | None,
+    crash_input: str | None,
+    fdp_trace_file: str,
+    *,
+    symbolize: bool,
+):
+    shared_libraries = resolve_amortized_shared_libraries(link_flags)
+    runner_binary = _compile_amortized_runner()
+    socket_path = f"/tmp/fahm_runner_{os.getpid()}_{time.time_ns()}.sock"
+    env = os.environ.copy()
+    symbolized = "1" if symbolize else "0"
+    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
+    env["UBSAN_OPTIONS"] = (
+        f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
+    )
+    env["FDP_TRACE_PATH"] = fdp_trace_file
+    library_dirs = os.pathsep.join(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
+    if library_dirs:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = library_dirs + (os.pathsep + existing if existing else "")
+
+    process = subprocess.Popen(
+        [runner_binary, socket_path, crash_input or "", *shared_libraries],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 15.0
+    try:
+        while not os.path.exists(socket_path):
+            return_code = process.poll()
+            if return_code is not None:
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    "Amortized-link runner failed during startup:\n"
+                    f"{stdout}{stderr}"
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for amortized-link runner socket.")
+            time.sleep(0.02)
+        yield AmortizedRunner(
+            socket_path=socket_path,
+            process=process,
+            shared_libraries=shared_libraries,
+        )
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+        try:
+            os.remove(socket_path)
+        except FileNotFoundError:
+            pass
+
+
+def run_amortized_reference_candidate(
+    harness_path: str,
+    fdp_trace_file: str,
+    crash_pattern: str,
+    compile_flags: str | None,
+    link_flags: str | None,
+    crash_input: str | None,
+    phase3_mode: str,
+    runner_socket: str,
+    pch_artifacts: PchArtifacts | None,
+    *,
+    symbolize: bool,
+) -> str:
+    cmd = [
+        get_crash_tester_path(),
+        pch_artifacts.body_source if pch_artifacts is not None else harness_path,
+        crash_pattern,
+        "--crash-input",
+        crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+        "--fdp-trace",
+        fdp_trace_file,
+        "--amortized-runner-socket",
+        runner_socket,
+    ]
+    if symbolize:
+        cmd.append("--symbolize")
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    proc = run_command(
+        cmd,
+        "Amortized-link reference candidate failed",
+        ignore_errors=True,
+    )
+    output = proc.stdout + proc.stderr
+    if proc.returncode != 77:
+        raise RuntimeError(
+            "The original harness did not preserve the crash in amortized-link mode.\n"
+            f"{output}"
+        )
+    return output
+
+
 def _phase3_replay_flags(use_replay: bool) -> list[str]:
     if not use_replay:
         return []
@@ -139,14 +372,19 @@ def _build_pch_compile_command(
     pch_file: str,
     compile_flags: str | None,
     use_replay: bool,
+    amortize_link: bool = False,
 ) -> list[str]:
+    sanitizer_flags = (
+        PHASE3_PLUGIN_SANITIZER_FLAGS if amortize_link else PHASE3_SANITIZER_FLAGS
+    )
     cmd = [
         "clang++",
         "-Qunused-arguments",
         *_phase3_replay_flags(use_replay),
-        *PHASE3_SANITIZER_FLAGS,
+        *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *(["-fPIC"] if amortize_link else []),
         "-x",
         "c++-header",
         *_split_flags(compile_flags),
@@ -225,6 +463,7 @@ def prepare_phase3_pch_harness(
     harness_path: str,
     compile_flags: str | None,
     use_replay: bool,
+    amortize_link: bool = False,
 ) -> PchArtifacts:
     """Create fahm_prefix.h/.pch and an include-stripped harness body.
 
@@ -251,6 +490,7 @@ def prepare_phase3_pch_harness(
         str(pch_file),
         compile_flags,
         use_replay=use_replay,
+        amortize_link=amortize_link,
     )
     print(f"[+] Precompiling Phase 3 header: {prefix_header} -> {pch_file}")
     run_command(compile_cmd, "Failed to precompile Phase 3 PCH header")
@@ -996,12 +1236,15 @@ def run_treereducer(
     phase3_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     snapshot: bool = False,
+    amortize_link: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
     validate_phase3_mode(phase3_mode)
+    if amortize_link and phase3_mode == PHASE3_DIRECT:
+        raise ValueError("Amortized linking requires split or PCH mode.")
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
     if phase3_mode == PHASE3_PCH:
@@ -1009,6 +1252,7 @@ def run_treereducer(
             harness_path,
             compile_flags,
             use_replay=True,
+            amortize_link=amortize_link,
         )
         reducer_source = pch_artifacts.body_source
 
@@ -1045,16 +1289,48 @@ def run_treereducer(
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
-    cmd.extend(stack_depth_tester_args(symbolized=False))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
 
-    proc = subprocess.run(
-        cmd,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
+    runner_context = (
+        start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=False,
+        )
+        if amortize_link
+        else nullcontext(None)
     )
+    with runner_context as amortized_runner:
+        if amortized_runner is not None:
+            reference_output = run_amortized_reference_candidate(
+                harness_path,
+                fdp_trace_file,
+                crash_pattern,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode,
+                amortized_runner.socket_path,
+                pch_artifacts,
+                symbolize=False,
+            )
+            reference_depth = count_first_stack_trace_frames(reference_output)
+            if reference_depth:
+                cmd.extend(["--stack-depth", str(reference_depth)])
+            cmd.extend(
+                ["--amortized-runner-socket", amortized_runner.socket_path]
+            )
+        else:
+            cmd.extend(stack_depth_tester_args(symbolized=False))
+
+        proc = subprocess.run(
+            cmd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
     if not os.path.exists(reduced_harness):

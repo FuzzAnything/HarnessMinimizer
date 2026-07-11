@@ -93,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
             "post-reduction fallback/retry from that snapshot if inline validation fails."
         ),
     )
+    parser.add_argument(
+        "--amortize-link",
+        action="store_true",
+        help=(
+            "Reuse a persistent runner and shared target libraries during Phase 3. "
+            "Requires split or PCH mode; when used alone, the default split mode applies."
+        ),
+    )
     phase3_group = parser.add_mutually_exclusive_group()
     phase3_group.add_argument(
         "--direct",
@@ -123,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.amortize_link and args.phase3_mode == "direct":
+        parser.error("--amortize-link cannot be combined with --direct/--single-step")
 
     config = ReductionConfig(
         harness_path=args.harness,
@@ -133,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         use_llm=args.llm,
         stable=args.stable,
         phase3_mode=args.phase3_mode,
+        amortize_link=args.amortize_link,
         statistics=args.statistics,
         slice_enabled=args.slice,
         check=args.check,

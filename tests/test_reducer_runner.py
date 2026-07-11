@@ -1,6 +1,8 @@
 import unittest
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from harnessreducer import reducer_runner
@@ -59,6 +61,45 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
         self.assertNotIn("--last-interesting-file", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_amortized_reference_candidate")
+    @patch("harnessreducer.reducer_runner.start_amortized_runner")
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_uses_amortized_runner_and_calibrated_depth(
+        self,
+        mock_run,
+        mock_exists,
+        mock_start_runner,
+        mock_reference,
+    ):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+        mock_start_runner.return_value = nullcontext(
+            SimpleNamespace(socket_path="/tmp/fahm.sock")
+        )
+        mock_reference.return_value = (
+            "#0 0x111111 in target\n"
+            "#1 0x222222 in LLVMFuzzerTestOneInput\n"
+        )
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file="/tmp/trace.log",
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags="/tmp/libtarget.so",
+            crash_input=None,
+            phase3_mode="split",
+            amortize_link=True,
+        )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--amortized-runner-socket", cmd)
+        self.assertIn("/tmp/fahm.sock", cmd)
+        self.assertIn("--stack-depth", cmd)
+        self.assertIn("2", cmd)
+        mock_reference.assert_called_once()
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
