@@ -1,7 +1,11 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
 [project]
 name = "harnessreducer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Minimize crashing C/C++ fuzz harnesses while preserving crash behavior"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,3 +15,18 @@ dependencies = [
 
 [project.scripts]
 harnessreducer = "harnessreducer.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harnessreducer"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/harnessreducer",
+    "/tests",
+    "/include",
+    "/README.md",
+    "/pyproject.toml",
+]
+
+[tool.uv]
+package = true
