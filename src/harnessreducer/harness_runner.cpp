@@ -155,7 +155,7 @@ void HandleRequest(int connection, int listen_fd,
 int main(int argc, char **argv) {
   if (argc < 4) {
     std::fprintf(stderr,
-                 "usage: fahm_amortized_runner SOCKET CRASH_INPUT TARGET_SO...\n");
+                 "usage: harness_runner SOCKET CRASH_INPUT TARGET_SO...\n");
     return 2;
   }
 

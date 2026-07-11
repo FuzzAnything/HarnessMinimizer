@@ -77,7 +77,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
         mock_start_runner.return_value = nullcontext(
-            SimpleNamespace(socket_path="/tmp/fahm.sock")
+            SimpleNamespace(socket_path="/tmp/harness-runner.sock")
         )
         mock_reference.return_value = (
             "#0 0x111111 in target\n"
@@ -97,7 +97,7 @@ class TestReducerRunner(unittest.TestCase):
 
         cmd = mock_run.call_args.args[0]
         self.assertIn("--amortized-runner-socket", cmd)
-        self.assertIn("/tmp/fahm.sock", cmd)
+        self.assertIn("/tmp/harness-runner.sock", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("2", cmd)
         mock_reference.assert_called_once()

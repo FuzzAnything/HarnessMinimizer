@@ -411,7 +411,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant
 - `harness_values.h` — generated only when large inlined FDP buffers are moved into a header
-- `fahm_amortized_runner` — persistent sanitizer runner built for `--amortize-link`
+- `harness_runner` — persistent sanitizer runner built for `--amortize-link`
 
 ## Notes
 
