@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -236,12 +237,20 @@ class TestReducerRunner(unittest.TestCase):
 
             def write_fresh_trace(*args, **kwargs):
                 self.assertFalse(trace_path.exists())
+                self.assertEqual(
+                    kwargs["env"]["LD_LIBRARY_PATH"].split(os.pathsep)[0],
+                    "/tmp/shared",
+                )
                 trace_path.write_text("S 100000 1\n", encoding="utf-8")
                 return _Proc(returncode=77)
 
             mock_run_command.side_effect = write_fresh_trace
 
-            result = reducer_runner.dump_fdp_trace("/tmp/tagged.out", "seed.bin")
+            result = reducer_runner.dump_fdp_trace(
+                "/tmp/tagged.out",
+                "seed.bin",
+                "-L/tmp/shared -ltarget",
+            )
 
             self.assertEqual(result, str(trace_path))
             self.assertEqual(trace_path.read_text(encoding="utf-8"), "S 100000 1\n")

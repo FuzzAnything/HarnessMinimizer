@@ -28,6 +28,8 @@ from harnessreducer.reducer_runner import (
     start_amortized_runner,
     get_stack_trace_file,
     validate_phase3_mode,
+    runtime_library_env,
+    absolutize_link_flags,
 )
 
 CHECK_REFERENCE_FILE_NAME = "check_reference.json"
@@ -111,13 +113,14 @@ def load_check_reference(path: str | None = None) -> CheckReference:
 def record_check_reference(
     crash_input: str | None,
     crash_pattern: str,
+    link_flags: str | None = None,
 ) -> CheckReference:
     output_bin = os.path.join(get_work_dir(), "poc.out")
     cmd = [output_bin]
     if crash_input:
         cmd.append(crash_input)
 
-    env = os.environ.copy()
+    env = runtime_library_env(link_flags)
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
     env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
     proc = run_command(
@@ -272,6 +275,7 @@ def run_treereducer_with_check(
 ) -> str:
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
+    link_flags = absolutize_link_flags(link_flags)
 
     validate_phase3_mode(phase3_mode)
     if amortize_link and phase3_mode == PHASE3_DIRECT:

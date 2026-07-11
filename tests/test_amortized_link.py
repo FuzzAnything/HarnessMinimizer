@@ -12,6 +12,66 @@ def test_amortized_link_rejects_static_archives() -> None:
         reducer_runner.resolve_amortized_shared_libraries("/tmp/libtarget.a")
 
 
+def test_runtime_library_env_uses_link_search_directories(tmp_path: Path) -> None:
+    target_source = tmp_path / "runtime_target.cpp"
+    target_library = tmp_path / "libruntime_target.so"
+    main_source = tmp_path / "runtime_main.cpp"
+    executable = tmp_path / "runtime_main"
+    target_source.write_text(
+        'extern "C" int runtime_value() { return 42; }\n', encoding="utf-8"
+    )
+    main_source.write_text(
+        'extern "C" int runtime_value();\n'
+        "int main() { return runtime_value() == 42 ? 0 : 1; }\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            str(target_source),
+            "-o",
+            str(target_library),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "clang++",
+            str(main_source),
+            "-L",
+            str(tmp_path),
+            "-lruntime_target",
+            "-o",
+            str(executable),
+        ],
+        check=True,
+    )
+
+    run = subprocess.run(
+        [str(executable)],
+        env=reducer_runner.runtime_library_env(f"-L{tmp_path} -lruntime_target"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+
+
+def test_absolutize_link_flags_preserves_libraries_and_resolves_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    normalized = reducer_runner.absolutize_link_flags(
+        "-Lrelative/lib -laom relative/lib/libextra.so -lm"
+    )
+    assert normalized == (
+        f"-L{tmp_path / 'relative/lib'} -laom "
+        f"{tmp_path / 'relative/lib/libextra.so'} -lm"
+    )
+
+
 def test_amortized_runner_executes_candidate_against_shared_target(
     tmp_path: Path,
 ) -> None:
