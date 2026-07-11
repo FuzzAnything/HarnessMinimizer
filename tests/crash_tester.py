@@ -464,7 +464,7 @@ def main() -> int:
     mode_group.add_argument("--direct", "--single-step", dest="direct", action="store_true", help="Use the single-step Phase 3 compile/link command")
     mode_group.add_argument("--split", action="store_true", help="Use split Phase 3 mode: compile the full source to an object, then link")
     mode_group.add_argument("--pch", action="store_true", help="Use PCH Phase 3 mode: compile object with -include-pch, then link")
-    parser.add_argument("--pch-path", type=str, default=None, help="Path to fahm_prefix.pch when --pch is used")
+    parser.add_argument("--pch-path", type=str, default=None, help="Path to harness_prefix.pch when --pch is used")
     # Stack trace validation arguments
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")

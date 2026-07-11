@@ -194,7 +194,7 @@ class TestCheckModeHelpers(unittest.TestCase):
             "Proc", (), {"returncode": 0, "stdout": "", "stderr": ""}
         )()
         mock_start_runner.return_value = nullcontext(
-            SimpleNamespace(socket_path="/tmp/fahm-check.sock")
+            SimpleNamespace(socket_path="/tmp/harness-check.sock")
         )
         mock_reference.return_value = SAMPLE_OUTPUT
 
@@ -224,7 +224,7 @@ class TestCheckModeHelpers(unittest.TestCase):
 
             cmd = mock_run.call_args.args[0]
             self.assertIn("--amortized-runner-socket", cmd)
-            self.assertIn("/tmp/fahm-check.sock", cmd)
+            self.assertIn("/tmp/harness-check.sock", cmd)
             self.assertEqual(load_check_reference().frame_count, 7)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)

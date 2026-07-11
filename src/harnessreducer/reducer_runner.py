@@ -31,8 +31,8 @@ PHASE3_DIRECT_OPT_FLAGS = ["-gline-tables-only", "-O0"]
 PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_WARNING_FLAGS = ["-Werror=uninitialized"]
-PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
-PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"
+PCH_PREFIX_HEADER_NAME = "harness_prefix.h"
+PCH_PREFIX_FILE_NAME = "harness_prefix.pch"
 COVERAGE_BIN_FILE_NAME = "poc_cov.out"
 COVERAGE_DRIVER_FILE_NAME = "coverage_driver.cpp"
 SOURCE_COVERAGE_RAW_FILE_NAME = "coverage.profraw"
@@ -44,8 +44,8 @@ SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
-AMORTIZED_RUNNER_SOURCE_NAME = "fahm_amortized_runner.cpp"
-AMORTIZED_RUNNER_BINARY_NAME = "fahm_amortized_runner"
+HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
+HARNESS_RUNNER_BINARY_NAME = "harness_runner"
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 # Matches symbolized stack frames like:
@@ -303,9 +303,9 @@ def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...
     return tuple(resolved)
 
 
-def _compile_amortized_runner() -> str:
-    source = SCRIPT_DIR / AMORTIZED_RUNNER_SOURCE_NAME
-    output = Path(get_work_dir()) / AMORTIZED_RUNNER_BINARY_NAME
+def _compile_harness_runner() -> str:
+    source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
+    output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
     run_command(
         [
             "clang++",
@@ -333,8 +333,8 @@ def start_amortized_runner(
     symbolize: bool,
 ):
     shared_libraries = resolve_amortized_shared_libraries(link_flags)
-    runner_binary = _compile_amortized_runner()
-    socket_path = f"/tmp/fahm_runner_{os.getpid()}_{time.time_ns()}.sock"
+    runner_binary = _compile_harness_runner()
+    socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
     env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
@@ -473,7 +473,7 @@ def _rewrite_local_quoted_include_for_pch(line: str, source_dir: Path) -> str:
     """Preserve quote-include semantics after moving includes into the work dir.
 
     Direct compilation resolves #include "local.h" relative to the source file
-    first.  The generated fahm_prefix.h lives in the reducer work directory, so a
+    first. The generated harness_prefix.h lives in the reducer work directory, so a
     plain copy of that line could accidentally change the lookup root.  If the
     quoted header exists relative to the source being split, rewrite it to the
     resolved absolute path inside the PCH prefix.  The final restored harness
@@ -535,7 +535,7 @@ def prepare_phase3_pch_harness(
     use_replay: bool,
     amortize_link: bool = False,
 ) -> PchArtifacts:
-    """Create fahm_prefix.h/.pch and an include-stripped harness body.
+    """Create harness_prefix.h/.pch and an include-stripped harness body.
 
     The PCH is compiled with Phase 3's conditional replay flags when
     ``use_replay`` is true.  The candidate body is what should be passed to
@@ -550,7 +550,7 @@ def prepare_phase3_pch_harness(
     prefix_header = work_dir / PCH_PREFIX_HEADER_NAME
     pch_file = work_dir / PCH_PREFIX_FILE_NAME
     suffix = source_path.suffix or ".cpp"
-    body_source = work_dir / f"{source_path.stem}.fahm_body{suffix}"
+    body_source = work_dir / f"{source_path.stem}.harness_body{suffix}"
 
     prefix_header.write_text(pch_prefix, encoding="utf-8")
     body_source.write_text(body, encoding="utf-8")
@@ -684,12 +684,12 @@ def compile_coverage_harness(
 extern "C" int __llvm_profile_write_file(void);
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
 
-static void fahmCoverageDeathCallback() {
+static void coverageDeathCallback() {
     __llvm_profile_write_file();
 }
 
 int main(int argc, char **argv) {
-    __sanitizer_set_death_callback(fahmCoverageDeathCallback);
+    __sanitizer_set_death_callback(coverageDeathCallback);
     std::vector<uint8_t> data;
     if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\\0') {
         std::ifstream input(argv[1], std::ios::binary);

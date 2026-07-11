@@ -422,7 +422,7 @@ Typical work-dir files include:
 - `reduced_harness.cpp`
 - `*.inline.cpp`
 - `harness_values.h` (optional)
-- `fahm_prefix.h`, `fahm_prefix.pch`, `*.fahm_body.cpp` in PCH mode
+- `harness_prefix.h`, `harness_prefix.pch`, `*.harness_body.cpp` in PCH mode
 
 ---
 

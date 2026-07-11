@@ -89,6 +89,6 @@ time clang++ $COMMON \
   -o /tmp/direct.o
 
 time clang++ $COMMON \
-  -include-pch fahm_prefix.pch \
-  -c harness.tagged.fahm_body.cpp \
+  -include-pch harness_prefix.pch \
+  -c harness.tagged.harness_body.cpp \
   -o /tmp/pch.o

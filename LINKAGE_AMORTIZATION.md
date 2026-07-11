@@ -171,15 +171,15 @@ also placed in `LD_LIBRARY_PATH` during execution, so an additional
 
 ### Step 2: Build the persistent runner
 
-HarnessReducer compiles `fahm_amortized_runner.cpp` once:
+HarnessReducer compiles `harness_runner.cpp` once:
 
 ```bash
 clang++ -std=c++17 \
   -fsanitize=address,undefined \
   -O1 -gline-tables-only -fno-omit-frame-pointer \
-  fahm_amortized_runner.cpp \
+  harness_runner.cpp \
   -ldl \
-  -o fahm_amortized_runner
+  -o harness_runner
 ```
 
 The runner contains the sanitizer runtime and the code needed for dynamic
@@ -204,13 +204,13 @@ receives the same bytes.
 ### Step 4: Optionally build the PCH once
 
 With `--pch`, HarnessReducer moves `#include` lines into a generated prefix
-header and compiles that header into `fahm_prefix.pch`. The changing body is
+header and compiles that header into `harness_prefix.pch`. The changing body is
 compiled against this PCH for every candidate.
 
 ```text
 original harness.cpp
         |
-        +--> include lines --> fahm_prefix.h --> fahm_prefix.pch (once)
+        +--> include lines --> harness_prefix.h --> harness_prefix.pch (once)
         |
         `--> remaining body --> candidate body (changes repeatedly)
 ```
@@ -229,11 +229,11 @@ A simplified PCH command is:
 
 ```bash
 clang++ \
-  -include-pch fahm_prefix.pch \
+  -include-pch harness_prefix.pch \
   -fsanitize=address,undefined \
   -O0 -gline-tables-only -Werror=uninitialized \
   -fPIC -c \
-  candidate.fahm_body.cpp \
+  candidate.harness_body.cpp \
   -o candidate.o
 ```
 
@@ -245,7 +245,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 }
 ```
 
-The current implementation does not rewrite it to `FAHM_RunOne`.
+The current implementation keeps this standard entry-point name unchanged.
 
 ### Step 2: Link only the small candidate plugin
 
@@ -427,7 +427,7 @@ simpler and uses standard Linux shared libraries:
 
 | Original proposal | Current implementation |
 |---|---|
-| Normalize the entry point to `FAHM_RunOne` | Keep and look up `LLVMFuzzerTestOneInput` |
+| Normalize the entry point to a custom `RunOne` function | Keep and look up `LLVMFuzzerTestOneInput` |
 | Keep “PCH / AST context” inside the runner | Build a PCH once, but the compiler consumes it outside the runner |
 | Use LLVM ORC JIT/JITLink | Use `clang++` to create a small `.so`, then use `dlopen()`/`dlsym()` |
 | Possibly compile and execute entirely in memory | Write a temporary candidate object and plugin to disk |

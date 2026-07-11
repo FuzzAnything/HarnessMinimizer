@@ -78,7 +78,7 @@ def main() -> int:
     mode_group.add_argument("--direct", "--single-step", dest="direct", action="store_true", help="Use the single-step Phase 3 compile/link command")
     mode_group.add_argument("--split", action="store_true", help="Use split Phase 3 mode: compile the full source to an object, then link")
     mode_group.add_argument("--pch", action="store_true", help="Use PCH Phase 3 mode: compile object with -include-pch, then link")
-    parser.add_argument("--pch-path", type=str, default=None, help="Path to fahm_prefix.pch when --pch is used")
+    parser.add_argument("--pch-path", type=str, default=None, help="Path to harness_prefix.pch when --pch is used")
     parser.add_argument("--check-reference-file", type=str, required=True, help="Path to the stored check reference JSON")
     parser.add_argument("--check-statistics-file", type=str, required=True, help="Path to the check statistics file")
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
