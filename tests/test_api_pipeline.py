@@ -76,7 +76,9 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
         mock_reset_last_interesting_state.assert_called_once_with()
         mock_reset_check_state.assert_called_once_with()
-        mock_record_check_reference.assert_called_once_with("seed.bin", "AddressSanitizer")
+        mock_record_check_reference.assert_called_once_with(
+            "seed.bin", "AddressSanitizer", None
+        )
         mock_run_with_check.assert_called_once_with(
             "/tmp/tagged.cpp",
             "/tmp/fdp_trace.log",
@@ -152,7 +154,9 @@ class TestApiPipeline(unittest.TestCase):
         mock_reset_stack_state.assert_called_once_with()
         mock_reset_last_interesting_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
-        mock_extract.assert_called_once_with("seed.bin", harness_path="a.cpp")
+        mock_extract.assert_called_once_with(
+            "seed.bin", harness_path="a.cpp", link_flags="-lm"
+        )
         mock_check_pattern.assert_called_once_with(
             "a.cpp",
             "AddressSanitizer",
@@ -171,7 +175,7 @@ class TestApiPipeline(unittest.TestCase):
         )
         mock_tag.assert_called_once_with("/tmp/sliced.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
-        mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin")
+        mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin", "-lm")
         mock_reduce.assert_called_once_with(
             "/tmp/tagged.cpp",
             "/tmp/fdp_trace.log",

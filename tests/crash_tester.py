@@ -26,6 +26,7 @@ from harnessreducer.reducer_runner import (
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
     count_first_stack_trace_frames,
+    runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
@@ -495,7 +496,7 @@ def main() -> int:
 
         use_symbolize = args.symbolize
 
-        env = os.environ.copy()
+        env = runtime_library_env(args.link_flags)
         if use_symbolize:
             env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"

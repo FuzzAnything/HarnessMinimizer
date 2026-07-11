@@ -165,6 +165,14 @@ Current restrictions:
 - target code must already be available as a sanitizer-compatible shared library
 - full `.so` paths are recommended; linker scripts are rejected because `dlopen` cannot load them
 
+Using `-L/path/to/lib -ltarget` is also supported: libraries found in explicit
+`-L` directories are resolved and preloaded. Normal system flags such as
+`-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`; they are left to
+the system dynamic-loader environment. HarnessReducer also converts relative
+`-L` paths to absolute paths for the reduction workers and prepends those
+directories to `LD_LIBRARY_PATH` for every harness execution, so an additional
+runtime `rpath` is not required when running through the tool.
+
 `--split` and `--pch` keep their original behavior unless `--amortize-link` is present.
 
 ### `--stable`

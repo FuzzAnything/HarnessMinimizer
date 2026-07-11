@@ -245,6 +245,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     crash_pattern = extract_crash_pattern_from_output(
         config.crash_input,
         harness_path=config.harness_path,
+        link_flags=config.link_flags,
     )
     if not crash_pattern:
         return ReductionResult(
@@ -261,7 +262,11 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             f"fast(symbolize=0)={get_normal_reference_stack_depth()}, "
             f"symbolized(symbolize=1)={get_symbolized_reference_stack_depth()}"
         )
-        reference = record_check_reference(config.crash_input, crash_pattern)
+        reference = record_check_reference(
+            config.crash_input,
+            crash_pattern,
+            config.link_flags,
+        )
         print(
             "[+] Recorded check reference: "
             f"{reference.frame_count} frame(s) in the first entire stack trace."
@@ -295,7 +300,11 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         config.compile_flags,
         config.link_flags,
     )
-    fdp_trace_file = dump_fdp_trace(tagged_harness_bin, config.crash_input)
+    fdp_trace_file = dump_fdp_trace(
+        tagged_harness_bin,
+        config.crash_input,
+        config.link_flags,
+    )
     if config.check:
         reduced_harness = run_treereducer_with_check(
             tagged_harness_file,

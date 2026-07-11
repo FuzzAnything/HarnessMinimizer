@@ -141,6 +141,75 @@ def _split_flags(flags: str | None) -> list[str]:
     return flags.split() if flags else []
 
 
+def runtime_library_directories(link_flags: str | None) -> tuple[str, ...]:
+    """Return absolute runtime search directories implied by linker flags."""
+    tokens = _split_flags(link_flags)
+    directories: list[str] = []
+
+    def add(path_text: str) -> None:
+        directory = str(Path(path_text).expanduser().resolve())
+        if directory not in directories:
+            directories.append(directory)
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-L" and index + 1 < len(tokens):
+            add(tokens[index + 1])
+            index += 2
+            continue
+        if token.startswith("-L") and len(token) > 2:
+            add(token[2:])
+        elif _is_shared_library_path(Path(token)):
+            add(str(Path(token).expanduser().resolve().parent))
+        index += 1
+    return tuple(directories)
+
+
+def runtime_library_env(
+    link_flags: str | None,
+    base_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build an execution environment that can locate dynamically linked targets."""
+    env = dict(base_env) if base_env is not None else os.environ.copy()
+    directories = runtime_library_directories(link_flags)
+    if not directories:
+        return env
+    existing = env.get("LD_LIBRARY_PATH", "")
+    prefix = os.pathsep.join(directories)
+    env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
+    return env
+
+
+def absolutize_link_flags(link_flags: str | None) -> str | None:
+    """Make path-bearing link flags stable when treereduce changes cwd."""
+    if not link_flags:
+        return link_flags
+    tokens = _split_flags(link_flags)
+    normalized: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-L" and index + 1 < len(tokens):
+            normalized.extend(
+                ["-L", str(Path(tokens[index + 1]).expanduser().resolve())]
+            )
+            index += 2
+            continue
+        if token.startswith("-L") and len(token) > 2:
+            normalized.append(
+                "-L" + str(Path(token[2:]).expanduser().resolve())
+            )
+        elif token.endswith((".a", ".o", ".lo")) or _is_shared_library_path(
+            Path(token)
+        ):
+            normalized.append(str(Path(token).expanduser().resolve()))
+        else:
+            normalized.append(token)
+        index += 1
+    return " ".join(normalized)
+
+
 def _is_shared_library_path(path: Path) -> bool:
     return bool(re.search(r"\.so(?:\..+)?$", path.name))
 
@@ -266,17 +335,18 @@ def start_amortized_runner(
     shared_libraries = resolve_amortized_shared_libraries(link_flags)
     runner_binary = _compile_amortized_runner()
     socket_path = f"/tmp/fahm_runner_{os.getpid()}_{time.time_ns()}.sock"
-    env = os.environ.copy()
+    env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     )
     env["FDP_TRACE_PATH"] = fdp_trace_file
-    library_dirs = os.pathsep.join(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
+    library_dirs = tuple(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
     if library_dirs:
         existing = env.get("LD_LIBRARY_PATH", "")
-        env["LD_LIBRARY_PATH"] = library_dirs + (os.pathsep + existing if existing else "")
+        prefix = os.pathsep.join(library_dirs)
+        env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
 
     process = subprocess.Popen(
         [runner_binary, socket_path, crash_input or "", *shared_libraries],
@@ -943,13 +1013,14 @@ def collect_harness_coverage(
     coverage_bin: str,
     harness_path: str,
     crash_input: str | None,
+    link_flags: str | None = None,
 ) -> CoverageMap:
     """Run the crashing input under source-based coverage and return line sets."""
     _clear_source_coverage_artifacts()
     raw_path = _source_coverage_raw_path()
     profdata_path = _source_coverage_data_path()
 
-    env = os.environ.copy()
+    env = runtime_library_env(link_flags)
     env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
     env["LLVM_PROFILE_FILE"] = str(raw_path)
@@ -986,7 +1057,12 @@ def apply_coverage_guided_slice(
     """
     try:
         coverage_bin = compile_coverage_harness(harness_path, compile_flags, link_flags)
-        coverage = collect_harness_coverage(coverage_bin, harness_path, crash_input)
+        coverage = collect_harness_coverage(
+            coverage_bin,
+            harness_path,
+            crash_input,
+            link_flags,
+        )
         if not coverage.executable_lines:
             print("[*] Coverage-guided slicing skipped: no executable harness lines were found.")
             return harness_path
@@ -1026,11 +1102,12 @@ def _run_harness_for_crash_reference(
     crash_input: str | None,
     *,
     symbolize: bool,
+    link_flags: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [output_bin]
     if crash_input:
         cmd.append(crash_input)
-    env = os.environ.copy()
+    env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
@@ -1083,10 +1160,16 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
 def extract_crash_pattern_from_output(
     crash_input: str | None,
     harness_path: str | None = None,
+    link_flags: str | None = None,
 ) -> str | None:
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
-    proc = _run_harness_for_crash_reference(output_bin, crash_input, symbolize=False)
+    proc = _run_harness_for_crash_reference(
+        output_bin,
+        crash_input,
+        symbolize=False,
+        link_flags=link_flags,
+    )
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
@@ -1105,7 +1188,12 @@ def extract_crash_pattern_from_output(
     if not crash_pattern:
         raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
 
-    symbolized_proc = _run_harness_for_crash_reference(output_bin, crash_input, symbolize=True)
+    symbolized_proc = _run_harness_for_crash_reference(
+        output_bin,
+        crash_input,
+        symbolize=True,
+        link_flags=link_flags,
+    )
     symbolized_output = symbolized_proc.stdout + "\n" + symbolized_proc.stderr
     if symbolized_proc.returncode != 77:
         set_symbolized_reference_stack_depth(None)
@@ -1205,7 +1293,11 @@ def compile_dump_mode_harness(
     return tagged_harness_bin
 
 
-def dump_fdp_trace(harness_bin: str, crash_input: str | None) -> str:
+def dump_fdp_trace(
+    harness_bin: str,
+    crash_input: str | None,
+    link_flags: str | None = None,
+) -> str:
     fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
     # The dump runtime appends trace records, so remove any trace left by an
     # earlier run when a fixed work directory is reused.
@@ -1214,7 +1306,7 @@ def dump_fdp_trace(harness_bin: str, crash_input: str | None) -> str:
     except FileNotFoundError:
         pass
 
-    env = os.environ.copy()
+    env = runtime_library_env(link_flags)
     env["FDP_TRACE_PATH"] = fdp_trace_file
 
     exec_cmd = [harness_bin, crash_input] if crash_input else [harness_bin]
@@ -1242,6 +1334,7 @@ def run_treereducer(
     # paths for crash_input would not be found.  Resolve to absolute here.
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
+    link_flags = absolutize_link_flags(link_flags)
     validate_phase3_mode(phase3_mode)
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")

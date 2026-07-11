@@ -22,7 +22,7 @@ from harnessreducer.check_mode import (
     load_check_reference,
     record_check_statistics,
 )
-from harnessreducer.reducer_runner import extract_stack_trace
+from harnessreducer.reducer_runner import extract_stack_trace, runtime_library_env
 
 _crash_tester_spec = importlib.util.spec_from_file_location(
     "crash_tester_support",
@@ -119,7 +119,7 @@ def main() -> int:
             )
             return -1
 
-        env = os.environ.copy()
+        env = runtime_library_env(args.link_flags)
         env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
         env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"
         if args.fdp_trace:
