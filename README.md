@@ -29,6 +29,57 @@ If you want to use `--llm`, also set the OpenAI-compatible environment variables
 ```bash
 cargo install treereduce-c
 uv sync
+source .venv/bin/activate
+hash -r
+harnessreducer --help
+```
+
+`uv sync` installs this repository as an editable package and creates
+`.venv/bin/harnessreducer`. You can also avoid shell activation entirely:
+
+```bash
+uv run harnessreducer --help
+```
+
+If `command -v harnessreducer` still names an older global installation after
+activation, run `hash -r` (Bash) or invoke `.venv/bin/harnessreducer` directly.
+
+### Container setup with `/usr/bin/python3`
+
+For a container where the system interpreter is `/usr/bin/python3`, first
+confirm that it is Python 3.12 or newer, then create and populate the virtual
+environment explicitly:
+
+```bash
+/usr/bin/python3 --version
+/usr/bin/python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+hash -r
+command -v harnessreducer
+harnessreducer --help
+```
+
+The final `command -v` should point to `<project>/.venv/bin/harnessreducer`.
+If `/usr/bin/python3 -m venv` is unavailable in a Debian/Ubuntu-based image,
+install its OS package first:
+
+```bash
+apt-get update
+apt-get install -y python3-venv python3-pip
+```
+
+Shell activation does not persist between Dockerfile `RUN` instructions. For
+a Docker image, put the virtual environment on `PATH` explicitly:
+
+```dockerfile
+WORKDIR /root/HarnessMinimizer
+RUN /usr/bin/python3 -m venv .venv \
+    && .venv/bin/python -m pip install --upgrade pip \
+    && .venv/bin/python -m pip install -e .
+ENV PATH="/root/HarnessMinimizer/.venv/bin:${PATH}"
+RUN harnessreducer --help
 ```
 
 ## Basic CLI Usage
