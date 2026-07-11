@@ -55,6 +55,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--link-flags=-lm", cmd)
         self.assertIn("--fdp-trace", cmd)
         self.assertIn("/tmp/trace.log", cmd)
+        self.assertIn("--split", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
         self.assertNotIn("--last-interesting-file", cmd)

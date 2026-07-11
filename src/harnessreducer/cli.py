@@ -100,15 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
         dest="phase3_mode",
         action="store_const",
         const="direct",
-        default="direct",
-        help="Use the single-step Phase 3 compile/link path (default).",
+        default="split",
+        help="Use the single-step Phase 3 compile/link path.",
     )
     phase3_group.add_argument(
         "--split",
         dest="phase3_mode",
         action="store_const",
         const="split",
-        help="Use two-step Phase 3 mode: compile the full source to an object, then link it.",
+        help="Use two-step Phase 3 mode: compile the full source to an object, then link it (default).",
     )
     phase3_group.add_argument(
         "--pch",

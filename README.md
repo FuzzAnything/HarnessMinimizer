@@ -58,8 +58,8 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--snapshot` | No | Enable `last_interesting.cpp` snapshotting during tree reduction and allow snapshot-based retry/fallback after reduction if inline validation fails. Disabled by default. |
-| `--direct`, `--single-step` | No | Use the default single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
-| `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. |
+| `--direct`, `--single-step` | No | Use the single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
+| `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. This is the default when no Phase 3 mode is specified. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
@@ -284,7 +284,7 @@ reduced = process(
     compile_flags="-std=c++17 -Iinclude -Ibuild/include",
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
-    phase3_mode="direct",   # "single-step" alias is also accepted by the CLI
+    phase3_mode="split",    # default; "direct" / "single-step" are also available
     statistics=False,
     check=False,
     snapshot=False,

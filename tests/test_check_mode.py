@@ -173,6 +173,7 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("--check-reference-file", cmd)
             self.assertIn(get_check_reference_file(), cmd)
             self.assertIn("--check-statistics-file", cmd)
+            self.assertIn("--split", cmd)
             self.assertNotIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
