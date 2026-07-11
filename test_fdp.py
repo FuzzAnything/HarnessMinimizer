@@ -153,8 +153,8 @@ def _compile_harness(
     cmd = [
         "clang++",
         "-fsanitize=address,fuzzer,undefined",
-        "-g",
-        "-O1",
+        "-gline-tables-only",
+        "-O0",
         "-Werror=uninitialized",
     ]
     if dump_mode:

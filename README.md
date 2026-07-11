@@ -119,7 +119,7 @@ Enables optional last-interesting snapshot behavior:
 
 When `--snapshot` is omitted, no snapshot file is maintained and no snapshot-based fallback is attempted.
 
-For all Phase 3 compile paths, HarnessReducer now keeps the existing debug info style for that mode but uses `-O1` and adds `-Werror=uninitialized`.
+For all Phase 3 compile paths, HarnessReducer now keeps the existing debug info style for that mode but uses `-O0` and adds `-Werror=uninitialized`.
 
 ### `--split`
 
@@ -128,7 +128,7 @@ Uses a two-step compile/link path for the tree-reduction candidate-testing loop:
 - compile the full source file into an object
 - link the object into the executable
 - no PCH
-- uses `-O1 -gline-tables-only -Werror=uninitialized` like PCH mode
+- uses `-O0 -gline-tables-only -Werror=uninitialized` like PCH mode
 
 This is useful when you want separate compile and link stages without the include stripping / PCH machinery.
 
@@ -139,7 +139,7 @@ Uses a precompiled-header for the tree-reduction candidate-testing loop:
 - includes are moved into a generated prefix header
 - a `.pch` is built once
 - each candidate body is compiled against that PCH and then linked
-- both the generated `.pch` and the candidate-body compile use `-O1 -gline-tables-only -Werror=uninitialized`
+- both the generated `.pch` and the candidate-body compile use `-O0 -gline-tables-only -Werror=uninitialized`
 
 One-off validation steps outside the main reduction loop still use direct compilation.
 

@@ -23,9 +23,9 @@ PHASE3_SPLIT = "split"
 PHASE3_PCH = "pch"
 PHASE3_MODES = {PHASE3_DIRECT, PHASE3_SPLIT, PHASE3_PCH}
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
-PHASE3_DIRECT_OPT_FLAGS = ["-g", "-O1"]
-PHASE3_SPLIT_OPT_FLAGS = ["-O1", "-gline-tables-only"]
-PHASE3_PCH_OPT_FLAGS = ["-O1", "-gline-tables-only"]
+PHASE3_DIRECT_OPT_FLAGS = ["-gline-tables-only", "-O0"]
+PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
+PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_WARNING_FLAGS = ["-Werror=uninitialized"]
 PCH_PREFIX_HEADER_NAME = "fahm_prefix.h"
 PCH_PREFIX_FILE_NAME = "fahm_prefix.pch"

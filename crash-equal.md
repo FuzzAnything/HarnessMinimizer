@@ -23,7 +23,7 @@ Before any reduction, HarnessReducer compiles the original harness with sanitize
 `check_harness_compilation()` builds `poc.out` with:
 
 ```bash
-clang++ -fsanitize=address,fuzzer,undefined -g -O1 -Werror=uninitialized \
+clang++ -fsanitize=address,fuzzer,undefined -gline-tables-only -O0 -Werror=uninitialized \
   <compile_flags> <harness.cpp> -o poc.out <link_flags>
 ```
 
@@ -127,7 +127,7 @@ A separate helper binary `poc_cov.out` is compiled by `compile_coverage_harness(
 ```bash
 clang++ -fsanitize=address,undefined,fuzzer-no-link \
   -fprofile-instr-generate -fcoverage-mapping \
-  -g -O1 -Werror=uninitialized <compile_flags> <harness.cpp> coverage_driver.cpp \
+  -gline-tables-only -O0 -Werror=uninitialized <compile_flags> <harness.cpp> coverage_driver.cpp \
   -o poc_cov.out <link_flags>
 ```
 
@@ -237,7 +237,7 @@ When optional statistics collection is enabled, these logical return values are 
 #### Direct / single-step mode
 
 ```bash
-clang++ [replay flags] -fsanitize=address,fuzzer,undefined -g -O1 \
+clang++ [replay flags] -fsanitize=address,fuzzer,undefined -gline-tables-only -O0 \
   -Werror=uninitialized \
   <compile_flags> <source.cpp> -o <output> <link_flags>
 ```
@@ -248,7 +248,7 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
   -Werror=uninitialized \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```
@@ -266,7 +266,7 @@ Compile object:
 
 ```bash
 clang++ -Qunused-arguments -include-pch <pch> [replay flags] \
-  -fsanitize=address,fuzzer,undefined -O1 -gline-tables-only \
+  -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only \
   -Werror=uninitialized \
   -c <compile_flags> <source.cpp> -o <object.o>
 ```

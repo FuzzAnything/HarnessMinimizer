@@ -45,7 +45,7 @@ This example intentionally includes:
 ### Build The Example
 
 ```bash
-clang++ -std=c++17 -Iinclude -g -O1 -Werror=uninitialized \
+clang++ -std=c++17 -Iinclude -gline-tables-only -O0 -Werror=uninitialized \
 	examples/fdp_complex_crash_harness.cpp \
 	-o /tmp/fdp_complex_demo.out
 ```

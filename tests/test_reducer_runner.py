@@ -170,9 +170,9 @@ class TestReducerRunner(unittest.TestCase):
         )
 
     def test_phase3_compile_flags_use_o1_and_uninitialized_error(self):
-        self.assertEqual(reducer_runner.PHASE3_DIRECT_OPT_FLAGS, ["-g", "-O1"])
-        self.assertEqual(reducer_runner.PHASE3_SPLIT_OPT_FLAGS, ["-O1", "-gline-tables-only"])
-        self.assertEqual(reducer_runner.PHASE3_PCH_OPT_FLAGS, ["-O1", "-gline-tables-only"])
+        self.assertEqual(reducer_runner.PHASE3_DIRECT_OPT_FLAGS, ["-gline-tables-only", "-O0"])
+        self.assertEqual(reducer_runner.PHASE3_SPLIT_OPT_FLAGS, ["-O0", "-gline-tables-only"])
+        self.assertEqual(reducer_runner.PHASE3_PCH_OPT_FLAGS, ["-O0", "-gline-tables-only"])
         self.assertEqual(reducer_runner.PHASE3_WARNING_FLAGS, ["-Werror=uninitialized"])
 
     def test_initialize_statistics_file_writes_zeroed_summary(self):

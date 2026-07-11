@@ -65,7 +65,7 @@ The main workflow lives in `src/harnessreducer/api.py`.
 - `check_harness_compilation()` builds the original harness into `poc.out` using:
   - `clang++`
   - `-fsanitize=address,fuzzer,undefined`
-  - `-g -O1 -Werror=uninitialized`
+  - `-gline-tables-only -O0 -Werror=uninitialized`
   - user `compile_flags` and `link_flags`
 
 ### 3. Crash pattern extraction + reference stack trace
@@ -241,11 +241,11 @@ Phase 3 reduction-loop modes currently are:
 - `split`: compile the full source to an object, then link
 - `pch`: compile the include-stripped body against a precompiled header, then link
 
-All Phase 3 modes now add `-Werror=uninitialized` and use `-O1` while keeping their mode-specific debug flags:
+All Phase 3 modes now add `-Werror=uninitialized` and use `-O0` while keeping their mode-specific debug flags:
 
-- direct / single-step: `-g -O1 -Werror=uninitialized`
-- split: `-O1 -gline-tables-only -Werror=uninitialized`
-- pch: `-O1 -gline-tables-only -Werror=uninitialized`
+- direct / single-step: `-gline-tables-only -O0 -Werror=uninitialized`
+- split: `-O0 -gline-tables-only -Werror=uninitialized`
+- pch: `-O0 -gline-tables-only -Werror=uninitialized`
 
 When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction candidate-testing loop. One-off validations before and after reduction use direct compilation.
 

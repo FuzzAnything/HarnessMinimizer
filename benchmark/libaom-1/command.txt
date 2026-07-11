@@ -54,7 +54,7 @@ harnessreducer harness.cpp \
 --direct
 [INFO] Total time: 543140ms
 
-clang -g -O1 -Werror=uninitialized \
+clang -gline-tables-only -O0 -Werror=uninitialized \
 -fsanitize=fuzzer,address,undefined \
 -I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/../build/sanitizer/include \
 last_interesting.inline.cpp \
