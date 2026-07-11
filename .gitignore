@@ -13,6 +13,7 @@ pattern_extraction_work
 dynamic_slicing_work
 statistics
 statistics-pch
+statistics-pch-link
 statistics-direct
 statistics-split
 check-level-stack

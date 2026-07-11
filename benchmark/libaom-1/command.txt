@@ -41,27 +41,54 @@ harnessreducer harness.cpp \
   --snapshot \
   -o reduced.cpp
 
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "-L$(pwd)/build/sanitizer/lib -laom" \
+  --work-dir ./statistics-pch \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "-L$(pwd)/build/sanitizer/lib -laom" \
+  --work-dir ./statistics-pch-link \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
 
 --pch
-[INFO] Total time: 429563ms
-[INFO] Total time: 415884ms
+[INFO] Total time: 321076ms
+[INFO] Total time: 
 [INFO] Total time: 
 
 --split
 [INFO] Total time: 
 
-
 --direct
-[INFO] Total time: 543140ms
+[INFO] Total time: 
 
-clang -gline-tables-only -O0 -Werror=uninitialized \
--fsanitize=fuzzer,address,undefined \
--I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/../build/sanitizer/include \
-last_interesting.inline.cpp \
-$(pwd)/../build/sanitizer/lib/libaom.a \
--o harness
+--pch --amortize-link
+[INFO] Total time: 186049ms
 
-crash_pattern_matched: True
-frame_count: 25
-level_same: True
-stack_same: True
+COMMON="-Qunused-arguments \
+  -DFDP_MIN_MODE_REPLAY \
+  -I/mnt/raid/home/lihaiying/HarnessMinimizer/include \
+  -I$(pwd)/../build/sanitizer/include \
+  -fsanitize=fuzzer,address,undefined \
+  -gline-tables-only -O0 -Werror=uninitialized"
+
+time clang++ $COMMON \
+  -c harness.tagged.cpp \
+  -o /tmp/direct.o
+
+time clang++ $COMMON \
+  -include-pch fahm_prefix.pch \
+  -c harness.tagged.fahm_body.cpp \
+  -o /tmp/pch.o
