@@ -222,7 +222,7 @@ There is currently **no retry with a smaller removal set**.
 - final explicit stack-trace validation
 - some helper scripts
 
-In the normal pipeline, non-default Phase 3 modes are reserved for the main `treereduce-c` candidate-testing loop. One-off validation checks around that loop use direct compilation.
+The selected Phase 3 mode is used for the main `treereduce-c` candidate-testing loop; `split` is the default. One-off validation checks around that loop use direct compilation.
 
 It returns:
 

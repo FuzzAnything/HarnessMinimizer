@@ -238,7 +238,7 @@ Important options:
 Phase 3 reduction-loop modes currently are:
 
 - `direct` / `single-step`: one-step compile+link
-- `split`: compile the full source to an object, then link
+- `split`: compile the full source to an object, then link (default)
 - `pch`: compile the include-stripped body against a precompiled header, then link
 
 All Phase 3 modes now add `-Werror=uninitialized` and use `-O0` while keeping their mode-specific debug flags:

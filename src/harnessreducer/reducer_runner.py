@@ -993,7 +993,7 @@ def run_treereducer(
     link_flags: str | None,
     crash_input: str | None,
     stable: bool = False,
-    phase3_mode: str = PHASE3_DIRECT,
+    phase3_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     snapshot: bool = False,
 ) -> str:

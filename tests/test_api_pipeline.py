@@ -75,7 +75,7 @@ class TestApiPipeline(unittest.TestCase):
             None,
             "seed.bin",
             stable=False,
-            phase3_mode="direct",
+            phase3_mode="split",
             snapshot=False,
         )
         mock_run_normal.assert_not_called()
@@ -169,7 +169,7 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             "seed.bin",
             stable=False,
-            phase3_mode="direct",
+            phase3_mode="split",
             statistics=False,
             snapshot=False,
         )
@@ -324,6 +324,10 @@ class TestApiPipeline(unittest.TestCase):
         reduced = process(cfg.harness_path, cfg.compile_flags, cfg.crash_input, link_flags=cfg.link_flags)
         self.assertEqual(reduced, expected_reduced)
         mock_reduce_with_config.assert_called_once()
+        self.assertEqual(
+            mock_reduce_with_config.call_args.args[0].phase3_mode,
+            "split",
+        )
 
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")

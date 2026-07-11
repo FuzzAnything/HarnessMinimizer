@@ -13,6 +13,7 @@ from harnessreducer.check_mode import (
 from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
+    PHASE3_SPLIT,
     apply_coverage_guided_slice,
     candidate_files_match,
     check_reducer_crash_pattern,
@@ -60,7 +61,7 @@ class ReductionConfig:
     marker: str = "FDP_ID"
     use_llm: bool = False
     stable: bool = False
-    phase3_mode: str = "direct"
+    phase3_mode: str = PHASE3_SPLIT
     statistics: bool = False
     slice_enabled: bool = False
     check: bool = False
@@ -118,7 +119,7 @@ def inline_literals_in_reduced_harness(
     compile_flags: str | None,
     link_flags: str | None,
     start_id: int = 100000,
-    phase3_mode: str = "direct",
+    phase3_mode: str = PHASE3_DIRECT,
     snapshot: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -358,7 +359,7 @@ def process(
     link_flags: str | None = None,
     work_dir: str | None = None,
     use_llm: bool = False,
-    phase3_mode: str = "direct",
+    phase3_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     slice_enabled: bool = False,
     check: bool = False,

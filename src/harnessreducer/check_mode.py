@@ -11,6 +11,7 @@ from pathlib import Path
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_PCH,
+    PHASE3_SPLIT,
     PchArtifacts,
     STACK_FRAME_PATTERN,
     get_last_interesting_file,
@@ -262,7 +263,7 @@ def run_treereducer_with_check(
     link_flags: str | None,
     crash_input: str | None,
     stable: bool = False,
-    phase3_mode: str = PHASE3_DIRECT,
+    phase3_mode: str = PHASE3_SPLIT,
     snapshot: bool = False,
 ) -> str:
     if crash_input:
