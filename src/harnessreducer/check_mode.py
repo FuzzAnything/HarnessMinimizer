@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+from contextlib import nullcontext
 import json
 import os
 import subprocess
@@ -23,6 +24,8 @@ from harnessreducer.reducer_runner import (
     prepare_phase3_pch_harness,
     restore_pch_includes,
     run_command,
+    run_amortized_reference_candidate,
+    start_amortized_runner,
     get_stack_trace_file,
     validate_phase3_mode,
 )
@@ -265,11 +268,14 @@ def run_treereducer_with_check(
     stable: bool = False,
     phase3_mode: str = PHASE3_SPLIT,
     snapshot: bool = False,
+    amortize_link: bool = False,
 ) -> str:
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
 
     validate_phase3_mode(phase3_mode)
+    if amortize_link and phase3_mode == PHASE3_DIRECT:
+        raise ValueError("Amortized linking requires split or PCH mode.")
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
     if phase3_mode == PHASE3_PCH:
@@ -277,6 +283,7 @@ def run_treereducer_with_check(
             harness_path,
             compile_flags,
             use_replay=True,
+            amortize_link=amortize_link,
         )
         reducer_source = pch_artifacts.body_source
 
@@ -325,12 +332,55 @@ def run_treereducer_with_check(
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
 
-    proc = subprocess.run(
-        cmd,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
+    runner_context = (
+        start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=True,
+        )
+        if amortize_link
+        else nullcontext(None)
     )
+    with runner_context as amortized_runner:
+        if amortized_runner is not None:
+            reference_output = run_amortized_reference_candidate(
+                harness_path,
+                fdp_trace_file,
+                crash_pattern,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode,
+                amortized_runner.socket_path,
+                pch_artifacts,
+                symbolize=True,
+            )
+            full_stack_trace = extract_first_entire_stack_trace(reference_output)
+            if not full_stack_trace:
+                raise RuntimeError(
+                    "Could not extract an amortized-link check-mode reference stack trace."
+                )
+            write_check_reference(
+                CheckReference(
+                    crash_pattern=crash_pattern,
+                    full_stack_trace=full_stack_trace,
+                    full_stack_trace_pattern=normalize_crash_signature(
+                        full_stack_trace, escape=True
+                    ),
+                    frame_count=count_stack_trace_frames(full_stack_trace),
+                )
+            )
+            cmd.extend(
+                ["--amortized-runner-socket", amortized_runner.socket_path]
+            )
+
+        proc = subprocess.run(
+            cmd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run tree-reducer in check mode:\n{proc.stdout} {proc.stderr}")
     if not os.path.exists(reduced_harness):

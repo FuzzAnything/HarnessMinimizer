@@ -14,6 +14,7 @@ HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving crash be
 8. FDP literal inlining
 9. optional LLM cleanup
 10. optional tree-reduction return-code statistics
+11. optional persistent-runner linkage amortization for shared target libraries
 
 The tool is intentionally conservative: when a new optimization step cannot be validated, it falls back to the last known-good harness and continues.
 
@@ -240,6 +241,13 @@ Phase 3 reduction-loop modes currently are:
 - `direct` / `single-step`: one-step compile+link
 - `split`: compile the full source to an object, then link (default)
 - `pch`: compile the include-stripped body against a precompiled header, then link
+
+With `--amortize-link`, split and PCH candidates are compiled as PIC
+shared-object plugins without the stable target link flags. A persistent
+ASan/UBSan runner loads the target `.so` files and crash input once, then forks
+a child to `dlopen` and execute each candidate. Normal and check-mode stack
+references are recalibrated through this backend before `treereduce-c` starts.
+Direct/single-step mode and static target archives are currently rejected.
 
 All Phase 3 modes now add `-Werror=uninitialized` and use `-O0` while keeping their mode-specific debug flags:
 

@@ -1,6 +1,8 @@
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from harnessreducer.check_mode import (
@@ -13,6 +15,7 @@ from harnessreducer.check_mode import (
     get_check_statistics_file,
     initialize_check_statistics_file,
     read_check_statistics,
+    load_check_reference,
     reset_check_state,
     record_check_statistics,
     run_treereducer_with_check,
@@ -175,6 +178,54 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("--check-statistics-file", cmd)
             self.assertIn("--split", cmd)
             self.assertNotIn("--last-interesting-file", cmd)
+
+    @patch("harnessreducer.check_mode.run_amortized_reference_candidate")
+    @patch("harnessreducer.check_mode.start_amortized_runner")
+    @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
+    @patch("harnessreducer.check_mode.subprocess.run")
+    def test_check_mode_uses_amortized_runner_reference(
+        self,
+        mock_run,
+        _mock_exists,
+        mock_start_runner,
+        mock_reference,
+    ):
+        mock_run.return_value = type(
+            "Proc", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )()
+        mock_start_runner.return_value = nullcontext(
+            SimpleNamespace(socket_path="/tmp/fahm-check.sock")
+        )
+        mock_reference.return_value = SAMPLE_OUTPUT
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            write_check_reference(
+                CheckReference(
+                    crash_pattern="AddressSanitizer",
+                    full_stack_trace="#0 old",
+                    full_stack_trace_pattern="old",
+                    frame_count=1,
+                )
+            )
+            (Path(tmpdir) / "stack_trace.pattern").write_text(
+                "target", encoding="utf-8"
+            )
+
+            run_treereducer_with_check(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file="/tmp/trace.log",
+                crash_pattern="AddressSanitizer",
+                compile_flags=None,
+                link_flags="/tmp/libtarget.so",
+                crash_input="seed.bin",
+                amortize_link=True,
+            )
+
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--amortized-runner-socket", cmd)
+            self.assertIn("/tmp/fahm-check.sock", cmd)
+            self.assertEqual(load_check_reference().frame_count, 7)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
     @patch("harnessreducer.check_mode.subprocess.run")

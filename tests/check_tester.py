@@ -34,6 +34,8 @@ _crash_tester_spec.loader.exec_module(_crash_tester)
 compile_direct = _crash_tester.compile_direct
 compile_split = _crash_tester.compile_split
 compile_with_pch = _crash_tester.compile_with_pch
+compile_amortized_plugin = _crash_tester.compile_amortized_plugin
+run_with_amortized_runner = _crash_tester.run_with_amortized_runner
 update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
@@ -82,6 +84,7 @@ def main() -> int:
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
+    parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
     args = parser.parse_args()
 
     pid = os.getpid()
@@ -90,7 +93,11 @@ def main() -> int:
     object_path = None
 
     try:
-        if args.pch:
+        if args.amortized_runner_socket:
+            if args.direct:
+                return -1
+            compile_status, object_path = compile_amortized_plugin(args, output_path)
+        elif args.pch:
             compile_status, object_path = compile_with_pch(args, output_path)
         elif args.split:
             compile_status, object_path = compile_split(args, output_path)
@@ -118,19 +125,41 @@ def main() -> int:
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
 
-        exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-        run_proc = subprocess.run(
-            exec_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            check=False,
-        )
+        if args.amortized_runner_socket:
+            try:
+                run_returncode, run_log = run_with_amortized_runner(
+                    args.amortized_runner_socket,
+                    output_path,
+                )
+            except Exception as exc:
+                append_candidate_stack_trace(
+                    args.check_stack_log_file,
+                    source_path=args.source,
+                    crash_pattern_matched=False,
+                    frame_count=0,
+                    level_same=False,
+                    stack_same=False,
+                    full_stack_trace=None,
+                    compare_stack_trace=None,
+                    compile_failed=False,
+                    compile_error=f"Amortized-link execution failed: {exc}",
+                )
+                return 1
+        else:
+            exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
+            run_proc = subprocess.run(
+                exec_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+            run_returncode = run_proc.returncode
+            run_log = run_proc.stdout + run_proc.stderr
 
         stored_compare_pattern = Path(args.stack_trace_file).read_text(encoding="utf-8").strip()
         reference = load_check_reference(args.check_reference_file)
-        run_log = run_proc.stdout + run_proc.stderr
         (
             crash_pattern_matched,
             candidate_frames,
@@ -139,7 +168,7 @@ def main() -> int:
             candidate_full_trace,
             candidate_compare_trace,
         ) = _evaluate_check_candidate(
-            run_returncode=run_proc.returncode,
+            run_returncode=run_returncode,
             run_log=run_log,
             crash_pattern=args.crash_pattern,
             stored_compare_pattern=stored_compare_pattern,

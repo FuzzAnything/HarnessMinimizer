@@ -364,6 +364,16 @@ This explicit path is used for:
 - dynamic slicing acceptance
 - inline-harness validation
 
+### 4.1 Linkage-amortized candidate references
+
+When `--amortize-link` is enabled, Phase 3 candidates run as plugins under a
+persistent runner rather than as normal libFuzzer executables. Because this
+changes the bottom of the call stack, HarnessReducer first executes the
+original tagged harness through the same plugin backend and uses that run's
+frame depth for the reduction oracle. Check mode similarly replaces its
+full-stack reference with a symbolized persistent-runner reference. The crash
+regex and pre-harness target-frame pattern remain the original references.
+
 ---
 
 ## 5. FDP Trace Replay and Why It Matters

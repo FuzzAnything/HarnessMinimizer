@@ -30,6 +30,7 @@ from harnessreducer.reducer_runner import (
     get_work_dir,
     reset_stack_trace_state,
     reset_last_interesting_state,
+    resolve_amortized_shared_libraries,
     run_treereducer,
     validate_phase3_mode,
     validate_stack_trace,
@@ -66,6 +67,7 @@ class ReductionConfig:
     slice_enabled: bool = False
     check: bool = False
     snapshot: bool = False
+    amortize_link: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,6 +234,10 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         from harnessreducer.reducer_runner import reset_statistics_state
         reset_statistics_state()
     validate_phase3_mode(config.phase3_mode)
+    if config.amortize_link and config.phase3_mode == PHASE3_DIRECT:
+        raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
+    if config.amortize_link:
+        resolve_amortized_shared_libraries(config.link_flags)
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
     check_tree_reducer()
@@ -301,6 +307,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             stable=config.stable,
             phase3_mode=reduction_phase3_mode,
             snapshot=config.snapshot,
+            amortize_link=config.amortize_link,
         )
         emit_check_statistics_summary()
     else:
@@ -315,6 +322,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             phase3_mode=reduction_phase3_mode,
             statistics=config.statistics,
             snapshot=config.snapshot,
+            amortize_link=config.amortize_link,
         )
     format_reduced_harness(reduced_harness)
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
@@ -364,6 +372,7 @@ def process(
     slice_enabled: bool = False,
     check: bool = False,
     snapshot: bool = False,
+    amortize_link: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -373,6 +382,7 @@ def process(
         work_dir=work_dir,
         use_llm=use_llm,
         phase3_mode=phase3_mode,
+        amortize_link=amortize_link,
         statistics=statistics,
         slice_enabled=slice_enabled,
         check=check,
