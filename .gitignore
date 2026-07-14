@@ -23,3 +23,5 @@ check-level-stack-final
 reduced.cpp
 harness_values.h
 benchmark.tar.gz
+time/
+time-*/
