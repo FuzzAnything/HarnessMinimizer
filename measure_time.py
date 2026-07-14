@@ -1056,13 +1056,24 @@ def main() -> int:
         report.add(format_command(link_inputs.runner_link_flags) or "(none)")
 
         report.section("B", "ONE-TIME PREPARATION")
+        static_build_note = (
+            " (includes copying all static-archive object files)"
+            if link_inputs.static_libraries
+            else ""
+        )
         one_time_rows = [
             ("Classify link flags", ns_to_ms(one_time["link_classification_ns"])),
             ("Split source and write PCH inputs", ns_to_ms(one_time["source_split_and_write_ns"])),
             ("Build normal PCH", ns_to_ms(one_time["normal_pch_build_ns"])),
             ("Build amortized PCH", ns_to_ms(one_time["amortized_pch_build_ns"])),
-            ("Build production harness_runner", ns_to_ms(one_time["production_runner_build_ns"])),
-            ("Build instrumented timing runner", ns_to_ms(one_time["timing_runner_build_ns"])),
+            (
+                "Build production harness_runner" + static_build_note,
+                ns_to_ms(one_time["production_runner_build_ns"]),
+            ),
+            (
+                "Build instrumented timing runner" + static_build_note,
+                ns_to_ms(one_time["timing_runner_build_ns"]),
+            ),
             ("Start timing runner until ready", ns_to_ms(one_time["runner_startup_wall_ns"])),
         ]
         report.table(
@@ -1070,15 +1081,31 @@ def main() -> int:
             [(name, f"{value:.3f}") for name, value in one_time_rows],
         )
         report.subsection("Runner-internal startup breakdown (symbolize=0)")
+        if link_inputs.shared_libraries:
+            target_dlopen_ns = int(
+                startup_metrics.get("target_dlopen_total_ns", 0)
+            )
+            target_dlopen_result = f"{ns_to_ms(target_dlopen_ns):.3f}"
+        else:
+            target_dlopen_result = "N/A (static targets are linked into the runner)"
         startup_rows = [
-            ("All target dlopen calls", startup_metrics.get("target_dlopen_total_ns", 0)),
-            ("Read crash input", startup_metrics.get("crash_input_read_ns", 0)),
-            ("Create/bind/listen socket", startup_metrics.get("socket_setup_ns", 0)),
-            ("Internal startup total", startup_metrics.get("startup_internal_total_ns", 0)),
+            ("All dynamic-target dlopen calls", target_dlopen_result),
+            (
+                "Read crash input",
+                f"{ns_to_ms(int(startup_metrics.get('crash_input_read_ns', 0))):.3f}",
+            ),
+            (
+                "Create/bind/listen socket",
+                f"{ns_to_ms(int(startup_metrics.get('socket_setup_ns', 0))):.3f}",
+            ),
+            (
+                "Internal startup total",
+                f"{ns_to_ms(int(startup_metrics.get('startup_internal_total_ns', 0))):.3f}",
+            ),
         ]
         report.table(
-            ["Operation", "Time (ms)"],
-            [(name, f"{ns_to_ms(int(value)):.3f}") for name, value in startup_rows],
+            ["Operation", "Time (ms) or status"],
+            startup_rows,
         )
         target_timings = startup_metrics.get("target_dlopen_ns", [])
         if isinstance(target_timings, list) and target_timings:
