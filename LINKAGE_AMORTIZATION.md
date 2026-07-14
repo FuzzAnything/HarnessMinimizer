@@ -1,183 +1,385 @@
 # Linkage Amortization in HarnessReducer
 
-This document explains why linkage amortization was added, how the current
-implementation works, and what the compiler flags mean. It assumes no previous
-knowledge of compilers.
+This document explains the linkage-amortization feature from the beginning. It
+is written for readers who have not studied compilers, linkers, shared
+libraries, or fuzzing infrastructure.
 
-## 1. The problem in one sentence
+The most important idea is:
 
-Harness reduction tests many slightly different versions of the same harness,
-but the large target library and the crashing input stay the same.
+> During harness reduction, the harness changes thousands of times, but the
+> target library and crashing input usually do not. We prepare those unchanged
+> parts once and reuse them.
 
-Without linkage amortization, HarnessReducer repeatedly links the unchanged
-target library into a new executable. Linkage amortization prepares the target
-once—by loading a shared library or linking a static archive into the persistent
-runner—and turns every changing harness candidate into a small plugin.
+The implementation supports:
 
-> **Amortization** means paying a setup cost once and reusing the result many
-> times.
+- shared libraries such as `libaom.so`;
+- static libraries such as `libaom.a`;
+- multiple shared libraries;
+- multiple static libraries; and
+- a mixture of shared and static libraries.
 
-## 2. A small compilation primer
+## 1. The situation HarnessReducer is trying to improve
 
-Suppose we have a C++ source file called `harness.cpp`. Producing something the
-computer can run normally has three conceptual stages:
+A fuzz harness is a small function that passes generated input to a much larger
+target library. A simplified harness looks like this:
 
-```text
-harness.cpp                 harness.o                  harness executable
-(human-readable C++)        (machine code pieces)      (complete program)
-      |                            |                            |
-      | preprocess + compile       | link                       | execute
-      v                            v                            v
-  [ compiler ]  ------------>  [ object file ]  ----------> [ process ]
-                                      +
-                                target library
-                                      +
-                                sanitizer runtime
+```cpp
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    aom_decode(data, size);  // Function implemented inside libaom.
+    return 0;
+}
 ```
 
-### Compile
-
-The compiler translates one source file into an **object file**, usually ending
-in `.o`. The object contains machine code, but it may still refer to functions
-defined somewhere else.
-
-For example, the harness may call a function from libaom. At this point the
-object file knows the function's name, but not its final address.
-
-### Link
-
-The linker combines object files and libraries. It connects calls in the
-harness to definitions in libaom and produces either:
-
-- an executable program; or
-- a shared object (`.so`), which another program can load later.
-
-### Execute
-
-Linux starts the executable and its dynamic loader locates any required shared
-libraries. This is a different step from linking. A directory passed with `-L`
-helps the linker find a library while building; `LD_LIBRARY_PATH` helps Linux
-find it while running.
-
-## 3. Why normal harness reduction repeats work
-
-Tree reduction creates many candidate source files:
+HarnessReducer tries to remove unnecessary harness code while preserving the
+same crash. TreeReduce may propose thousands of candidates:
 
 ```text
 original harness
       |
-      +--> candidate A: remove one statement
-      +--> candidate B: remove one branch
-      +--> candidate C: remove one variable
-      `--> ... possibly thousands more
+      +-- candidate 1: remove a variable
+      +-- candidate 2: remove an if statement
+      +-- candidate 3: shorten an expression
+      +-- candidate 4: remove a function call
+      `-- ...
 ```
 
-Each candidate must be tested. A candidate is **interesting** only if it still
-reproduces the original crash.
-
-In the normal split or PCH path, every test does this:
+Every candidate must be compiled and executed to answer one question:
 
 ```text
-candidate A -> compile A.o -> link A.o + libaom -> executable A -> run
-candidate B -> compile B.o -> link B.o + libaom -> executable B -> run
-candidate C -> compile C.o -> link C.o + libaom -> executable C -> run
-                                      ^
-                                      |
-                         the same target is processed again
+Does this smaller candidate still produce the expected crash?
 ```
 
-Only the harness candidate changes. The target library, sanitizer runtime, and
-crashing input do not. For a large target such as libaom, repeatedly performing
-the full executable link is redundant.
-
-PCH mode already reduces repeated **compilation** work by precompiling the
-headers. It does not remove the repeated link with the target library.
-
-## 4. The implemented idea
-
-The implementation separates stable parts from changing parts:
+Without linkage amortization, candidate testing repeatedly performs work like
+this:
 
 ```text
-Built or loaded once                         Rebuilt for every candidate
------------------------------------          -----------------------------
-persistent runner                            small candidate object (`.o`)
-shared target (`libaom.so`) and/or            small candidate plugin (`.so`)
-static target (`libaom.a`)
-sanitizer runtime
-crashing input bytes
-optional precompiled header (PCH)
+candidate 1 -> compile -> link with libaom -> executable 1 -> run
+candidate 2 -> compile -> link with libaom -> executable 2 -> run
+candidate 3 -> compile -> link with libaom -> executable 3 -> run
+                            ^
+                            |
+                 the same large library is
+                 processed again and again
 ```
 
-The overall data flow is:
+The harness source changes, so compiling it again is necessary. The target
+library does not change, so repeatedly combining it with every candidate is the
+work we want to avoid.
+
+The word **amortization** means paying a cost once and spreading that cost over
+many operations. Here, the expensive target-library setup is paid once and
+reused across many candidate tests.
+
+## 2. A beginner's guide to compilation and linking
+
+It helps to understand the normal build process before looking at the
+optimization.
+
+### 2.1 Source files and headers
+
+A source file such as `harness.cpp` contains C++ code. It may include header
+files:
+
+```cpp
+#include <aom/aom_decoder.h>
+```
+
+A header usually provides declarations, types, macros, and templates. It tells
+the compiler that a function exists and how it should be called. The actual
+machine code for the function normally lives in a library.
+
+### 2.2 Compilation produces an object file
+
+The compiler translates source code into machine-code pieces:
+
+```bash
+clang++ -c harness.cpp -o harness.o
+```
+
+The `-c` flag means “compile only; do not create a complete program yet.” The
+result, `harness.o`, is called an **object file**.
+
+Suppose `harness.cpp` calls `aom_decode()`. The compiler can generate the call,
+but it does not know where the final `aom_decode()` machine code will be located.
+The object therefore contains an unresolved reference, often called an
+**undefined symbol**:
 
 ```text
-                         START ONCE
-              +--------------------------------+
-              | persistent runner              |
-              |                                |
-              | load `.so` / contain `.a` code |
-              | read crash input               |
-              | open a Unix socket             |
-              +---------------+----------------+
-                              |
-                    remains alive during
-                     the reduction loop
-                              |
-           +------------------+------------------+
-           |                  |                  |
-           v                  v                  v
-      candidate A        candidate B        candidate C
-      compile +          compile +          compile +
-      small `.so`        small `.so`        small `.so`
-           |                  |                  |
-           +-------- send plugin path ----------+
-                              |
-                              v
-                   fork an isolated process,
-                   load plugin, call harness,
-                   return status and crash log
+harness.o
+  defines:    LLVMFuzzerTestOneInput
+  needs:      aom_decode
 ```
 
-This does **not** remove all linking. Each candidate object is still linked into
-a small plugin. It avoids repeatedly linking the candidate together with the
-large target library into a complete executable.
+A symbol is essentially a name for a function or global variable.
 
-## 5. What happens before the reduction loop
+### 2.3 Linking connects symbol users to symbol definitions
 
-### Step 1: Check and resolve the target libraries
+The linker combines object files and libraries. It finds a definition of
+`aom_decode` and connects the call in `harness.o` to that definition:
 
-`--amortize-link` requires at least one target shared library or static archive.
-All of these forms are accepted:
+```text
+harness.o                       libaom
+  needs aom_decode  --------->  defines aom_decode
+        |
+        +---------- linker ----------> complete output
+```
+
+A normal command might be:
 
 ```bash
---link-flags "/absolute/path/libaom.so"
+clang++ harness.o -L/path/to/lib -laom -o harness
 ```
+
+Here:
+
+- `-L/path/to/lib` adds a directory in which the linker should search;
+- `-laom` asks for a library named `libaom.so` or `libaom.a`;
+- `-o harness` names the output executable.
+
+### 2.4 Execution is a separate stage
+
+After linking, Linux starts the executable. If it uses shared libraries, the
+Linux dynamic loader locates and maps them into the process.
+
+This distinction is important:
+
+```text
+-L/path             helps find a library while building
+LD_LIBRARY_PATH     helps find a shared library while running
+```
+
+HarnessReducer derives runtime search directories from `--link-flags` and adds
+them to `LD_LIBRARY_PATH`. This is why a separate runtime rpath is normally not
+needed when the binary is executed through HarnessReducer.
+
+## 3. Static and shared libraries are fundamentally different
+
+Both library types contain reusable target code, but they are packaged and used
+in different ways.
+
+### 3.1 A static library: `.a`
+
+A static library is an archive of object files:
+
+```text
+libaom.a
+  +-- decoder.o
+  +-- parser.o
+  +-- frame_buffer.o
+  `-- many other object files
+```
+
+It is not a runnable file and cannot be loaded with `dlopen()`. During a normal
+link, the linker copies required object files from the archive into the output
+executable.
+
+The linker is normally selective. If the current program needs only a symbol
+from `decoder.o`, the linker may copy `decoder.o` but leave the other archive
+members unused.
+
+### 3.2 A shared library: `.so`
+
+A shared library is already a loadable ELF image:
+
+```text
+libaom.so
+  +-- machine code
+  +-- exported symbols
+  +-- relocation information
+  `-- dependency information such as libc or libpthread
+```
+
+Linux can map it into a running process. A program can load it automatically at
+startup or explicitly at runtime:
+
+```cpp
+void *handle = dlopen("/path/libaom.so", RTLD_NOW | RTLD_GLOBAL);
+```
+
+The process uses the mapped library code; the code does not need to be copied
+into every executable.
+
+### 3.3 Why one method cannot be used for both
+
+```text
+`.so`: already a loadable runtime image -> use dlopen()
+`.a`:  archive of object files           -> must be linked into something
+```
+
+Calling `dlopen("libaom.a", ...)` does not work because a static archive does
+not have the runtime structure expected by the dynamic loader. Conversely,
+copying a complete `.so` into the runner is unnecessary because the `.so` is
+already designed to be loaded.
+
+The feature therefore uses two preparation paths that lead to the same final
+goal: make target symbols visible to candidate plugins.
+
+## 4. The high-level solution
+
+HarnessReducer builds one persistent process called `harness_runner`.
+
+```text
+Prepared once                              Repeated for every candidate
+-----------------------------------        ------------------------------
+harness_runner                             compile changed harness body
+ASan and UBSan runtimes                    create small candidate.so
+crashing input bytes                       ask runner to execute candidate.so
+shared target mappings
+statically linked target code
+optional PCH file
+```
+
+The complete flow is:
+
+```text
+                          ONE-TIME SETUP
+             +------------------------------------+
+             | build persistent harness_runner    |
+             |                                    |
+             | static `.a` code is linked inside  |
+             | shared `.so` files are loaded      |
+             | crash input is read into memory    |
+             +-----------------+------------------+
+                               |
+                        keep runner alive
+                               |
+       +-----------------------+-----------------------+
+       |                       |                       |
+       v                       v                       v
+ candidate 1              candidate 2              candidate 3
+ compile small plugin     compile small plugin     compile small plugin
+       |                       |                       |
+       +----------- send plugin path to runner --------+
+                               |
+                               v
+                      fork isolated executor
+                      load candidate plugin
+                      call LLVMFuzzerTestOneInput
+                      return crash status and log
+```
+
+This optimization does not eliminate all candidate linking. Every candidate is
+still turned into a small `.so` plugin. It removes the larger repeated operation
+of building a complete executable with all target libraries for every
+candidate.
+
+## 5. How `--link-flags` is classified
+
+Before building the runner, HarnessReducer must decide which inputs are shared
+libraries, which are static archives, and which are ordinary dependencies.
+
+### 5.1 Explicit paths
+
+An explicit filename gives a direct answer:
 
 ```bash
---link-flags "-L/absolute/path -laom"
+--link-flags "/path/libone.so /path/libtwo.a"
 ```
+
+- a name ending in `.so` or a versioned form such as `.so.1` is treated as a
+  shared library;
+- a name ending in `.a` is treated as a static library.
+
+The extension is not trusted by itself. HarnessReducer checks the file header:
+
+- a shared library must be a real ELF file;
+- a static library must have a normal or thin `ar` archive header.
+
+This validation matters because some development files named `libsomething.so`
+are actually text linker scripts. The linker understands those scripts, but
+`dlopen()` cannot load them as ELF code.
+
+### 5.2 `-L` and `-l`
+
+The common linker form is:
 
 ```bash
---link-flags "/absolute/path/libaom.a"
+--link-flags "-L/path/to/lib -laom"
 ```
 
-For the second form:
+It means:
 
-- `-L/absolute/path` says where to search;
-- `-laom` means “find `libaom.so`, or fall back to `libaom.a`”.
+```text
+-L/path/to/lib   search this directory
+-laom            search for a library whose base name is aom
+```
 
-Multiple libraries are supported. A linker script named like a `.so` is rejected
-because `dlopen()` needs a loadable ELF file. Standalone `.o` and `.lo` files are
-also rejected; put those objects into a `.a` archive first.
+In its normal dynamic-preference mode, HarnessReducer checks for:
 
-Relative library paths are converted to absolute paths because TreeReduce may
-run candidate tests from a different working directory. Library directories are
-also placed in `LD_LIBRARY_PATH` during execution, so an additional
-`-Wl,-rpath,...` is not required when running through HarnessReducer.
+```text
+/path/to/lib/libaom.so
+/path/to/lib/libaom.a       (fallback if the `.so` is absent)
+```
 
-### Step 2: Build the persistent runner
+An exact library filename can also be requested:
 
-HarnessReducer compiles `harness_runner.cpp` once:
+```bash
+-l:libaom.a
+-l:libaom.so
+```
+
+### 5.3 `-Wl,-Bstatic` and `-Wl,-Bdynamic`
+
+The selection mode can be changed from left to right:
+
+```bash
+--link-flags "-L/path/to/lib \
+  -Wl,-Bstatic -lone -ltwo \
+  -Wl,-Bdynamic -lthree -lpthread"
+```
+
+HarnessReducer interprets it as:
+
+```text
+-Wl,-Bstatic
+    -lone       -> choose libone.a
+    -ltwo       -> choose libtwo.a
+
+-Wl,-Bdynamic
+    -lthree     -> prefer libthree.so
+    -lpthread   -> prefer the dynamic system dependency
+```
+
+`-Wl` contains a lowercase letter **l**, not the digit **1**. It tells the
+compiler driver to pass the following comma-separated option to the linker.
+
+The mode switches affect following `-l...` arguments. An explicit `.a` or `.so`
+path already identifies its own type.
+
+### 5.4 Target libraries versus ordinary dependencies
+
+Libraries resolved inside explicit `-L` directories are treated as target
+inputs. A system flag such as `-lpthread` may not resolve inside those
+directories. In that case it remains an ordinary dependency for the one-time
+runner link when static archives require it.
+
+For a correctly built shared target, normal dependencies are also recorded in
+the target's ELF `DT_NEEDED` entries. Loading `libaom.so` causes the Linux loader
+to load those dependencies recursively:
+
+```text
+dlopen(libaom.so)
+      |
+      +-- load libc if needed
+      +-- load libpthread if needed
+      `-- load libm if needed
+```
+
+Explicitly calling `dlopen()` again for every system dependency normally gives
+no speed benefit. The dynamic loader already keeps one mapping of each loaded
+library in the persistent process.
+
+If the harness directly calls a nonstandard shared library that is not recorded
+as a dependency of another target, identify it explicitly with a full `.so`
+path or with an explicit `-L` directory.
+
+## 6. One-time setup shared by both library types
+
+Before discussing their differences, these steps are common.
+
+### 6.1 Build the persistent runner
+
+For a shared-only configuration, the simplified command is:
 
 ```bash
 clang++ -std=c++17 \
@@ -188,110 +390,426 @@ clang++ -std=c++17 \
   -o harness_runner
 ```
 
-The runner contains the sanitizer runtime and the code needed for dynamic
-loading, process isolation, timeouts, and communication.
+What is being done:
 
-When static archives are present, their code is added to this one-time command:
+- compile the runner's C++ control logic;
+- include ASan and UBSan runtimes;
+- include the dynamic-loading API through `-ldl`;
+- create one executable that stays alive during reduction.
+
+Why it is done once:
+
+- the runner code does not change between candidates;
+- sanitizer initialization does not need to be repeated by a newly built
+  executable for every candidate;
+- the runner becomes the stable environment into which changing candidate
+  plugins are loaded.
+
+### 6.2 Read the crash input once
+
+At startup, the runner reads the crashing input file into a byte vector.
+
+Why:
+
+- every candidate should receive exactly the same bytes;
+- the file does not need to be reopened and reread for every candidate;
+- the bytes are inherited by forked children using copy-on-write memory.
+
+### 6.3 Open a Unix-domain socket
+
+The runner listens on a local Unix socket. The candidate tester sends the
+absolute path of each new candidate plugin and receives its status and output.
+
+Why:
+
+- TreeReduce and the persistent runner are separate processes;
+- they need a small, reliable request/response channel;
+- using a path avoids transferring plugin machine code through the socket.
+
+## 7. Shared-library path: what happens and why
+
+Consider:
 
 ```bash
-clang++ ... harness_runner.cpp \
-  -no-pie -Wl,--export-dynamic \
-  -Wl,--whole-archive libtarget1.a libtarget2.a -Wl,--no-whole-archive \
-  -ldl -o harness_runner
+--link-flags "/path/libaom.so"
 ```
 
-`--whole-archive` is necessary because the runner source does not directly call
-target functions. Without it, the linker could discard all archive members as
-unused. `--export-dynamic` makes those target functions visible when a candidate
-plugin is loaded. `-no-pie` allows ordinary non-PIC static archive code to be
-placed in the runner executable; candidate plugins still use `-fPIC`.
+### 7.1 Validate the `.so`
 
-### Step 3: Load stable data once
+What is done:
 
-At startup, the runner loads every target shared library:
+- confirm that the path exists;
+- confirm that its name looks like `.so` or `.so.<version>`;
+- confirm that the file starts with the ELF magic bytes.
+
+Why:
+
+The runner will give the file to `dlopen()`. A missing file or text linker
+script cannot be loaded. Reporting the problem before reduction gives a much
+clearer error.
+
+### 7.2 Start the runner without copying the `.so` into it
+
+What is done:
+
+The normal shared-only runner build does not copy all libaom machine code into
+the runner executable. The `.so` path is passed to the runner at startup.
+
+Why:
+
+A shared object is already a loadable image. Copying it into the runner would
+remove the main benefit of using a shared library and could duplicate code.
+
+### 7.3 Load with `RTLD_NOW`
+
+What is done:
 
 ```cpp
 dlopen(target_path, RTLD_NOW | RTLD_GLOBAL);
 ```
 
-- `RTLD_NOW` resolves required symbols immediately, so missing symbols fail at
-  startup rather than much later.
-- `RTLD_GLOBAL` makes target symbols visible to candidate plugins. A candidate
-  can therefore call libaom functions without being linked directly to libaom.
+`RTLD_NOW` asks the loader to resolve required symbols immediately.
 
-The runner also reads the crashing input file into memory once. Every candidate
-receives the same bytes.
+Why:
 
-Static target code needs no startup `dlopen()` call because it is already part
-of the runner executable.
+If libaom is missing a dependency or incompatible with the process, the runner
+should fail during startup. Without immediate resolution, the error might appear
+only after many reduction attempts when a particular function is first called.
 
-### Step 4: Optionally build the PCH once
+### 7.4 Load with `RTLD_GLOBAL`
 
-With `--pch`, HarnessReducer moves `#include` lines into a generated prefix
-header and compiles that header into `harness_prefix.pch`. The changing body is
-compiled against this PCH for every candidate.
+What is done:
+
+`RTLD_GLOBAL` adds libaom's exported symbols to the process-wide dynamic lookup
+scope.
+
+Why:
+
+The candidate plugin is linked without libaom. It may contain an unresolved
+reference to `aom_decode`. When the plugin is later loaded, the dynamic loader
+must be able to find `aom_decode` in the already-loaded target.
+
+```text
+candidate.so
+  needs aom_decode
+          |
+          +-- global dynamic symbol lookup
+                         |
+                         `--> libaom.so defines aom_decode
+```
+
+If the target were loaded with `RTLD_LOCAL`, its symbols would normally be
+private to that load group. The later candidate load could fail with an
+“undefined symbol” error.
+
+### 7.5 Reuse the mapping
+
+What is done:
+
+The `.so` remains mapped in the persistent parent. Forked children inherit that
+mapping.
+
+Why:
+
+Linux uses copy-on-write after `fork()`. Read-only target code pages can be
+shared rather than loaded again for every candidate process.
+
+## 8. Static-library path: what happens and why
+
+Consider:
+
+```bash
+--link-flags "/path/libaom.a"
+```
+
+The static path needs more linker work because an archive cannot be loaded by
+`dlopen()`.
+
+### 8.1 Validate the `.a`
+
+What is done:
+
+- confirm that the path exists;
+- confirm that it ends in `.a`;
+- confirm that it has an `ar` archive header.
+
+Why:
+
+The one-time runner link expects an archive of object files. Passing arbitrary
+data with an `.a` name would otherwise produce a confusing linker error.
+
+### 8.2 Link the archive into the runner once
+
+A simplified command is:
+
+```bash
+clang++ ... harness_runner.cpp \
+  -no-pie \
+  -Wl,--export-dynamic \
+  -Wl,--whole-archive libtarget1.a libtarget2.a -Wl,--no-whole-archive \
+  -lpthread -lm -ldl \
+  -o harness_runner
+```
+
+What is done:
+
+All target archive code needed by future candidate plugins is placed in the
+persistent runner. This link happens once, before TreeReduce starts testing
+candidates.
+
+Why:
+
+A `.a` has no runtime loader representation. Some executable or shared object
+must contain its object code. Putting it in the persistent runner makes the
+code available to every forked candidate executor without linking it into every
+candidate plugin.
+
+### 8.3 Why `--whole-archive` is required
+
+This is the most important static-library detail.
+
+Normal archive behavior is lazy:
+
+```text
+linker sees libtarget.a
+      |
+      +-- is a currently unresolved symbol provided by member X?
+             |
+             +-- yes -> extract member X
+             `-- no  -> leave member X in the archive
+```
+
+At runner-build time, `harness_runner.cpp` does not call `aom_decode()`. The
+future candidate plugin will call it, but that plugin does not exist yet.
+
+Without `--whole-archive`, the linker sees no current reference from the runner
+to most target functions:
+
+```text
+harness_runner.cpp          libaom.a
+  does not call aom_decode   contains aom_decode
+          |
+          `--> linker thinks the archive member is unused
+               and does not copy it into harness_runner
+```
+
+Later, `candidate.so` needs `aom_decode`, but the runner does not contain it. The
+plugin load fails.
+
+`--whole-archive` changes the rule:
+
+```text
+-Wl,--whole-archive libaom.a
+        |
+        `--> include every archive member, even if the runner does not
+             currently reference its symbols
+```
+
+This ensures that functions needed by any future candidate are present.
+
+### 8.4 Why `--no-whole-archive` is required afterward
+
+What is done:
+
+```bash
+-Wl,--whole-archive libaom.a -Wl,--no-whole-archive -lpthread -lm
+```
+
+Why:
+
+`--whole-archive` remains active for following archives until it is disabled.
+If it accidentally applies to system libraries, the linker may copy enormous
+amounts of unnecessary code, produce duplicate definitions, or fail the link.
+
+The feature therefore surrounds only the selected target archives:
+
+```text
+whole-archive ON  -> target `.a` files
+whole-archive OFF -> normal dependencies
+```
+
+### 8.5 Why `--export-dynamic` is required
+
+Placing `aom_decode` inside the runner is not sufficient by itself.
+
+An executable has a normal symbol table for link/debug information and a
+dynamic symbol table used by the runtime loader. By default, not every function
+inside an executable is published to the dynamic symbol table.
+
+Without `--export-dynamic`:
+
+```text
+harness_runner contains aom_decode
+candidate.so needs aom_decode
+dynamic loader cannot see the runner's private symbol
+-> plugin load fails
+```
+
+With `--export-dynamic`:
+
+```text
+harness_runner contains aom_decode
+        |
+        +-- publish aom_decode in the dynamic symbol table
+        |
+candidate.so can resolve aom_decode from the runner
+```
+
+What is done:
+
+`-Wl,--export-dynamic` tells the linker to publish executable symbols so that a
+later `dlopen()` operation can use them.
+
+Why:
+
+Candidate plugins are loaded dynamically and need to resolve their target calls
+against statically linked code inside the main executable.
+
+### 8.6 Why `-no-pie` is used
+
+What is done:
+
+The runner is built as a traditional non-PIE executable when static targets are
+present.
+
+Why:
+
+Many existing static archives were compiled as ordinary object code rather than
+position-independent code. A position-independent executable can reject some
+relocations from such archives. `-no-pie` makes it more likely that ordinary
+non-PIC archive objects can be linked into the runner.
+
+This does not remove the need for `-fPIC` on candidate plugins. Plugins are
+shared objects and may be mapped at different addresses, so their code must
+remain position independent.
+
+### 8.7 Multiple static archives
+
+Multiple archives are put inside the same controlled whole-archive region:
+
+```bash
+-Wl,--whole-archive \
+  libtarget.a libhelper.a libcodec.a \
+-Wl,--no-whole-archive
+```
+
+Why:
+
+All members are included once, and references between the archives can be
+resolved during the one-time runner link. The candidate loop then reuses the
+combined result.
+
+The cost is that the runner can be larger than a normal selectively linked
+executable. This is an intentional tradeoff: a larger one-time link is accepted
+to eliminate thousands of repeated target links.
+
+## 9. Dynamic and static paths compared directly
+
+| Question | Shared library (`.so`) | Static library (`.a`) |
+|---|---|---|
+| What is the input? | A loadable ELF image. | An archive of object files. |
+| Can `dlopen()` load it? | Yes. | No. |
+| Where does target code live? | In a separately mapped `.so`. | Inside `harness_runner`. |
+| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with `--whole-archive`. |
+| How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `--export-dynamic` publishes runner symbols. |
+| Why not normal archive linking? | Not applicable. | The runner has no direct target references, so normal lazy extraction would omit needed members. |
+| What is inherited after `fork()`? | Shared-library mappings. | Runner text containing archive code. |
+| Is the target linked into each candidate? | No. | No. |
+
+The two paths differ during one-time preparation, then meet at the same symbol
+lookup point:
+
+```text
+                         global symbol scope
+                        /                   \
+          loaded shared-library symbols    exported runner symbols
+                    (`.so`)                       (`.a`)
+                        \                   /
+                         candidate.so lookup
+```
+
+## 10. What happens when static and dynamic libraries are mixed
+
+Example:
+
+```bash
+--link-flags "-L/path/to/lib \
+  -Wl,-Bstatic -ltarget -lhelper \
+  -Wl,-Bdynamic -lcodec -lpthread"
+```
+
+The steps are:
+
+1. Resolve `libtarget.a` and `libhelper.a` as static targets.
+2. Resolve `libcodec.so` as a shared target.
+3. Link the two static archives into `harness_runner` with
+   `--whole-archive`.
+4. Export their symbols with `--export-dynamic`.
+5. Make selected shared targets available during the one-time runner link when
+   they are needed to satisfy references from static code.
+6. Start the runner.
+7. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
+8. Load each candidate plugin. Its unresolved target calls may now resolve from
+   either the runner or the shared library.
+
+The result is:
+
+```text
+harness_runner process
+  |
+  +-- target code copied from libtarget.a
+  +-- helper code copied from libhelper.a
+  +-- globally loaded libcodec.so
+  +-- normal runtime dependencies
+  `-- one temporary candidate.so at a time in an executor child
+```
+
+This also supports dependencies in either direction:
+
+- static target code can call functions supplied by a selected shared library;
+- a shared target loaded later can resolve appropriate global symbols exported
+  by the runner.
+
+Avoid supplying conflicting definitions of the same symbol in several target
+libraries. Dynamic symbol lookup follows ELF resolution rules, and duplicate
+definitions can cause a one-time link error or make the selected definition
+depend on ordering.
+
+## 11. The repeated candidate path
+
+After target preparation, shared and static configurations use the same
+candidate loop.
+
+### 11.1 Optional PCH preparation
+
+Headers may be large and expensive to parse. With `--pch`, HarnessReducer moves
+the harness's `#include` directives into `harness_prefix.h` and compiles them
+once:
 
 ```text
 original harness.cpp
         |
-        +--> include lines --> harness_prefix.h --> harness_prefix.pch (once)
+        +-- include lines --> harness_prefix.h --> harness_prefix.pch
         |
-        `--> remaining body --> candidate body (changes repeatedly)
+        `-- changing code --> harness.harness_body.cpp
 ```
 
-The PCH is reused by the compiler. It is **not** stored as an AST inside the
-persistent runner.
+What PCH saves:
 
-## 6. Where dynamic and static libraries are handled differently
+- repeated preprocessing and parsing of unchanged headers.
 
-The candidate loop is the same for both library types. The difference is how
-the stable target code is placed into the runner before that loop begins:
+What PCH does not save:
 
-| Step | Dynamic library (`.so`) | Static library (`.a`) |
-|---|---|---|
-| Resolve the input | Confirm that it is a loadable ELF shared object. | Confirm that it is an `ar` archive. |
-| Build the runner | Normally does not copy target code into the runner. | Link all archive members into the runner once with `--whole-archive`. |
-| Make symbols visible | `dlopen(..., RTLD_GLOBAL)` adds symbols to the global loader scope. | `--export-dynamic` publishes the symbols already inside the runner. |
-| Start the runner | Load each `.so` and read the crash input. | Only read the crash input; static code is already present. |
-| Load a candidate | The loader resolves candidate calls against the loaded `.so`. | The loader resolves candidate calls against exported runner symbols. |
-| Later candidates | Reuse the inherited shared-library mappings after `fork()`. | Reuse the inherited runner code after `fork()`. |
+- target-library linking;
+- candidate code generation;
+- candidate execution.
 
-In both cases, each candidate is still compiled into the same small plugin. No
-target library is linked into each candidate plugin.
+The PCH is consumed by Clang. It is not loaded into `harness_runner` and the
+runner does not maintain a Clang AST.
 
-### Selecting static and dynamic libraries
+### 11.2 Compile the candidate as position-independent code
 
-An explicit filename is unambiguous:
-
-```bash
---link-flags "/path/libone.a /path/libtwo.a /path/libthree.so"
-```
-
-For `-l` names, the normal default is to prefer `.so` and fall back to `.a`.
-GNU linker mode switches can make the choice explicit:
-
-```bash
---link-flags "-L/path/to/lib \
-  -Wl,-Bstatic -lone -ltwo \
-  -Wl,-Bdynamic -lthree -lpthread"
-```
-
-The spelling is `-Wl` with a lowercase letter **l**, meaning “pass the following
-option to the linker.” `-W1` with the digit **1** is incorrect.
-
-The selected static archives are linked into the runner once. The selected
-shared libraries are loaded once. If a static archive calls a function from one
-of the selected shared libraries, that shared library is also present during the
-one-time runner link so the dependency can be resolved.
-
-## 7. What happens for every candidate
-
-### Step 1: Compile the candidate into position-independent code
-
-In split mode, the whole candidate source is compiled. In PCH mode, the smaller
-include-free body is compiled with `-include-pch`.
-
-A simplified PCH command is:
+A simplified PCH-mode command is:
 
 ```bash
 clang++ \
@@ -303,19 +821,24 @@ clang++ \
   -o candidate.o
 ```
 
-The entry point remains the standard fuzz-harness function:
+What is done:
 
-```cpp
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    // candidate harness logic
-}
-```
+- compile only the changing harness body;
+- instrument it with ASan and UBSan;
+- generate position-independent machine code;
+- keep enough line information for useful stack traces.
 
-The current implementation keeps this standard entry-point name unchanged.
+Why `-fPIC`:
 
-### Step 2: Link only the small candidate plugin
+The object will become a shared plugin. Linux may map the plugin at different
+virtual addresses, so its machine code must not assume one fixed address.
 
-The candidate object becomes a shared object:
+What would happen without it:
+
+The plugin link may fail with relocation errors, or the resulting shared object
+may require unsafe text relocations.
+
+### 11.3 Link the small candidate plugin
 
 ```bash
 clang++ -shared \
@@ -324,144 +847,260 @@ clang++ -shared \
   -o candidate.so
 ```
 
-Notice that the target library is absent from this command. When the runner
-loads the plugin, its symbols are resolved from loaded shared targets and/or
-static target symbols exported by the runner.
+What is deliberately absent:
 
-### Step 3: Send the plugin path to the runner
+```text
+no libaom.so
+no libaom.a
+no full target link
+```
 
-The tester connects to the persistent runner through a Unix-domain socket and
-sends the absolute path of `candidate.so`.
+The candidate may retain unresolved target symbols. Linux resolves those
+symbols when the executor loads `candidate.so` against the already-prepared
+global process scope.
+
+Why `-shared`:
+
+The output must be loadable by `dlopen()`, not independently executable.
+
+### 11.4 Keep the standard fuzz entry point
+
+The plugin exports:
+
+```cpp
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    // current candidate harness body
+}
+```
+
+`extern "C"` prevents C++ name mangling, so the runner can look up one stable
+symbol name with `dlsym()`.
+
+The implementation does not rewrite this function to a custom entry-point name.
+
+### 11.5 Send the plugin path to the runner
 
 ```text
 candidate tester                         persistent runner
       |                                         |
-      |--- "/tmp/candidate.so\n" -------------->|
+      |--- absolute path to candidate.so ------>|
       |                                         |
-      |<-- exit status + output size + log -----|
+      |<-- status + output length + output -----|
 ```
 
-A Unix-domain socket is local inter-process communication. It behaves like a
-small network connection but stays on the same machine.
+The protocol sends an absolute path because TreeReduce may invoke testers from
+different working directories.
 
-### Step 4: Fork before running unsafe code
+### 11.6 Fork before loading and running the candidate
 
-A candidate is expected to crash, so it must not run directly inside the
-persistent parent. The implementation uses two short-lived levels:
+Candidate code is supposed to reproduce a crash. Running it directly inside the
+persistent parent would destroy the state we want to reuse.
+
+The implementation therefore uses:
 
 ```text
-persistent runner (keeps serving future candidates)
-        |
-        `-- fork request monitor
-                  |
-                  `-- fork candidate executor
-                            |
-                            +-- dlopen(candidate.so, RTLD_NOW | RTLD_LOCAL)
-                            +-- dlsym("LLVMFuzzerTestOneInput")
-                            +-- call function with cached crash input
-                            `-- crash or exit
+persistent runner
+      |
+      `-- fork request monitor
+                |
+                `-- fork candidate executor
+                          |
+                          +-- redirect stdout/stderr to a pipe
+                          +-- dlopen(candidate.so, RTLD_NOW | RTLD_LOCAL)
+                          +-- dlsym("LLVMFuzzerTestOneInput")
+                          +-- call function with cached crash bytes
+                          `-- exit or crash
 ```
 
-The monitor captures standard output and standard error, enforces the 300-second
-timeout, converts a signal into an exit status, and sends the result back to the
-tester. If the executor crashes, the persistent runner survives and accepts the
-next candidate.
+Why two short-lived levels:
 
-The executor loads the plugin with `RTLD_LOCAL`, so symbols from one candidate
-are not made globally visible to later candidates.
+- the executor may crash or hang;
+- the monitor captures its output and waits for it;
+- the monitor enforces the 300-second timeout;
+- the persistent parent remains available for the next request.
 
-Because `fork()` copies the parent's process state using copy-on-write, the
-children inherit the already-loaded target mappings and cached input without
-loading them again from scratch.
+Why load candidates with `RTLD_LOCAL`:
 
-### Step 5: Decide whether the candidate is interesting
+Target symbols must be global because later candidates need them. Candidate
+symbols should not be global because one candidate must not affect symbol
+resolution for another candidate.
 
-HarnessReducer checks the returned status and crash output. In the reduction
-loop, exit code `77` means the expected crash was preserved. A normal run or a
-different failure means the proposed source reduction is rejected.
+### 11.7 Return the result to TreeReduce
 
-Before reduction starts, the original harness is also run through this same
-amortized path. This recalibrates the expected stack depth for the changed
-process layout.
+The monitor returns the exit status and captured sanitizer output. The tester
+checks whether the expected crash pattern and required stack behavior were
+preserved. Exit code `77` is used as TreeReduce's “interesting candidate” code.
 
-## 8. Why each compiler flag is present
+Before reduction begins, the original harness is run through this same plugin
+path. This calibrates the expected stack depth for the runner/plugin process
+layout rather than comparing it with a differently linked standalone program.
 
-### Candidate compilation flags
+## 12. Why the runner does not explicitly load every system library
 
-| Flag | Plain-language meaning | Why it is used here |
-|---|---|---|
-| `clang++` | Run the Clang C++ compiler driver. | It selects C++ compilation and also knows how to invoke the linker. |
-| `-Qunused-arguments` | Do not warn when a driver option is irrelevant to one stage. | The same flag groups are reused across compile and link commands. |
-| `-I/path` | Add a directory to the header search path. | Lets `#include` find project and target headers. |
-| `-DFDP_MIN_MODE_REPLAY` | Define a preprocessor macro. | Selects deterministic replay behavior for the recorded fuzz-data-provider trace. |
-| `-fsanitize=address,undefined` | Add checks for invalid memory access and undefined behavior. | Detects and reports the target crash. |
-| `-O0` | Disable optimization. | Keeps compilation fast and stack traces/source behavior easier to compare during reduction. |
-| `-gline-tables-only` | Keep source file and line-number debug information, but not full debug data. | Produces useful stack locations with less compile/debug-data cost than full `-g`. |
-| `-Werror=uninitialized` | Turn an uninitialized-variable warning into a compile error. | Prevents a reduced candidate with obvious uninitialized use from being accepted as a valid crash-preserving harness. |
-| `-fPIC` | Generate position-independent code. | Required because the object will be loaded at an arbitrary address as part of a shared object. |
-| `-c` | Compile only; do not link yet. | Produces `candidate.o`. |
-| `-include-pch file.pch` | Start compilation with a previously compiled header. | Avoids reparsing unchanged headers for every candidate in PCH mode. |
-| `-o path` | Name the output file. | Selects the `.o`, `.so`, or executable path. |
+Consider:
 
-### Plugin and runner link flags
+```bash
+--link-flags "-L/build/lib -laom -lpthread -lm"
+```
 
-| Flag | Plain-language meaning | Why it is used here |
-|---|---|---|
-| `-shared` | Produce a loadable `.so` instead of an executable. | Makes each candidate a plugin. |
-| `-ldl` | Link the dynamic-loading API library. | Gives the runner `dlopen()` and `dlsym()`. |
-| `-fno-omit-frame-pointer` | Keep a regular frame pointer in generated runner code. | Helps sanitizer stack unwinding remain reliable. |
-| `-O1` | Apply light optimization. | Used for the stable runner, which is built only once, rather than changing candidate code. |
-| `-Wl,--whole-archive` | Force every object in following static archives into the output. | Prevents unreferenced target functions from being discarded. |
-| `-Wl,--no-whole-archive` | End the forced archive inclusion region. | Avoids applying `--whole-archive` to normal system dependencies. |
-| `-Wl,--export-dynamic` | Put executable symbols in its dynamic symbol table. | Lets candidate plugins find statically linked target functions. |
-| `-no-pie` | Build a traditional fixed-address executable. | Allows the runner to contain static archives that were not compiled as PIC. |
+It may seem that explicitly calling `dlopen()` for libpthread and libm would
+save additional time. Usually it would not.
 
-### Why amortized plugins omit `-fsanitize=fuzzer`
+### What already happens
 
-Normal executable candidates use:
+A well-built `libaom.so` records the shared libraries it needs. When the runner
+loads libaom, the Linux loader loads those dependencies recursively and retains
+them in the persistent process.
+
+### Why `-lpthread` is not always a loadable filename
+
+`-lpthread` is a linker request, not necessarily a runtime path. Depending on
+the system:
+
+- the real runtime file may be `libpthread.so.0`;
+- the development file `libpthread.so` may be a linker script;
+- pthread functionality may already be integrated into libc.
+
+Blindly converting every `-lfoo` into `dlopen("libfoo.so")` can therefore load
+the wrong name or a non-loadable file.
+
+### Why static system archives should not be forced in
+
+Applying `--whole-archive` to all system static libraries could:
+
+- make the runner unnecessarily large;
+- introduce duplicate libc/runtime definitions;
+- interfere with ASan initialization;
+- greatly increase the one-time link cost; or
+- fail because the system does not provide a static form of every dependency.
+
+The optimization focuses on large, unchanged target libraries. Normal runtime
+dependencies are still loaded once through the standard linker/loader
+mechanisms.
+
+## 13. Why the sanitizer flags differ from normal fuzz executables
+
+A normal standalone candidate uses:
 
 ```text
 -fsanitize=address,fuzzer,undefined
 ```
 
-The `fuzzer` part supplies the libFuzzer execution driver for a standalone fuzz
-executable. An amortized candidate is not a standalone executable: the runner
-looks up and calls `LLVMFuzzerTestOneInput` itself. Therefore candidate plugins
-and the runner use only:
+The `fuzzer` part supplies the libFuzzer driver that repeatedly invokes
+`LLVMFuzzerTestOneInput` and usually provides `main()`.
+
+An amortized candidate is not a standalone fuzz executable. `harness_runner`
+loads the plugin and calls `LLVMFuzzerTestOneInput` itself. Therefore the runner
+and plugins use:
 
 ```text
 -fsanitize=address,undefined
 ```
 
-The target shared libraries and static archives must be sanitizer-compatible as
-well.
+Why omit `fuzzer`:
 
-## 9. PCH and linkage amortization solve different costs
+- the runner already provides the execution control flow;
+- the plugin does not need another driver or `main()`;
+- linking a standalone libFuzzer driver into every plugin would conflict with
+  the plugin model.
 
-These options can be used together because they save work at different stages:
+The target `.so` and `.a` files must be compatible with the same sanitizer
+environment. Mixing incompatible sanitizer runtimes can change crashes or fail
+during loading.
+
+## 14. Compiler and linker flag reference
+
+### Candidate compilation
+
+| Flag | What it does | Why this feature uses it |
+|---|---|---|
+| `clang++` | Runs the Clang C++ compiler driver. | Handles C++ compilation and invokes the linker when needed. |
+| `-Qunused-arguments` | Suppresses warnings for driver arguments unused in one stage. | Some option groups are shared between related commands. |
+| `-I/path` | Adds a header search directory. | Finds target and HarnessReducer headers. |
+| `-DFDP_MIN_MODE_REPLAY` | Defines a preprocessor macro. | Enables deterministic replay of recorded `FuzzedDataProvider` operations. |
+| `-fsanitize=address,undefined` | Adds ASan and UBSan instrumentation. | Detects memory errors and undefined behavior in candidate execution. |
+| `-O0` | Disables optimization. | Keeps candidate compilation fast and behavior/source locations easier to compare. |
+| `-gline-tables-only` | Emits source line tables without full debug data. | Supports useful stack locations with lower debug-data cost. |
+| `-Werror=uninitialized` | Makes uninitialized-variable warnings fatal. | Rejects candidates that introduce an obvious invalid uninitialized use. |
+| `-fPIC` | Generates position-independent code. | Required for code that becomes a loadable candidate `.so`. |
+| `-c` | Compiles without linking. | Produces the intermediate candidate object. |
+| `-include-pch file.pch` | Reuses a precompiled header. | Avoids reparsing unchanged includes for each candidate. |
+| `-o path` | Names the output. | Selects the object, plugin, or executable path. |
+
+### Plugin and runner linking
+
+| Flag | What it does | Why this feature uses it |
+|---|---|---|
+| `-shared` | Produces a shared object rather than an executable. | Makes `candidate.so` loadable with `dlopen()`. |
+| `-ldl` | Links the dynamic-loading API. | Provides `dlopen()` and `dlsym()` to the runner. |
+| `-O1` | Applies light optimization. | Used for stable runner code that is compiled only once. |
+| `-fno-omit-frame-pointer` | Retains frame pointers. | Improves sanitizer stack unwinding in runner code. |
+| `-Wl,--whole-archive` | Forces all members from following archives into the output. | Keeps static target functions that only future plugins will reference. |
+| `-Wl,--no-whole-archive` | Returns to normal selective archive behavior. | Prevents whole-archive behavior from affecting system dependencies. |
+| `-Wl,--export-dynamic` | Publishes executable symbols to the dynamic loader. | Lets candidate plugins resolve calls against static target code in the runner. |
+| `-no-pie` | Builds a non-position-independent executable. | Improves compatibility with static target objects not compiled as PIC. |
+
+## 15. PCH and linkage amortization save different work
+
+These optimizations are complementary:
 
 ```text
-                         repeated work reduced by
-                         ------------------------
-parsing large headers  -> PCH
-linking large target   -> linkage amortization
+PCH                    saves repeated parsing of unchanged headers
+linkage amortization   saves repeated target-library linking/setup
 ```
-
-The four useful comparisons are:
 
 | Mode | Reparse headers each time? | Relink target each time? |
 |---|---:|---:|
 | `--split` | Yes | Yes |
 | `--pch` | No | Yes |
-| `--amortize-link` (split) | Yes | No |
+| `--amortize-link` with split mode | Yes | No |
 | `--pch --amortize-link` | No | No |
 
-Here “No” means the expensive repeated portion is reused. A small amount of
-candidate compilation and plugin linking still occurs.
+“No” does not mean zero work. Candidate code is still compiled, a small plugin
+is still linked, and the candidate is still executed.
 
-## 10. libaom example
+## 16. Command examples
 
-The current benchmark command uses PCH and linkage amortization together:
+### Shared target
+
+```bash
+harnessreducer harness.cpp \
+  --compile-flags "-I/path/to/target/include" \
+  --link-flags "/path/to/libtarget.so" \
+  --crash-input crash-input \
+  --amortize-link \
+  -o reduced.cpp
+```
+
+### Multiple shared targets
+
+```bash
+--link-flags "-L/path/to/lib -ltarget -lcodec -lhelper -lpthread"
+```
+
+### Static target
+
+```bash
+--link-flags "/path/to/libtarget.a -lpthread -lm"
+```
+
+### Multiple static targets
+
+```bash
+--link-flags "-L/path/to/lib \
+  -Wl,-Bstatic -ltarget -lcodec -lhelper \
+  -Wl,-Bdynamic -lpthread -lm"
+```
+
+### Mixed targets
+
+```bash
+--link-flags "-L/path/to/lib \
+  -Wl,-Bstatic -ltarget_static \
+  -Wl,-Bdynamic -ltarget_shared -lpthread"
+```
+
+### libaom benchmark with PCH
 
 ```bash
 harnessreducer harness.cpp \
@@ -476,74 +1115,74 @@ harnessreducer harness.cpp \
   -o reduced.cpp
 ```
 
-The important parts are:
+The benchmark notes currently contain one PCH run at about `321076 ms` and one
+PCH-plus-amortized-link run at about `186049 ms`, approximately a 42% reduction
+for those recorded runs. This is an example, not a general guarantee. Results
+depend on target size, candidate size, disk cache, machine load, and candidate
+count.
 
-- `--compile-flags` supplies header locations needed while translating source;
-- `--link-flags` identifies the loadable target library;
-- `--pch` reuses parsed headers;
-- `--amortize-link` reuses the loaded target and input;
-- `--stable` asks TreeReduce for deterministic reduction behavior;
-- `--statistics` records candidate result counts.
+## 17. What changed from the original proposal
 
-The benchmark notes currently show one PCH run at about `321076 ms` and one
-PCH-plus-amortized-link run at about `186049 ms`. That is approximately a 42%
-reduction for those recorded runs. This is an illustrative result, not a general
-guarantee: the speedup depends on target size, candidate size, disk cache,
-machine load, and the number and type of candidates tested.
-
-## 11. What changed from the original design proposal
-
-The original proposal described the intended direction. The implementation is
-simpler and uses standard Linux shared libraries and static archives:
+The original idea mentioned an LLVM ORC JIT and a custom replacement function.
+The implemented version deliberately uses simpler operating-system mechanisms:
 
 | Original proposal | Current implementation |
 |---|---|
-| Normalize the entry point to a custom `RunOne` function | Keep and look up `LLVMFuzzerTestOneInput` |
-| Keep “PCH / AST context” inside the runner | Build a PCH once, but the compiler consumes it outside the runner |
-| Use LLVM ORC JIT/JITLink | Use `clang++` to create a small `.so`, then use `dlopen()`/`dlsym()` |
-| Possibly compile and execute entirely in memory | Write a temporary candidate object and plugin to disk |
-| One child shown per candidate | Use a request-monitor child plus an executor child for safe logging and timeout handling |
+| Rename the entry point to a custom function. | Keep `LLVMFuzzerTestOneInput`. |
+| Keep a PCH or AST context inside the runner. | Build a PCH once, but Clang consumes it outside the runner. |
+| Compile candidates with LLVM ORC JIT/JITLink. | Compile a small `.so` with `clang++`. |
+| Execute candidates directly from in-memory JIT output. | Load temporary plugins with `dlopen()` and find the entry point with `dlsym()`. |
+| Show one child per candidate. | Use a request monitor and a separate executor for output capture and timeout isolation. |
 
 ORC JIT remains a possible future optimization. It is not part of the current
 feature.
 
-## 12. Current limitations
+## 18. Current limitations and failure cases
 
 - Linux/ELF only.
-- Requires at least one target `.so` or `.a`.
-- Standalone object files are rejected; static inputs must be archives.
-- The target library must be built in a way compatible with the runner's ASan
-  and UBSan environment.
-- Static archives are linked with `--whole-archive`; duplicate definitions or
-  incompatible link options will cause the one-time runner link to fail.
+- At least one target `.so` or `.a` must be identifiable.
+- Standalone `.o` and `.lo` inputs are rejected; place static objects in an
+  archive.
+- A `.so` linker script is rejected because `dlopen()` needs a real ELF file.
+- Target code must be compatible with the runner's ASan/UBSan environment.
+- Static archives with duplicate definitions may fail the one-time
+  `--whole-archive` link.
+- Hidden or non-exportable symbols may not be available to candidate plugins.
+- Mixed libraries with conflicting symbol definitions can produce
+  order-dependent symbol resolution.
 - `--amortize-link` works with split or PCH mode, not direct/single-step mode.
-- Candidate files are still compiled and linked into temporary `.so` files;
-  this is not an in-memory JIT.
-- The optimization applies to the main Phase 3 candidate-testing loop. Some
-  one-off validation work outside that loop still uses normal compilation.
+- Candidate `.o` and `.so` files are still written to disk; this is not an
+  in-memory JIT.
+- The optimization applies to the main Phase 3 candidate loop. Some one-off
+  validation stages still use normal compilation.
 
-## 13. Short meeting summary
+## 19. Short explanation for a presentation
 
 ```text
 Problem:
-  thousands of harness candidates + one unchanged large target
-  -> repeatedly linking the target wastes time
+  TreeReduce creates thousands of harness candidates.
+  The harness changes, but the target library does not.
+  Rebuilding a full target-linked executable each time wastes work.
 
-Solution:
-  load target `.so` or link target `.a` into a persistent runner once
-  -> read the crash input once
-  -> compile each candidate as a small plugin
-  -> fork, load plugin, call LLVMFuzzerTestOneInput
-  -> return crash status and log
+Shared target solution:
+  Load the `.so` once with RTLD_GLOBAL.
+  Future candidate plugins find target symbols in that loaded library.
 
-Safety:
-  candidates run in isolated child processes
-  -> a crash does not kill the persistent runner
+Static target solution:
+  A `.a` cannot be loaded.
+  Link all its members into the runner once with --whole-archive.
+  Export those runner symbols with --export-dynamic.
 
-Combined optimization:
-  PCH saves repeated header compilation
-  linkage amortization saves repeated target linking/loading setup
+Candidate loop:
+  Compile only the changing harness as a small candidate.so.
+  Fork an isolated executor.
+  Load candidate.so and call LLVMFuzzerTestOneInput.
+  A crash kills only the executor, not the persistent runner.
+
+Result:
+  PCH reuses unchanged header parsing.
+  Linkage amortization reuses unchanged target setup.
 ```
 
-The key idea is simple: **keep the large, unchanged environment alive and only
-replace the small piece of harness logic that TreeReduce is modifying.**
+The core design is: **keep the large, unchanged execution environment alive and
+replace only the small harness plugin that TreeReduce is modifying.**
