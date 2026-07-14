@@ -100,8 +100,8 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 |---|---:|---|
 | `harness` | Yes | Path to the original harness source file. |
 | `-o`, `--output` | Yes | Where to copy the final reduced harness. |
-| `--compile-flags "..."` | No | Compile/preprocessor flags, e.g. include paths, macros, language standard. |
-| `--link-flags "..."` | No | Link-only flags, e.g. libraries, `-L`, `-l`, or full `.a` paths. |
+| `--compile-flags="..."` | No | Compile/preprocessor flags, e.g. include paths, macros, language standard. |
+| `--link-flags="..."` | No | Link-only flags, e.g. libraries, `-L`, `-l`, or full `.a` paths. |
 | `--crash-input <file>` | No | Crash input passed to the harness binary. |
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
@@ -114,6 +114,36 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
 | `--amortize-link` | No | Reuse a persistent runner and shared/static target libraries during tree reduction. Works with split or PCH mode; when used alone, the default split mode applies. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
+
+### Important shell syntax for flag arguments
+
+Use the equals form for `--compile-flags` and `--link-flags`:
+
+```bash
+--compile-flags="-I/path/to/include"
+--link-flags="-L/path/to/lib -ltarget"
+```
+
+This is important when the value begins with `-`. With the separated form,
+Python's argument parser can mistake a single value such as `-I/path` or
+`-ltarget` for another HarnessReducer option:
+
+The ambiguous spelling would place a space between the option and value—shown
+here as `<SPACE>` so it cannot be copied accidentally:
+
+```text
+--compile-flags<SPACE>"-I/path/to/include"
+```
+
+Use this unambiguous spelling instead:
+
+```bash
+--compile-flags="-I/path/to/include"
+```
+
+A separated value containing several flags may appear to work because it also
+contains whitespace, but that behavior should not be relied on. All command
+examples below use the unambiguous equals form.
 
 ## What the Main Options Do
 
@@ -245,8 +275,8 @@ harnessreducer harness.cpp -o reduced.cpp
 
 ```bash
 harnessreducer harness.cpp \
-  --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
-  --link-flags "build/lib/libtarget.a" \
+  --compile-flags="-std=c++17 -Iinclude -Ibuild/include" \
+  --link-flags="build/lib/libtarget.a" \
   --crash-input crash-input \
   -o reduced.cpp
 ```
@@ -267,8 +297,8 @@ harnessreducer harness.cpp \
   --slice \
   --pch \
   --crash-input crash-input \
-  --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
-  --link-flags "build/lib/libtarget.a" \
+  --compile-flags="-std=c++17 -Iinclude -Ibuild/include" \
+  --link-flags="build/lib/libtarget.a" \
   -o reduced.cpp
 ```
 
@@ -279,8 +309,8 @@ harnessreducer harness.cpp \
   --slice \
   --split \
   --crash-input crash-input \
-  --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
-  --link-flags "build/lib/libtarget.a" \
+  --compile-flags="-std=c++17 -Iinclude -Ibuild/include" \
+  --link-flags="build/lib/libtarget.a" \
   -o reduced.cpp
 ```
 
@@ -292,8 +322,8 @@ harnessreducer harness.cpp \
   --pch \
   --stable \
   --crash-input crash-input \
-  --compile-flags "-std=c++17 -Iinclude -Ibuild/include" \
-  --link-flags "build/lib/libtarget.a" \
+  --compile-flags="-std=c++17 -Iinclude -Ibuild/include" \
+  --link-flags="build/lib/libtarget.a" \
   -o reduced.cpp
 ```
 
@@ -341,8 +371,8 @@ harnessreducer harness.cpp \
 harnessreducer harness.cpp \
   --amortize-link \
   --crash-input crash-input \
-  --compile-flags "-std=c++17 -Iinclude" \
-  --link-flags "/absolute/path/libtarget_asan.so" \
+  --compile-flags="-std=c++17 -Iinclude" \
+  --link-flags="/absolute/path/libtarget_asan.so" \
   -o reduced.cpp
 ```
 
@@ -353,8 +383,8 @@ harnessreducer harness.cpp \
   --pch \
   --amortize-link \
   --crash-input crash-input \
-  --compile-flags "-std=c++17 -Iinclude" \
-  --link-flags "/absolute/path/libtarget_asan.so" \
+  --compile-flags="-std=c++17 -Iinclude" \
+  --link-flags="/absolute/path/libtarget_asan.so" \
   -o reduced.cpp
 ```
 
