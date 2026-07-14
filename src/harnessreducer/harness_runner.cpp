@@ -153,9 +153,9 @@ void HandleRequest(int connection, int listen_fd,
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc < 4) {
+  if (argc < 3) {
     std::fprintf(stderr,
-                 "usage: harness_runner SOCKET CRASH_INPUT TARGET_SO...\n");
+                 "usage: harness_runner SOCKET CRASH_INPUT [TARGET_SO...]\n");
     return 2;
   }
 

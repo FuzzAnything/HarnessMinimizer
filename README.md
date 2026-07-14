@@ -112,7 +112,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--direct`, `--single-step` | No | Use the single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. This is the default when no Phase 3 mode is specified. |
 | `--pch` | No | Use precompiled-header mode for faster repeated candidate testing. |
-| `--amortize-link` | No | Reuse a persistent runner and shared target libraries during tree reduction. Works with split or PCH mode; when used alone, the default split mode applies. |
+| `--amortize-link` | No | Reuse a persistent runner and shared/static target libraries during tree reduction. Works with split or PCH mode; when used alone, the default split mode applies. |
 | `--llm` | No | Run an additional final LLM-based semantic cleanup step after the normal reduction pipeline. |
 
 ## What the Main Options Do
@@ -201,10 +201,10 @@ This can substantially reduce repeated compile cost for large harnesses with hea
 
 Enables the experimental linkage-amortization backend for the Phase 3 candidate loop:
 
-- checks that `--link-flags` identifies at least one loadable ELF shared library (`.so`)
-- rejects static archives and object files in this mode
+- checks that `--link-flags` identifies at least one shared library (`.so`) or static archive (`.a`)
+- rejects standalone object files in this mode
 - builds one ASan/UBSan-enabled persistent runner
-- loads the target libraries and crash input once
+- loads shared targets and links static targets into the runner once
 - compiles each candidate as a small position-independent plugin
 - forks a child for each execution so a crashing candidate does not kill the runner
 - recalibrates the candidate stack-depth reference through the same runner before reduction
@@ -213,16 +213,19 @@ Current restrictions:
 
 - Linux/ELF only
 - incompatible with `--direct` / `--single-step`
-- target code must already be available as a sanitizer-compatible shared library
+- target code must already be available as a sanitizer-compatible `.so` or `.a`
 - full `.so` paths are recommended; linker scripts are rejected because `dlopen` cannot load them
 
 Using `-L/path/to/lib -ltarget` is also supported: libraries found in explicit
-`-L` directories are resolved and preloaded. Normal system flags such as
-`-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`; they are left to
-the system dynamic-loader environment. HarnessReducer also converts relative
-`-L` paths to absolute paths for the reduction workers and prepends those
-directories to `LD_LIBRARY_PATH` for every harness execution, so an additional
-runtime `rpath` is not required when running through the tool.
+`-L` directories are resolved as shared libraries first, then as static
+archives. Use `-Wl,-Bstatic` and `-Wl,-Bdynamic` to select explicitly. Multiple
+shared libraries, multiple static archives, and mixed inputs are supported.
+Shared targets are preloaded with `dlopen`; static targets are linked once into
+the persistent runner with exported symbols. Normal dependency flags such as
+`-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`. HarnessReducer also
+converts relative `-L` paths to absolute paths and prepends shared-library
+directories to `LD_LIBRARY_PATH`, so an additional runtime `rpath` is not
+required when running through the tool.
 
 `--split` and `--pch` keep their original behavior unless `--amortize-link` is present.
 
@@ -366,7 +369,7 @@ config = ReductionConfig(
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",
     phase3_mode="pch",      # or "split" / "direct"
-    amortize_link=False,     # requires split/PCH and shared target libraries
+    amortize_link=False,     # requires split/PCH and shared or static target libraries
     statistics=False,         # optional
     check=False,              # optional insight-only mode
     snapshot=False,           # optional snapshot-based fallback

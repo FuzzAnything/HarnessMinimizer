@@ -71,6 +71,14 @@ class AmortizedRunner:
     socket_path: str
     process: subprocess.Popen[str]
     shared_libraries: tuple[str, ...]
+    static_libraries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AmortizedLinkInputs:
+    shared_libraries: tuple[str, ...]
+    static_libraries: tuple[str, ...]
+    runner_link_flags: tuple[str, ...]
 
 
 def cleanup() -> None:
@@ -214,14 +222,14 @@ def _is_shared_library_path(path: Path) -> bool:
     return bool(re.search(r"\.so(?:\..+)?$", path.name))
 
 
-def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...]:
-    """Resolve shared-library inputs used by the amortized runner.
+def _is_static_library_path(path: Path) -> bool:
+    return path.name.endswith(".a")
 
-    This first implementation intentionally rejects static archives and object
-    files. They cannot be made position independent at link time, and loading
-    them into the persistent process would require a separate anchor/export
-    strategy.
-    """
+
+def resolve_amortized_link_inputs(
+    link_flags: str | None,
+) -> AmortizedLinkInputs:
+    """Classify target libraries for the persistent amortized-link runner."""
     tokens = _split_flags(link_flags)
     library_dirs: list[Path] = []
     for index, token in enumerate(tokens):
@@ -230,16 +238,18 @@ def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...
         elif token.startswith("-L") and len(token) > 2:
             library_dirs.append(Path(token[2:]).expanduser().resolve())
 
-    resolved: list[str] = []
+    shared_libraries: list[str] = []
+    static_libraries: list[str] = []
+    runner_link_flags: list[str] = []
 
-    def add_library(path: Path) -> None:
+    def add_shared_library(path: Path) -> None:
         candidate = path.expanduser().resolve()
         if not candidate.exists():
             raise ValueError(f"Shared library does not exist: {candidate}")
         if not _is_shared_library_path(candidate):
             raise ValueError(
-                "--amortize-link currently requires shared target libraries; "
-                f"unsupported link input: {candidate}"
+                "--amortize-link received an unsupported shared-library input: "
+                f"{candidate}"
             )
         try:
             with candidate.open("rb") as handle:
@@ -252,60 +262,147 @@ def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...
                 f"{candidate} appears to be a linker script or another file type."
             )
         value = str(candidate)
-        if value not in resolved:
-            resolved.append(value)
+        if value not in shared_libraries:
+            shared_libraries.append(value)
+
+    def add_static_library(path: Path) -> None:
+        candidate = path.expanduser().resolve()
+        if not candidate.exists():
+            raise ValueError(f"Static library does not exist: {candidate}")
+        if not _is_static_library_path(candidate):
+            raise ValueError(f"Unsupported static-library input: {candidate}")
+        try:
+            with candidate.open("rb") as handle:
+                archive_magic = handle.read(8)
+        except OSError as exc:
+            raise ValueError(f"Could not inspect static library {candidate}: {exc}") from exc
+        if archive_magic not in {b"!<arch>\n", b"!<thin>\n"}:
+            raise ValueError(
+                "--amortize-link requires a valid static archive, but "
+                f"{candidate} does not have an ar archive header."
+            )
+        value = str(candidate)
+        if value not in static_libraries:
+            static_libraries.append(value)
+
+    def find_library(library_name: str, prefer_static: bool) -> Path | None:
+        if library_name.startswith(":"):
+            file_names = [library_name[1:]]
+        elif prefer_static:
+            file_names = [f"lib{library_name}.a"]
+        else:
+            # This matches the normal linker preference: shared first, with a
+            # static archive as a fallback when no shared object is present.
+            file_names = [f"lib{library_name}.so", f"lib{library_name}.a"]
+        return next(
+            (
+                directory / file_name
+                for directory in library_dirs
+                for file_name in file_names
+                if (directory / file_name).exists()
+            ),
+            None,
+        )
 
     index = 0
+    prefer_static = False
     while index < len(tokens):
         token = tokens[index]
+        if token == "-Wl,-Bstatic":
+            prefer_static = True
+            index += 1
+            continue
+        if token == "-Wl,-Bdynamic":
+            prefer_static = False
+            index += 1
+            continue
         if token == "-L":
+            if index + 1 < len(tokens):
+                runner_link_flags.extend(
+                    ["-L", str(Path(tokens[index + 1]).expanduser().resolve())]
+                )
             index += 2
             continue
-        if token.startswith("-L"):
+        if token.startswith("-L") and len(token) > 2:
+            runner_link_flags.append(
+                "-L" + str(Path(token[2:]).expanduser().resolve())
+            )
             index += 1
             continue
         if token == "-l" and index + 1 < len(tokens):
             library_name = tokens[index + 1]
+            original_library_flags = ["-l", library_name]
             index += 2
         elif token.startswith("-l") and len(token) > 2:
             library_name = token[2:]
+            original_library_flags = [token]
             index += 1
         else:
             path = Path(token)
-            if token.endswith((".a", ".o", ".lo")):
+            if token.endswith((".o", ".lo")):
                 raise ValueError(
-                    "--amortize-link does not yet support static archives or object files: "
+                    "--amortize-link does not support standalone object files: "
                     f"{token}"
                 )
             if _is_shared_library_path(path):
-                add_library(path)
+                add_shared_library(path)
+            elif _is_static_library_path(path):
+                add_static_library(path)
+            else:
+                runner_link_flags.append(token)
             index += 1
             continue
 
-        if library_name.startswith(":"):
-            file_name = library_name[1:]
-        else:
-            file_name = f"lib{library_name}.so"
-        found = next((directory / file_name for directory in library_dirs if (directory / file_name).exists()), None)
+        found = find_library(library_name, prefer_static)
         if found is None:
-            # System libraries (for example -lm or -ldl) are already part of
-            # the runner's normal dynamic-loader scope or are dependencies of
-            # the target DSO. Only -l entries found in user-provided -L
-            # directories are treated as target libraries to preload.
-            continue
-        add_library(found)
+            # Keep system libraries and dependencies for the one-time runner
+            # link. Preserve an explicit static request around that library.
+            if prefer_static:
+                runner_link_flags.append("-Wl,-Bstatic")
+                runner_link_flags.extend(original_library_flags)
+                runner_link_flags.append("-Wl,-Bdynamic")
+            else:
+                runner_link_flags.extend(original_library_flags)
+        elif _is_static_library_path(found):
+            add_static_library(found)
+        elif _is_shared_library_path(found):
+            add_shared_library(found)
+        else:
+            raise ValueError(f"Unsupported library input resolved from -l: {found}")
 
-    if not resolved:
+    if not shared_libraries and not static_libraries:
         raise ValueError(
-            "--amortize-link requires at least one shared target library in --link-flags."
-            " Pass a full .so path or use -L/path -ltarget."
+            "--amortize-link requires at least one target library in --link-flags."
+            " Pass a full .so/.a path or use -L/path -ltarget."
         )
-    return tuple(resolved)
+    return AmortizedLinkInputs(
+        shared_libraries=tuple(shared_libraries),
+        static_libraries=tuple(static_libraries),
+        runner_link_flags=tuple(runner_link_flags),
+    )
 
 
-def _compile_harness_runner() -> str:
+def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...]:
+    """Return shared targets selected for the amortized runner."""
+    return resolve_amortized_link_inputs(link_flags).shared_libraries
+
+
+def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
     source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
+    static_link_flags: list[str] = []
+    if link_inputs.static_libraries:
+        static_link_flags = [
+            "-no-pie",
+            "-Wl,--export-dynamic",
+            "-Wl,--whole-archive",
+            *link_inputs.static_libraries,
+            "-Wl,--no-whole-archive",
+            # Shared targets follow the archives so they can satisfy symbols
+            # referenced by static objects in a mixed configuration.
+            *link_inputs.shared_libraries,
+            *link_inputs.runner_link_flags,
+        ]
     run_command(
         [
             "clang++",
@@ -315,6 +412,7 @@ def _compile_harness_runner() -> str:
             "-gline-tables-only",
             "-fno-omit-frame-pointer",
             str(source),
+            *static_link_flags,
             "-ldl",
             "-o",
             str(output),
@@ -332,8 +430,9 @@ def start_amortized_runner(
     *,
     symbolize: bool,
 ):
-    shared_libraries = resolve_amortized_shared_libraries(link_flags)
-    runner_binary = _compile_harness_runner()
+    link_inputs = resolve_amortized_link_inputs(link_flags)
+    shared_libraries = link_inputs.shared_libraries
+    runner_binary = _compile_harness_runner(link_inputs)
     socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
     env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
@@ -373,6 +472,7 @@ def start_amortized_runner(
             socket_path=socket_path,
             process=process,
             shared_libraries=shared_libraries,
+            static_libraries=link_inputs.static_libraries,
         )
     finally:
         if process.poll() is None:

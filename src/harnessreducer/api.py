@@ -30,7 +30,7 @@ from harnessreducer.reducer_runner import (
     get_work_dir,
     reset_stack_trace_state,
     reset_last_interesting_state,
-    resolve_amortized_shared_libraries,
+    resolve_amortized_link_inputs,
     run_treereducer,
     validate_phase3_mode,
     validate_stack_trace,
@@ -237,7 +237,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if config.amortize_link and config.phase3_mode == PHASE3_DIRECT:
         raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
     if config.amortize_link:
-        resolve_amortized_shared_libraries(config.link_flags)
+        resolve_amortized_link_inputs(config.link_flags)
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
     check_tree_reducer()
