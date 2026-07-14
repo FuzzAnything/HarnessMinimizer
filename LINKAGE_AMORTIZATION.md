@@ -273,7 +273,7 @@ libraries, which are static archives, and which are ordinary dependencies.
 An explicit filename gives a direct answer:
 
 ```bash
---link-flags "/path/libone.so /path/libtwo.a"
+--link-flags="/path/libone.so /path/libtwo.a"
 ```
 
 - a name ending in `.so` or a versioned form such as `.so.1` is treated as a
@@ -294,7 +294,7 @@ are actually text linker scripts. The linker understands those scripts, but
 The common linker form is:
 
 ```bash
---link-flags "-L/path/to/lib -laom"
+--link-flags="-L/path/to/lib -laom"
 ```
 
 It means:
@@ -323,7 +323,7 @@ An exact library filename can also be requested:
 The selection mode can be changed from left to right:
 
 ```bash
---link-flags "-L/path/to/lib \
+--link-flags="-L/path/to/lib \
   -Wl,-Bstatic -lone -ltwo \
   -Wl,-Bdynamic -lthree -lpthread"
 ```
@@ -431,7 +431,7 @@ Why:
 Consider:
 
 ```bash
---link-flags "/path/libaom.so"
+--link-flags="/path/libaom.so"
 ```
 
 ### 7.1 Validate the `.so`
@@ -519,7 +519,7 @@ shared rather than loaded again for every candidate process.
 Consider:
 
 ```bash
---link-flags "/path/libaom.a"
+--link-flags="/path/libaom.a"
 ```
 
 The static path needs more linker work because an archive cannot be loaded by
@@ -733,7 +733,7 @@ lookup point:
 Example:
 
 ```bash
---link-flags "-L/path/to/lib \
+--link-flags="-L/path/to/lib \
   -Wl,-Bstatic -ltarget -lhelper \
   -Wl,-Bdynamic -lcodec -lpthread"
 ```
@@ -940,7 +940,7 @@ layout rather than comparing it with a differently linked standalone program.
 Consider:
 
 ```bash
---link-flags "-L/build/lib -laom -lpthread -lm"
+--link-flags="-L/build/lib -laom -lpthread -lm"
 ```
 
 It may seem that explicitly calling `dlopen()` for libpthread and libm would
@@ -1065,8 +1065,8 @@ is still linked, and the candidate is still executed.
 
 ```bash
 harnessreducer harness.cpp \
-  --compile-flags "-I/path/to/target/include" \
-  --link-flags "/path/to/libtarget.so" \
+  --compile-flags="-I/path/to/target/include" \
+  --link-flags="/path/to/libtarget.so" \
   --crash-input crash-input \
   --amortize-link \
   -o reduced.cpp
@@ -1075,19 +1075,19 @@ harnessreducer harness.cpp \
 ### Multiple shared targets
 
 ```bash
---link-flags "-L/path/to/lib -ltarget -lcodec -lhelper -lpthread"
+--link-flags="-L/path/to/lib -ltarget -lcodec -lhelper -lpthread"
 ```
 
 ### Static target
 
 ```bash
---link-flags "/path/to/libtarget.a -lpthread -lm"
+--link-flags="/path/to/libtarget.a -lpthread -lm"
 ```
 
 ### Multiple static targets
 
 ```bash
---link-flags "-L/path/to/lib \
+--link-flags="-L/path/to/lib \
   -Wl,-Bstatic -ltarget -lcodec -lhelper \
   -Wl,-Bdynamic -lpthread -lm"
 ```
@@ -1095,7 +1095,7 @@ harnessreducer harness.cpp \
 ### Mixed targets
 
 ```bash
---link-flags "-L/path/to/lib \
+--link-flags="-L/path/to/lib \
   -Wl,-Bstatic -ltarget_static \
   -Wl,-Bdynamic -ltarget_shared -lpthread"
 ```
@@ -1104,8 +1104,8 @@ harnessreducer harness.cpp \
 
 ```bash
 harnessreducer harness.cpp \
-  --compile-flags "-I/path/to/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
-  --link-flags "-L$(pwd)/build/sanitizer/lib -laom" \
+  --compile-flags="-I/path/to/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -laom" \
   --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
