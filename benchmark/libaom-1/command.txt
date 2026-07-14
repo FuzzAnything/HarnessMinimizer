@@ -65,17 +65,19 @@ harnessreducer harness.cpp \
 
 --pch
 [INFO] Total time: 321076ms
-[INFO] Total time: 
+[INFO] Total time: 302724ms
 [INFO] Total time: 
 
 --split
-[INFO] Total time: 
+[INFO] Total time: 406270ms
+[INFO] Total time: 417301ms
 
 --direct
 [INFO] Total time: 
 
 --pch --amortize-link
 [INFO] Total time: 186049ms
+[INFO] Total time: 185868ms
 
 COMMON="-Qunused-arguments \
   -DFDP_MIN_MODE_REPLAY \
