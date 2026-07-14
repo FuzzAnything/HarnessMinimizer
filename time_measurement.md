@@ -143,6 +143,12 @@ The report also measures:
 - function-call start until child termination; and
 - socket request/response time.
 
+For static targets, both runner-build rows state that their time includes
+copying every object file from the static archives into the runner. The
+dynamic-target `dlopen()` row is shown as not applicable because a static
+archive is not loaded with `dlopen()`. In a mixed configuration, the build rows
+carry the static-object note and the `dlopen()` row measures the dynamic targets.
+
 `dlsym()` only finds the harness function address. The following function-pointer
 call performs the actual candidate execution. If the candidate crashes, its
 execution interval ends when the monitor observes child termination. That
