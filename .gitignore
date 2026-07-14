@@ -14,6 +14,7 @@ dynamic_slicing_work
 statistics
 statistics-pch
 statistics-pch-link
+statistics-pch-link-static
 statistics-direct
 statistics-split
 check-level-stack

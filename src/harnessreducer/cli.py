@@ -97,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--amortize-link",
         action="store_true",
         help=(
-            "Reuse a persistent runner and shared target libraries during Phase 3. "
+            "Reuse a persistent runner and shared/static target libraries during Phase 3. "
             "Requires split or PCH mode; when used alone, the default split mode applies."
         ),
     )

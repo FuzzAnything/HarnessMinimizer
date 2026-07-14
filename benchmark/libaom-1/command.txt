@@ -62,6 +62,17 @@ harnessreducer harness.cpp \
   --statistics \
   -o reduced.cpp
 
+harnessreducer harness.cpp \
+  --compile-flags "-I/mnt/raid/home/lihaiying/HarnessMinimizer/include -I$(pwd)/build/sanitizer/include" \
+  --link-flags "$(pwd)/build/sanitizer/lib/libaom.a" \
+  --work-dir ./statistics-pch-link-static \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
 
 --pch
 [INFO] Total time: 321076ms
@@ -78,6 +89,9 @@ harnessreducer harness.cpp \
 --pch --amortize-link
 [INFO] Total time: 186049ms
 [INFO] Total time: 185868ms
+
+--pch --amortize-link (static libraries)
+[INFO] Total time: 182126ms
 
 COMMON="-Qunused-arguments \
   -DFDP_MIN_MODE_REPLAY \
