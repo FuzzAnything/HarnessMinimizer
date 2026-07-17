@@ -175,16 +175,21 @@ separately. Do not add it to the execution interval.
   measurements and exact command
   arrays used to produce the summary.
 
-python3 measure_time.py benchmark/libaom-3/harness.cpp \
-  --compile-flags="-Ibenchmark/libaom-3/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/libaom-3/build/sanitizer/lib -laom" \
-  --crash-input benchmark/libaom-3/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-3/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-3/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-3/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-3/crash-input \
   --suffix dynamic \
-  -o benchmark/libaom-3/harness.out
+  -o benchmark/library-bug/libaom-3/harness.out
 
-python3 measure_time.py benchmark/libaom-3/harness.cpp \
-  --compile-flags="-Ibenchmark/libaom-3/build/sanitizer/include" \
-  --link-flags="benchmark/libaom-3/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/libaom-3/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-3/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-3/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-3/crash-input \
   --suffix static \
-  -o benchmark/libaom-3/harness.out
+  -o benchmark/library-bug/libaom-3/harness.out
+
+python3 crash_triage.py benchmark/library-bug/libaom-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-1/crash-input
