@@ -28,11 +28,10 @@ from harnessreducer import reducer_runner as rr  # noqa: E402
 
 # =============================================================================
 # LLM CONFIGURATION - FILL IN THESE THREE VALUES
-# Environment variables with the same names take precedence.
+# The script reads the API key only from HKU_API_KEY.
 # =============================================================================
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-OPENAI_MODEL = "gpt-4o"
-OPENAI_API_KEY = ""  # Paste the API key here, or export OPENAI_API_KEY.
+OPENAI_BASE_URL = "https://llm.shtech.org/v1"
+OPENAI_MODEL = "GLM-5.2"
 
 
 LLM_TIMEOUT_SECONDS = 240
@@ -651,15 +650,14 @@ def triage_slug(report: str) -> str:
 def llm_configuration() -> tuple[str, str, str]:
     base_url = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
     model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
-    api_key = os.environ.get("OPENAI_API_KEY", OPENAI_API_KEY).strip()
+    api_key = os.environ.get("HKU_API_KEY", "").strip()
     if not base_url:
         raise RuntimeError("OPENAI_BASE_URL is empty; fill in the configuration block.")
     if not model:
         raise RuntimeError("OPENAI_MODEL is empty; fill in the configuration block.")
     if not api_key:
         raise RuntimeError(
-            "OPENAI_API_KEY is empty. Fill in the configuration block near the "
-            "top of crash_triage.py or export OPENAI_API_KEY."
+            "HKU_API_KEY is empty. Export HKU_API_KEY before running crash_triage.py."
         )
     return base_url, model, api_key
 
