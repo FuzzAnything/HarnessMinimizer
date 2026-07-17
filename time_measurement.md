@@ -193,3 +193,8 @@ python3 crash_triage.py benchmark/library-bug/libaom-1/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
   --link-flags="benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.a" \
   --crash-input benchmark/library-bug/libaom-1/crash-input
+
+
+strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
+  | grep -oEm1 '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]{7,40}' \
+  | sed -E 's/.*-g//'
