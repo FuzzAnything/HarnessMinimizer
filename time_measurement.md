@@ -175,19 +175,19 @@ separately. Do not add it to the execution interval.
   measurements and exact command
   arrays used to produce the summary.
 
-python3 measure_time.py benchmark/library-bug/libaom-3/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-3/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/library-bug/libaom-3/build/sanitizer/lib -laom" \
-  --crash-input benchmark/library-bug/libaom-3/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-1/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-1/crash-input \
   --suffix dynamic \
-  -o benchmark/library-bug/libaom-3/harness.out
+  -o benchmark/library-bug/libaom-1/harness.out
 
-python3 measure_time.py benchmark/library-bug/libaom-3/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-3/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-3/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-1/crash-input \
   --suffix static \
-  -o benchmark/library-bug/libaom-3/harness.out
+  -o benchmark/library-bug/libaom-1/harness.out
 
 python3 crash_triage.py benchmark/library-bug/libaom-1/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
@@ -198,3 +198,9 @@ python3 crash_triage.py benchmark/library-bug/libaom-1/harness.cpp \
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
   | grep -oEm1 '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]{7,40}' \
   | sed -E 's/.*-g//'
+
+docker run -d \
+  --name harnessminimizer-eval \
+  --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark,dst=/root/benchmark \
+  harnessminimizer:latest \
+  tail -f /dev/null

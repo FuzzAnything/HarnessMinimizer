@@ -305,6 +305,11 @@ def compile_harness(command: Sequence[str]) -> None:
 
 def sanitizer_environment(link_flags: str | None) -> dict[str, str]:
     env = rr.runtime_library_env(link_flags)
+    env["DEBUGINFOD_URLS"] = ""
+    symbolizer = shutil.which("llvm-symbolizer")
+    if symbolizer:
+        env.setdefault("ASAN_SYMBOLIZER_PATH", symbolizer)
+        env.setdefault("UBSAN_SYMBOLIZER_PATH", symbolizer)
     env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
     env["UBSAN_OPTIONS"] = (
         "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
@@ -519,7 +524,6 @@ def run_gdb_context(ctx: TriageContext, target_func: str | None = None) -> str:
 
     env = sanitizer_environment(ctx.link_flags)
     env["ASAN_OPTIONS"] += ":detect_leaks=0"
-    env["DEBUGINFOD_URLS"] = ""
     try:
         process = subprocess.run(
             command,
