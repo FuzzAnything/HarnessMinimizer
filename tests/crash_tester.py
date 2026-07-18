@@ -387,6 +387,7 @@ def compile_amortized_plugin(
         "-shared",
         *PHASE3_PLUGIN_SANITIZER_FLAGS,
         object_path,
+        *split_flags(getattr(args, "amortized_plugin_link_flags", None)),
         "-o",
         output_path,
     ]
@@ -472,6 +473,7 @@ def main() -> int:
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
+    parser.add_argument("--amortized-plugin-link-flags", type=str, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     pid = os.getpid()
 
