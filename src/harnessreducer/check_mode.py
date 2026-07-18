@@ -348,6 +348,7 @@ def run_treereducer_with_check(
     )
     with runner_context as amortized_runner:
         if amortized_runner is not None:
+            plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
                 harness_path,
                 fdp_trace_file,
@@ -358,7 +359,7 @@ def run_treereducer_with_check(
                 phase3_mode,
                 amortized_runner.socket_path,
                 pch_artifacts,
-                amortized_runner.plugin_link_flags,
+                plugin_link_flags,
                 symbolize=True,
             )
             full_stack_trace = extract_first_entire_stack_trace(reference_output)
@@ -379,12 +380,10 @@ def run_treereducer_with_check(
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
-            if amortized_runner.plugin_link_flags:
-                cmd.extend(
-                    [
-                        "--amortized-plugin-link-flags",
-                        " ".join(amortized_runner.plugin_link_flags),
-                    ]
+            if plugin_link_flags:
+                cmd.append(
+                    "--amortized-plugin-fallback-link-flags="
+                    + " ".join(plugin_link_flags)
                 )
 
         proc = subprocess.run(

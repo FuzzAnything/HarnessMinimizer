@@ -368,8 +368,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
     link_flags = str(target_archive)
 
     inputs = reducer_runner.resolve_amortized_link_inputs(link_flags)
-    assert inputs.static_libraries == ()
-    assert inputs.hidden_static_libraries == (str(target_archive.resolve()),)
+    assert inputs.static_libraries == (str(target_archive.resolve()),)
     assert inputs.plugin_link_flags == (str(target_archive),)
 
     with reducer_runner.start_amortized_runner(
@@ -389,8 +388,86 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
                 str(trace_path),
                 "--amortized-runner-socket",
                 runner.socket_path,
-                "--amortized-plugin-link-flags",
-                " ".join(runner.plugin_link_flags),
+                "--amortized-plugin-fallback-link-flags="
+                + " ".join(runner.plugin_link_flags),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert result.returncode == 77, result.stdout + result.stderr
+    assert "AddressSanitizer" in result.stdout + result.stderr
+
+
+def test_amortized_runner_does_not_fallback_for_unused_hidden_static_symbols(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-unused-hidden-static"))
+    target_source = tmp_path / "unused_hidden_static.cpp"
+    target_object = tmp_path / "unused_hidden_static.o"
+    target_archive = tmp_path / "libunused_hidden_static.a"
+    target_source.write_text(
+        """
+extern "C" __attribute__((visibility("hidden")))
+void unused_hidden_static_function() {}
+extern "C" __attribute__((noinline))
+void visible_static_crash() {
+  volatile int *values = new int[1];
+  values[4] = 7;
+}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "clang++",
+            "-c",
+            "-fsanitize=address,undefined",
+            "-O1",
+            "-gline-tables-only",
+            str(target_source),
+            "-o",
+            str(target_object),
+        ],
+        check=True,
+    )
+    subprocess.run(["ar", "rcs", str(target_archive), str(target_object)], check=True)
+
+    harness_source = tmp_path / "unused_hidden_harness.cpp"
+    harness_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+extern "C" void visible_static_crash();
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
+  visible_static_crash();
+  return 0;
+}
+""",
+        encoding="utf-8",
+    )
+    trace_path = tmp_path / "unused_hidden_fdp_trace.log"
+    trace_path.write_text("", encoding="utf-8")
+
+    with reducer_runner.start_amortized_runner(
+        str(target_archive),
+        None,
+        str(trace_path),
+        symbolize=False,
+    ) as runner:
+        result = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                str(harness_source),
+                "AddressSanitizer",
+                "--split",
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+                "--amortized-plugin-fallback-link-flags=-lthis_fallback_must_not_be_used",
             ],
             text=True,
             capture_output=True,

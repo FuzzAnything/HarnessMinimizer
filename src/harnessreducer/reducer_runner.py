@@ -72,7 +72,6 @@ class AmortizedRunner:
     process: subprocess.Popen[str]
     shared_libraries: tuple[str, ...]
     static_libraries: tuple[str, ...]
-    hidden_static_libraries: tuple[str, ...]
     plugin_link_flags: tuple[str, ...]
 
 
@@ -81,7 +80,6 @@ class AmortizedLinkInputs:
     shared_libraries: tuple[str, ...]
     static_libraries: tuple[str, ...]
     runner_link_flags: tuple[str, ...]
-    hidden_static_libraries: tuple[str, ...] = ()
     plugin_link_flags: tuple[str, ...] = ()
 
 
@@ -230,58 +228,6 @@ def _is_static_library_path(path: Path) -> bool:
     return path.name.endswith(".a")
 
 
-def _static_library_defines_hidden_globals(path: Path) -> bool:
-    """Return true when an archive has non-exportable global definitions.
-
-    A hidden/protected symbol can satisfy a normal executable link, but it
-    cannot be published from the runner for a later dlopen(candidate.so)
-    lookup. Sanitizer bookkeeping symbols are ignored because they do not
-    represent target APIs called by candidate harnesses.
-    """
-
-    try:
-        proc = subprocess.run(
-            ["readelf", "-Ws", str(path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-    except OSError:
-        return False
-    if proc.returncode != 0:
-        return False
-
-    ignored_prefixes = (
-        "___asan_",
-        "__asan_",
-        "__odr_asan_",
-        "___ubsan_",
-        "__ubsan_",
-    )
-    for line in proc.stdout.splitlines():
-        parts = line.split()
-        if len(parts) < 8:
-            continue
-        symbol_type, bind, visibility, section, name = (
-            parts[3],
-            parts[4],
-            parts[5],
-            parts[6],
-            parts[7],
-        )
-        if section == "UND" or bind != "GLOBAL":
-            continue
-        if visibility not in {"HIDDEN", "PROTECTED"}:
-            continue
-        if symbol_type not in {"FUNC", "OBJECT", "IFUNC", "TLS", "NOTYPE"}:
-            continue
-        if name.startswith(ignored_prefixes):
-            continue
-        return True
-    return False
-
-
 def resolve_amortized_link_inputs(
     link_flags: str | None,
 ) -> AmortizedLinkInputs:
@@ -426,25 +372,13 @@ def resolve_amortized_link_inputs(
         else:
             raise ValueError(f"Unsupported library input resolved from -l: {found}")
 
-    hidden_static_libraries = tuple(
-        library
-        for library in static_libraries
-        if _static_library_defines_hidden_globals(Path(library))
-    )
-    if hidden_static_libraries:
-        # Hidden symbols cannot be exported from the runner for runtime plugin
-        # resolution. Fall back to linking the original link line into each
-        # candidate plugin so those symbols are resolved inside candidate.so.
-        plugin_link_flags = tuple(tokens)
-        static_libraries = [
-            library
-            for library in static_libraries
-            if library not in hidden_static_libraries
-        ]
-    else:
-        plugin_link_flags = ()
+    # Static archives are first tried through the fast runner-export path. These
+    # original flags are only used if a specific candidate fails to dlopen with
+    # an unresolved symbol, which covers hidden static APIs without penalizing
+    # candidates that never reference them.
+    plugin_link_flags = tuple(tokens) if static_libraries else ()
 
-    if not shared_libraries and not static_libraries and not plugin_link_flags:
+    if not shared_libraries and not static_libraries:
         raise ValueError(
             "--amortize-link requires at least one target library in --link-flags."
             " Pass a full .so/.a path or use -L/path -ltarget."
@@ -453,7 +387,6 @@ def resolve_amortized_link_inputs(
         shared_libraries=tuple(shared_libraries),
         static_libraries=tuple(static_libraries),
         runner_link_flags=tuple(runner_link_flags),
-        hidden_static_libraries=hidden_static_libraries,
         plugin_link_flags=plugin_link_flags,
     )
 
@@ -507,13 +440,6 @@ def start_amortized_runner(
     symbolize: bool,
 ):
     link_inputs = resolve_amortized_link_inputs(link_flags)
-    if link_inputs.hidden_static_libraries:
-        libraries = ", ".join(link_inputs.hidden_static_libraries)
-        print(
-            "[WARN] Static archive(s) contain hidden/protected target symbols "
-            "that cannot be exported from the amortized runner. Linking those "
-            f"archive(s) into candidate plugins instead: {libraries}"
-        )
     shared_libraries = link_inputs.shared_libraries
     runner_binary = _compile_harness_runner(link_inputs)
     socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
@@ -556,7 +482,6 @@ def start_amortized_runner(
             process=process,
             shared_libraries=shared_libraries,
             static_libraries=link_inputs.static_libraries,
-            hidden_static_libraries=link_inputs.hidden_static_libraries,
             plugin_link_flags=link_inputs.plugin_link_flags,
         )
     finally:
@@ -601,7 +526,9 @@ def run_amortized_reference_candidate(
         runner_socket,
     ]
     if plugin_link_flags:
-        cmd.extend(["--amortized-plugin-link-flags", " ".join(plugin_link_flags)])
+        cmd.append(
+            f"--amortized-plugin-fallback-link-flags={' '.join(plugin_link_flags)}"
+        )
     if symbolize:
         cmd.append("--symbolize")
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
@@ -1585,6 +1512,7 @@ def run_treereducer(
     )
     with runner_context as amortized_runner:
         if amortized_runner is not None:
+            plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
                 harness_path,
                 fdp_trace_file,
@@ -1595,7 +1523,7 @@ def run_treereducer(
                 phase3_mode,
                 amortized_runner.socket_path,
                 pch_artifacts,
-                amortized_runner.plugin_link_flags,
+                plugin_link_flags,
                 symbolize=False,
             )
             reference_depth = count_first_stack_trace_frames(reference_output)
@@ -1604,12 +1532,10 @@ def run_treereducer(
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
-            if amortized_runner.plugin_link_flags:
-                cmd.extend(
-                    [
-                        "--amortized-plugin-link-flags",
-                        " ".join(amortized_runner.plugin_link_flags),
-                    ]
+            if plugin_link_flags:
+                cmd.append(
+                    "--amortized-plugin-fallback-link-flags="
+                    + " ".join(plugin_link_flags)
                 )
         else:
             cmd.extend(stack_depth_tester_args(symbolized=False))
