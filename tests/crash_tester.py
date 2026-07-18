@@ -31,6 +31,9 @@ from harnessreducer.reducer_runner import (
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 UNINITIALIZED_COMPILE_ERROR_PATTERN = re.compile(r"(?i)(?:\[-Wuninitialized\]|uninitialized)")
+AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
+    r"dlopen candidate failed: .*undefined symbol:"
+)
 
 
 def get_project_root():
@@ -381,13 +384,24 @@ def compile_amortized_plugin(
         print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
 
+    if link_amortized_plugin(args, object_path, output_path) != 0:
+        return -1, object_path
+    return 0, object_path
+
+
+def link_amortized_plugin(
+    args: argparse.Namespace,
+    object_path: str,
+    output_path: str,
+    link_flags: str | None = None,
+) -> int:
     link_cmd = [
         "clang++",
         "-Qunused-arguments",
         "-shared",
         *PHASE3_PLUGIN_SANITIZER_FLAGS,
         object_path,
-        *split_flags(getattr(args, "amortized_plugin_link_flags", None)),
+        *split_flags(link_flags),
         "-o",
         output_path,
     ]
@@ -402,8 +416,8 @@ def compile_amortized_plugin(
         err_msg = link_proc.stderr.strip() or link_proc.stdout.strip() or "Unknown plugin link error"
         _remember_compile_failure(args, err_msg=err_msg, compile_cmd=link_cmd)
         print(f"Plugin linking failed: {link_cmd} {err_msg}", file=sys.stderr)
-        return -1, object_path
-    return 0, object_path
+        return -1
+    return 0
 
 
 def run_with_amortized_runner(socket_path: str, plugin_path: str) -> tuple[int, str]:
@@ -427,6 +441,39 @@ def run_with_amortized_runner(socket_path: str, plugin_path: str) -> tuple[int, 
                 f"expected {expected_size} bytes, got {len(output)}."
             )
         return status, output.decode("utf-8", errors="replace")
+
+
+def should_retry_amortized_plugin_with_fallback(status: int, run_log: str) -> bool:
+    return status == 125 and bool(AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN.search(run_log))
+
+
+def run_with_amortized_runner_maybe_fallback(
+    args: argparse.Namespace,
+    output_path: str,
+    object_path: str | None,
+) -> tuple[int | None, str]:
+    status, run_log = run_with_amortized_runner(
+        args.amortized_runner_socket,
+        output_path,
+    )
+    fallback_link_flags = getattr(args, "amortized_plugin_fallback_link_flags", None)
+    if (
+        object_path
+        and fallback_link_flags
+        and should_retry_amortized_plugin_with_fallback(status, run_log)
+    ):
+        if link_amortized_plugin(
+            args,
+            object_path,
+            output_path,
+            fallback_link_flags,
+        ) != 0:
+            return None, ""
+        status, run_log = run_with_amortized_runner(
+            args.amortized_runner_socket,
+            output_path,
+        )
+    return status, run_log
 
 
 def _check_stack_trace(
@@ -473,7 +520,14 @@ def main() -> int:
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
-    parser.add_argument("--amortized-plugin-link-flags", type=str, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--amortized-plugin-fallback-link-flags",
+        "--amortized-plugin-link-flags",
+        dest="amortized_plugin_fallback_link_flags",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
     pid = os.getpid()
 
@@ -510,13 +564,16 @@ def main() -> int:
 
         if args.amortized_runner_socket:
             try:
-                status, run_log = run_with_amortized_runner(
-                    args.amortized_runner_socket,
+                status, run_log = run_with_amortized_runner_maybe_fallback(
+                    args,
                     output_path,
+                    object_path,
                 )
             except Exception as exc:
                 print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
                 return _finalize_result(args, 1)
+            if status is None:
+                return _finalize_result(args, -1)
         else:
             exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
             run_proc = subprocess.run(

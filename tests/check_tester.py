@@ -35,7 +35,9 @@ compile_direct = _crash_tester.compile_direct
 compile_split = _crash_tester.compile_split
 compile_with_pch = _crash_tester.compile_with_pch
 compile_amortized_plugin = _crash_tester.compile_amortized_plugin
-run_with_amortized_runner = _crash_tester.run_with_amortized_runner
+run_with_amortized_runner_maybe_fallback = (
+    _crash_tester.run_with_amortized_runner_maybe_fallback
+)
 update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
@@ -85,7 +87,14 @@ def main() -> int:
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
-    parser.add_argument("--amortized-plugin-link-flags", type=str, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--amortized-plugin-fallback-link-flags",
+        "--amortized-plugin-link-flags",
+        dest="amortized_plugin_fallback_link_flags",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
 
     pid = os.getpid()
@@ -128,9 +137,10 @@ def main() -> int:
 
         if args.amortized_runner_socket:
             try:
-                run_returncode, run_log = run_with_amortized_runner(
-                    args.amortized_runner_socket,
+                run_returncode, run_log = run_with_amortized_runner_maybe_fallback(
+                    args,
                     output_path,
+                    object_path,
                 )
             except Exception as exc:
                 append_candidate_stack_trace(
@@ -146,6 +156,21 @@ def main() -> int:
                     compile_error=f"Amortized-link execution failed: {exc}",
                 )
                 return 1
+            if run_returncode is None:
+                append_candidate_stack_trace(
+                    args.check_stack_log_file,
+                    source_path=args.source,
+                    crash_pattern_matched=False,
+                    frame_count=0,
+                    level_same=False,
+                    stack_same=False,
+                    full_stack_trace=None,
+                    compare_stack_trace=None,
+                    compile_failed=True,
+                    uninitialized_compile_error=bool(getattr(args, "_last_compile_uninitialized", False)),
+                    compile_error=getattr(args, "_last_compile_error", None),
+                )
+                return -1
         else:
             exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
             run_proc = subprocess.run(
