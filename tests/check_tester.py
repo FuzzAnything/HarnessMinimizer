@@ -41,6 +41,49 @@ run_with_amortized_runner_maybe_fallback = (
 update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
+def _execution_env(args: argparse.Namespace, *, symbolize: bool) -> dict[str, str]:
+    env = runtime_library_env(args.link_flags)
+    symbolized = "1" if symbolize else "0"
+    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
+    env["UBSAN_OPTIONS"] = (
+        f"exitcode=77:symbolize={symbolized}:halt_on_error=1:print_stacktrace=1"
+    )
+    if args.fdp_trace:
+        env["FDP_TRACE_PATH"] = args.fdp_trace
+    return env
+
+
+def _run_compiled_candidate(
+    args: argparse.Namespace,
+    output_path: str,
+    object_path: str | None,
+    *,
+    symbolize: bool,
+    runner_socket: str | None = None,
+) -> tuple[int | None, str]:
+    if runner_socket:
+        runner_args = args
+        if runner_socket != args.amortized_runner_socket:
+            runner_args = argparse.Namespace(**vars(args))
+            runner_args.amortized_runner_socket = runner_socket
+        return run_with_amortized_runner_maybe_fallback(
+            runner_args,
+            output_path,
+            object_path,
+        )
+
+    exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
+    run_proc = subprocess.run(
+        exec_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_execution_env(args, symbolize=symbolize),
+        check=False,
+    )
+    return run_proc.returncode, run_proc.stdout + run_proc.stderr
+
+
 def _evaluate_check_candidate(
     *,
     run_returncode: int,
@@ -88,6 +131,14 @@ def main() -> int:
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
     parser.add_argument(
+        "--amortized-runner-socket-symbolize-0",
+        "--amortized-runner-socket-symbolize0",
+        dest="amortized_runner_socket_symbolize_0",
+        type=str,
+        default=None,
+        help="Unix socket for diagnostic amortized-link execution with symbolize=0",
+    )
+    parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
         "--amortized-plugin-link-flags",
         dest="amortized_plugin_fallback_link_flags",
@@ -129,12 +180,6 @@ def main() -> int:
             )
             return -1
 
-        env = runtime_library_env(args.link_flags)
-        env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
-        env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"
-        if args.fdp_trace:
-            env["FDP_TRACE_PATH"] = args.fdp_trace
-
         if args.amortized_runner_socket:
             try:
                 run_returncode, run_log = run_with_amortized_runner_maybe_fallback(
@@ -172,17 +217,51 @@ def main() -> int:
                 )
                 return -1
         else:
-            exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-            run_proc = subprocess.run(
-                exec_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-                check=False,
+            run_returncode, run_log = _run_compiled_candidate(
+                args,
+                output_path,
+                object_path,
+                symbolize=True,
             )
-            run_returncode = run_proc.returncode
-            run_log = run_proc.stdout + run_proc.stderr
+
+        candidate_full_trace_symbolize_0 = None
+        try:
+            if args.amortized_runner_socket:
+                if args.amortized_runner_socket_symbolize_0:
+                    symbolize_0_status, symbolize_0_log = _run_compiled_candidate(
+                        args,
+                        output_path,
+                        object_path,
+                        symbolize=False,
+                        runner_socket=args.amortized_runner_socket_symbolize_0,
+                    )
+                    if symbolize_0_status is None:
+                        candidate_full_trace_symbolize_0 = (
+                            "<symbolize=0 diagnostic compile/link failed>"
+                        )
+                    else:
+                        candidate_full_trace_symbolize_0 = (
+                            extract_first_entire_stack_trace(symbolize_0_log)
+                        )
+            else:
+                symbolize_0_status, symbolize_0_log = _run_compiled_candidate(
+                    args,
+                    output_path,
+                    object_path,
+                    symbolize=False,
+                )
+                if symbolize_0_status is None:
+                    candidate_full_trace_symbolize_0 = (
+                        "<symbolize=0 diagnostic compile/link failed>"
+                    )
+                else:
+                    candidate_full_trace_symbolize_0 = (
+                        extract_first_entire_stack_trace(symbolize_0_log)
+                    )
+        except Exception as exc:
+            candidate_full_trace_symbolize_0 = (
+                f"<symbolize=0 diagnostic execution failed: {exc}>"
+            )
 
         stored_compare_pattern = Path(args.stack_trace_file).read_text(encoding="utf-8").strip()
         reference = load_check_reference(args.check_reference_file)
@@ -210,6 +289,7 @@ def main() -> int:
             stack_same=stack_same,
             full_stack_trace=candidate_full_trace,
             compare_stack_trace=candidate_compare_trace,
+            full_stack_trace_symbolize_0=candidate_full_trace_symbolize_0,
             compile_failed=False,
             uninitialized_compile_error=False,
             candidate_code=(

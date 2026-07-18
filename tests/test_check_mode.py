@@ -40,6 +40,15 @@ allocated by thread T0 here:
     #1 0x5ef838476ae3 in aom_memalign /root/src/libaom/aom_mem/aom_mem.c:59:22
 """
 
+SAMPLE_UNSYMBOLIZED_OUTPUT = """\
+=================================================================
+==1953==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x76923a00faf4
+    #0 0x5ef838c11ae5 (/tmp/harness+0x11ae5)
+    #1 0x5ef8386dec7e (/tmp/harness+0x6dec7e)
+    #2 0x5ef838494e3f (/tmp/harness+0x494e3f)
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/harness+0x11ae5)
+"""
+
 
 class TestCheckModeHelpers(unittest.TestCase):
     def setUp(self):
@@ -58,6 +67,10 @@ class TestCheckModeHelpers(unittest.TestCase):
     def test_count_stack_trace_frames_counts_frame_lines_directly(self):
         trace = extract_first_entire_stack_trace(SAMPLE_OUTPUT)
         self.assertEqual(count_stack_trace_frames(trace), 7)
+
+    def test_count_stack_trace_frames_counts_unsymbolized_frame_lines(self):
+        trace = extract_first_entire_stack_trace(SAMPLE_UNSYMBOLIZED_OUTPUT)
+        self.assertEqual(count_stack_trace_frames(trace), 3)
 
     def test_check_statistics_roundtrip_and_ratio(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -79,11 +92,33 @@ class TestCheckModeHelpers(unittest.TestCase):
                 full_stack_trace="#0 ...\n#1 ...",
                 full_stack_trace_pattern="\\#0.*\\#1.*",
                 frame_count=2,
+                full_stack_trace_symbolize_0="#0 0x123 (/tmp/harness+0x123)",
+                full_stack_trace_symbolize_0_pattern="\\#0 0x[0-9a-fA-F]+.*",
+                frame_count_symbolize_0=1,
             )
             path = write_check_reference(reference)
             text = Path(path).read_text(encoding="utf-8")
             self.assertIn('"frame_count": 2', text)
+            self.assertIn('"frame_count_symbolize_0": 1', text)
             self.assertIn('"crash_pattern": "AddressSanitizer"', text)
+
+    def test_load_check_reference_accepts_legacy_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            Path(get_check_reference_file()).write_text(
+                "{\n"
+                '  "crash_pattern": "AddressSanitizer",\n'
+                '  "full_stack_trace": "#0 ...",\n'
+                '  "full_stack_trace_pattern": "\\\\#0.*",\n'
+                '  "frame_count": 1\n'
+                "}\n",
+                encoding="utf-8",
+            )
+
+            reference = load_check_reference()
+            self.assertEqual(reference.frame_count, 1)
+            self.assertEqual(reference.full_stack_trace_symbolize_0, "")
+            self.assertEqual(reference.frame_count_symbolize_0, 0)
 
     def test_append_candidate_stack_trace_writes_log_entry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -98,6 +133,7 @@ class TestCheckModeHelpers(unittest.TestCase):
                 stack_same=False,
                 full_stack_trace="#0 in foo\n#1 in bar\n#2 in harness",
                 compare_stack_trace="#0 in foo\n#1 in bar",
+                full_stack_trace_symbolize_0="#0 0x123 (/tmp/harness+0x123)",
                 candidate_code="int main() { return 0; }\n",
             )
             text = Path(log_path).read_text(encoding="utf-8")
@@ -105,6 +141,8 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("crash_pattern_matched: True", text)
             self.assertIn("frame_count: 2", text)
             self.assertIn("#0 in foo", text)
+            self.assertIn("full_stack_trace_symbolize_0:", text)
+            self.assertIn("#0 0x123 (/tmp/harness+0x123)", text)
             self.assertIn("compare_stack_trace:", text)
             self.assertIn("compile_failed: False", text)
             self.assertIn("uninitialized_compile_error: False", text)
@@ -193,10 +231,21 @@ class TestCheckModeHelpers(unittest.TestCase):
         mock_run.return_value = type(
             "Proc", (), {"returncode": 0, "stdout": "", "stderr": ""}
         )()
-        mock_start_runner.return_value = nullcontext(
-            SimpleNamespace(socket_path="/tmp/harness-check.sock")
-        )
-        mock_reference.return_value = SAMPLE_OUTPUT
+        mock_start_runner.side_effect = [
+            nullcontext(
+                SimpleNamespace(
+                    socket_path="/tmp/harness-check-symbolize1.sock",
+                    plugin_link_flags=(),
+                )
+            ),
+            nullcontext(
+                SimpleNamespace(
+                    socket_path="/tmp/harness-check-symbolize0.sock",
+                    plugin_link_flags=(),
+                )
+            ),
+        ]
+        mock_reference.side_effect = [SAMPLE_OUTPUT, SAMPLE_UNSYMBOLIZED_OUTPUT]
 
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -224,8 +273,16 @@ class TestCheckModeHelpers(unittest.TestCase):
 
             cmd = mock_run.call_args.args[0]
             self.assertIn("--amortized-runner-socket", cmd)
-            self.assertIn("/tmp/harness-check.sock", cmd)
-            self.assertEqual(load_check_reference().frame_count, 7)
+            self.assertIn("/tmp/harness-check-symbolize1.sock", cmd)
+            self.assertIn("--amortized-runner-socket-symbolize-0", cmd)
+            self.assertIn("/tmp/harness-check-symbolize0.sock", cmd)
+            self.assertEqual(mock_start_runner.call_args_list[0].kwargs["symbolize"], True)
+            self.assertEqual(mock_start_runner.call_args_list[1].kwargs["symbolize"], False)
+            self.assertEqual(mock_reference.call_args_list[0].kwargs["symbolize"], True)
+            self.assertEqual(mock_reference.call_args_list[1].kwargs["symbolize"], False)
+            reference = load_check_reference()
+            self.assertEqual(reference.frame_count, 7)
+            self.assertEqual(reference.frame_count_symbolize_0, 3)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
     @patch("harnessreducer.check_mode.subprocess.run")

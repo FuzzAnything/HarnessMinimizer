@@ -269,7 +269,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
         print(
             "[+] Recorded check reference: "
-            f"{reference.frame_count} frame(s) in the first entire stack trace."
+            f"{reference.frame_count} symbolized frame(s), "
+            f"{getattr(reference, 'frame_count_symbolize_0', 0)} "
+            "unsymbolized frame(s)."
         )
     check_reducer_crash_pattern(
         config.harness_path,
