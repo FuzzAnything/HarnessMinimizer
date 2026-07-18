@@ -189,10 +189,15 @@ python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libaom-1/harness.out
 
-python3 crash_triage.py benchmark/library-bug/libaom-1/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-1/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-4/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-4/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-4/crash-input
+
+python3 crash_triage.py benchmark/library-bug/libaom-4/reduced.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-4/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-4/crash-input
 
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \

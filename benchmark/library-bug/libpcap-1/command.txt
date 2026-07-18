@@ -1,0 +1,52 @@
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libpcap.a" \
+  --work-dir ./statistics-pch-link-static \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --work-dir ./statistics-pch-link-static \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --work-dir ./statistics-pch-static \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --work-dir ./statistics-pch-link-dynamic \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --work-dir ./statistics-pch-dynamic \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --statistics \
+  -o reduced.cpp

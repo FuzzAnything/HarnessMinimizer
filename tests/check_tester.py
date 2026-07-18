@@ -85,6 +85,7 @@ def main() -> int:
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
+    parser.add_argument("--amortized-plugin-link-flags", type=str, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     pid = os.getpid()

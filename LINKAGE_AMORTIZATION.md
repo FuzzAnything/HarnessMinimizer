@@ -607,7 +607,62 @@ plugin load fails.
 
 This ensures that functions needed by any future candidate are present.
 
-### 8.4 Why `--no-whole-archive` is required afterward
+### 8.4 When static symbols are hidden
+
+There is one important exception to the static-runner path.
+
+Some static archives are built with hidden or protected symbol visibility. For
+example, a symbol table may contain:
+
+```text
+bpf_validate    GLOBAL HIDDEN
+```
+
+What this means:
+
+- a normal executable link can still use `bpf_validate`;
+- `harness_runner` can contain the code after linking the archive;
+- but `--export-dynamic` cannot publish that hidden symbol for a future
+  `dlopen(candidate.so)` lookup.
+
+So this fails:
+
+```text
+harness_runner contains bpf_validate
+        |
+        `-- bpf_validate is hidden
+
+candidate.so needs bpf_validate
+dynamic loader cannot see the hidden runner symbol
+-> dlopen candidate failed: undefined symbol: bpf_validate
+```
+
+What HarnessReducer does now:
+
+```text
+hidden static archive detected
+        |
+        +-- do not rely on exporting it from harness_runner
+        |
+        `-- link the original --link-flags into each candidate plugin
+```
+
+Why:
+
+The candidate plugin then contains the hidden static-library code itself, so
+`bpf_validate` is resolved inside `candidate.so` instead of through the runner.
+This preserves correctness for hidden static APIs.
+
+Tradeoff:
+
+This fallback gives up the static-library speedup for that hidden archive,
+because the archive must be linked into each candidate plugin. Dynamic-library
+amortization and PCH reuse still work normally. If the archive was not compiled
+as position-independent code, linking it into `candidate.so` may still fail; in
+that case the reliable choices are a default-visible shared target build or
+running without `--amortize-link`.
+
+### 8.5 Why `--no-whole-archive` is required afterward
 
 What is done:
 
@@ -628,7 +683,7 @@ whole-archive ON  -> target `.a` files
 whole-archive OFF -> normal dependencies
 ```
 
-### 8.5 Why `--export-dynamic` is required
+### 8.6 Why `--export-dynamic` is required
 
 Placing `aom_decode` inside the runner is not sufficient by itself.
 
@@ -665,7 +720,7 @@ Why:
 Candidate plugins are loaded dynamically and need to resolve their target calls
 against statically linked code inside the main executable.
 
-### 8.6 Why `-no-pie` is used
+### 8.7 Why `-no-pie` is used
 
 What is done:
 
@@ -683,7 +738,7 @@ This does not remove the need for `-fPIC` on candidate plugins. Plugins are
 shared objects and may be mapped at different addresses, so their code must
 remain position independent.
 
-### 8.7 Multiple static archives
+### 8.8 Multiple static archives
 
 Multiple archives are put inside the same controlled whole-archive region:
 
@@ -709,12 +764,12 @@ to eliminate thousands of repeated target links.
 |---|---|---|
 | What is the input? | A loadable ELF image. | An archive of object files. |
 | Can `dlopen()` load it? | Yes. | No. |
-| Where does target code live? | In a separately mapped `.so`. | Inside `harness_runner`. |
-| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with `--whole-archive`. |
-| How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `--export-dynamic` publishes runner symbols. |
+| Where does target code live? | In a separately mapped `.so`. | Usually inside `harness_runner`; hidden-symbol archives fall back to `candidate.so`. |
+| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with `--whole-archive`, unless hidden symbols require candidate-side linking. |
+| How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `--export-dynamic` publishes runner symbols, but it cannot publish hidden/protected symbols. |
 | Why not normal archive linking? | Not applicable. | The runner has no direct target references, so normal lazy extraction would omit needed members. |
-| What is inherited after `fork()`? | Shared-library mappings. | Runner text containing archive code. |
-| Is the target linked into each candidate? | No. | No. |
+| What is inherited after `fork()`? | Shared-library mappings. | Runner text for exportable archives; hidden fallback code is loaded with `candidate.so`. |
+| Is the target linked into each candidate? | No. | No for exportable archives; yes for hidden-symbol fallback archives. |
 
 The two paths differ during one-time preparation, then meet at the same symbol
 lookup point:
@@ -742,14 +797,17 @@ The steps are:
 
 1. Resolve `libtarget.a` and `libhelper.a` as static targets.
 2. Resolve `libcodec.so` as a shared target.
-3. Link the two static archives into `harness_runner` with
+3. Check whether the static archives have hidden/protected global symbols.
+4. Link exportable static archives into `harness_runner` with
    `--whole-archive`.
-4. Export their symbols with `--export-dynamic`.
-5. Make selected shared targets available during the one-time runner link when
+5. Export their symbols with `--export-dynamic`.
+6. Make selected shared targets available during the one-time runner link when
    they are needed to satisfy references from static code.
-6. Start the runner.
-7. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
-8. Load each candidate plugin. Its unresolved target calls may now resolve from
+7. Start the runner.
+8. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
+9. If a static archive had hidden/protected symbols, include the original
+   `--link-flags` when linking each candidate plugin.
+10. Load each candidate plugin. Its unresolved target calls may now resolve from
    either the runner or the shared library.
 
 The result is:
@@ -1147,7 +1205,10 @@ feature.
 - Target code must be compatible with the runner's ASan/UBSan environment.
 - Static archives with duplicate definitions may fail the one-time
   `--whole-archive` link.
-- Hidden or non-exportable symbols may not be available to candidate plugins.
+- Static archives with hidden/protected target symbols are not exported from the
+  runner; HarnessReducer links those archives into each candidate plugin
+  instead, which is slower and requires the archive objects to be usable in a
+  shared object.
 - Mixed libraries with conflicting symbol definitions can produce
   order-dependent symbol resolution.
 - `--amortize-link` works with split or PCH mode, not direct/single-step mode.
@@ -1170,8 +1231,10 @@ Shared target solution:
 
 Static target solution:
   A `.a` cannot be loaded.
-  Link all its members into the runner once with --whole-archive.
-  Export those runner symbols with --export-dynamic.
+  If its target symbols are exportable, link all members into the runner once
+  with --whole-archive and export them with --export-dynamic.
+  If its target symbols are hidden/protected, link that archive into each
+  candidate plugin instead.
 
 Candidate loop:
   Compile only the changing harness as a small candidate.so.
