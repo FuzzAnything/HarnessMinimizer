@@ -26,3 +26,4 @@ harness_values.h
 benchmark.tar.gz
 time/
 time-*/
+*crash_triage_report.md
