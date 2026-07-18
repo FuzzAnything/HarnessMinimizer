@@ -197,6 +197,13 @@ python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libaom-1/harness.out
 
+python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libpcap-2/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --crash-input benchmark/library-bug/libpcap-2/crash-input \
+  --suffix static \
+  -o benchmark/library-bug/libpcap-2/harness.out
+
 python3 crash_triage.py benchmark/library-bug/libaom-5/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
   --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \

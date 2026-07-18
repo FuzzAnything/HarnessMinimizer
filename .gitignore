@@ -13,7 +13,8 @@ pch_test_work
 pattern_extraction_work
 dynamic_slicing_work
 statistics
-statistics-pch
+statistics-pch-static
+statistics-pch-dynamic
 statistics-pch-link
 statistics-pch-link-static
 statistics-direct

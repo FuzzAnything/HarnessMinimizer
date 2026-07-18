@@ -14,7 +14,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_PCH,
     PHASE3_SPLIT,
     PchArtifacts,
-    STACK_FRAME_PATTERN,
+    STACK_FRAME_COUNT_PATTERN,
     get_last_interesting_file,
     extract_first_sanitizer_stack_trace,
     get_project_root,
@@ -43,6 +43,9 @@ class CheckReference:
     full_stack_trace: str
     full_stack_trace_pattern: str
     frame_count: int
+    full_stack_trace_symbolize_0: str = ""
+    full_stack_trace_symbolize_0_pattern: str = ""
+    frame_count_symbolize_0: int = 0
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,9 @@ def extract_first_entire_stack_trace(output: str) -> str | None:
 def count_stack_trace_frames(stack_trace: str | None) -> int:
     if not stack_trace:
         return 0
-    return sum(1 for line in stack_trace.splitlines() if STACK_FRAME_PATTERN.match(line))
+    return sum(
+        1 for line in stack_trace.splitlines() if STACK_FRAME_COUNT_PATTERN.match(line)
+    )
 
 
 def write_check_reference(reference: CheckReference) -> str:
@@ -107,6 +112,36 @@ def load_check_reference(path: str | None = None) -> CheckReference:
         full_stack_trace=data["full_stack_trace"],
         full_stack_trace_pattern=data["full_stack_trace_pattern"],
         frame_count=int(data["frame_count"]),
+        full_stack_trace_symbolize_0=data.get("full_stack_trace_symbolize_0", ""),
+        full_stack_trace_symbolize_0_pattern=data.get(
+            "full_stack_trace_symbolize_0_pattern", ""
+        ),
+        frame_count_symbolize_0=int(data.get("frame_count_symbolize_0", 0)),
+    )
+
+
+def _run_check_reference_harness(
+    crash_input: str | None,
+    link_flags: str | None,
+    *,
+    symbolize: bool,
+) -> subprocess.CompletedProcess[str]:
+    output_bin = os.path.join(get_work_dir(), "poc.out")
+    cmd = [output_bin]
+    if crash_input:
+        cmd.append(crash_input)
+
+    env = runtime_library_env(link_flags)
+    symbolized = "1" if symbolize else "0"
+    env["UBSAN_OPTIONS"] = (
+        f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
+    )
+    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
+    return run_command(
+        cmd,
+        env=env,
+        error_prefix="Failed to execute harness for check reference extraction",
+        ignore_errors=True,
     )
 
 
@@ -115,19 +150,10 @@ def record_check_reference(
     crash_pattern: str,
     link_flags: str | None = None,
 ) -> CheckReference:
-    output_bin = os.path.join(get_work_dir(), "poc.out")
-    cmd = [output_bin]
-    if crash_input:
-        cmd.append(crash_input)
-
-    env = runtime_library_env(link_flags)
-    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
-    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
-    proc = run_command(
-        cmd,
-        env=env,
-        error_prefix="Failed to execute harness for check reference extraction",
-        ignore_errors=True,
+    proc = _run_check_reference_harness(
+        crash_input,
+        link_flags,
+        symbolize=True,
     )
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
@@ -137,11 +163,40 @@ def record_check_reference(
     if not full_stack_trace:
         raise ValueError("Check mode could not find a symbolized first stack trace.")
 
+    symbolize_0_proc = _run_check_reference_harness(
+        crash_input,
+        link_flags,
+        symbolize=False,
+    )
+    symbolize_0_output = symbolize_0_proc.stdout + "\n" + symbolize_0_proc.stderr
+    full_stack_trace_symbolize_0 = ""
+    if symbolize_0_proc.returncode == 77:
+        full_stack_trace_symbolize_0 = (
+            extract_first_entire_stack_trace(symbolize_0_output) or ""
+        )
+        if not full_stack_trace_symbolize_0:
+            print(
+                "[!] Warning: Check mode could not find a symbolize=0 "
+                "reference stack trace; the unsymbolized reference trace will be empty."
+            )
+    else:
+        print(
+            "[!] Warning: Check mode could not reproduce the reference crash with "
+            "symbolize=0; the unsymbolized reference trace will be empty."
+        )
+
     reference = CheckReference(
         crash_pattern=crash_pattern,
         full_stack_trace=full_stack_trace,
         full_stack_trace_pattern=normalize_crash_signature(full_stack_trace, escape=True),
         frame_count=count_stack_trace_frames(full_stack_trace),
+        full_stack_trace_symbolize_0=full_stack_trace_symbolize_0,
+        full_stack_trace_symbolize_0_pattern=(
+            normalize_crash_signature(full_stack_trace_symbolize_0, escape=True)
+            if full_stack_trace_symbolize_0
+            else ""
+        ),
+        frame_count_symbolize_0=count_stack_trace_frames(full_stack_trace_symbolize_0),
     )
     write_check_reference(reference)
     return reference
@@ -213,6 +268,7 @@ def append_candidate_stack_trace(
     stack_same: bool,
     full_stack_trace: str | None,
     compare_stack_trace: str | None,
+    full_stack_trace_symbolize_0: str | None = None,
     compile_failed: bool = False,
     uninitialized_compile_error: bool | None = False,
     compile_error: str | None = None,
@@ -221,6 +277,11 @@ def append_candidate_stack_trace(
     path = Path(log_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     full_trace_text = full_stack_trace if full_stack_trace else "<no-full-stack-trace-found>"
+    full_trace_symbolize_0_text = (
+        full_stack_trace_symbolize_0
+        if full_stack_trace_symbolize_0
+        else "<no-symbolize-0-full-stack-trace-found>"
+    )
     compare_trace_text = compare_stack_trace if compare_stack_trace else "<no-pre-harness-stack-trace-found>"
     entry = (
         "=== candidate ===\n"
@@ -232,6 +293,8 @@ def append_candidate_stack_trace(
         f"compile_failed: {compile_failed}\n"
         "full_stack_trace:\n"
         f"{full_trace_text}\n"
+        "full_stack_trace_symbolize_0:\n"
+        f"{full_trace_symbolize_0_text}\n"
         "compare_stack_trace:\n"
         f"{compare_trace_text}\n"
     )
@@ -346,7 +409,20 @@ def run_treereducer_with_check(
         if amortize_link
         else nullcontext(None)
     )
-    with runner_context as amortized_runner:
+    runner_symbolize_0_context = (
+        start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=False,
+        )
+        if amortize_link
+        else nullcontext(None)
+    )
+    with (
+        runner_context as amortized_runner,
+        runner_symbolize_0_context as amortized_runner_symbolize_0,
+    ):
         if amortized_runner is not None:
             plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
@@ -367,6 +443,36 @@ def run_treereducer_with_check(
                 raise RuntimeError(
                     "Could not extract an amortized-link check-mode reference stack trace."
                 )
+            full_stack_trace_symbolize_0 = ""
+            if amortized_runner_symbolize_0 is not None:
+                try:
+                    reference_output_symbolize_0 = run_amortized_reference_candidate(
+                        harness_path,
+                        fdp_trace_file,
+                        crash_pattern,
+                        compile_flags,
+                        link_flags,
+                        crash_input,
+                        phase3_mode,
+                        amortized_runner_symbolize_0.socket_path,
+                        pch_artifacts,
+                        plugin_link_flags,
+                        symbolize=False,
+                    )
+                    full_stack_trace_symbolize_0 = (
+                        extract_first_entire_stack_trace(reference_output_symbolize_0)
+                        or ""
+                    )
+                    if not full_stack_trace_symbolize_0:
+                        print(
+                            "[!] Warning: Could not extract an amortized-link "
+                            "symbolize=0 check-mode reference stack trace."
+                        )
+                except Exception as exc:
+                    print(
+                        "[!] Warning: Could not record the amortized-link "
+                        f"symbolize=0 check-mode reference stack trace: {exc}"
+                    )
             write_check_reference(
                 CheckReference(
                     crash_pattern=crash_pattern,
@@ -375,11 +481,29 @@ def run_treereducer_with_check(
                         full_stack_trace, escape=True
                     ),
                     frame_count=count_stack_trace_frames(full_stack_trace),
+                    full_stack_trace_symbolize_0=full_stack_trace_symbolize_0,
+                    full_stack_trace_symbolize_0_pattern=(
+                        normalize_crash_signature(
+                            full_stack_trace_symbolize_0, escape=True
+                        )
+                        if full_stack_trace_symbolize_0
+                        else ""
+                    ),
+                    frame_count_symbolize_0=count_stack_trace_frames(
+                        full_stack_trace_symbolize_0
+                    ),
                 )
             )
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
+            if amortized_runner_symbolize_0 is not None:
+                cmd.extend(
+                    [
+                        "--amortized-runner-socket-symbolize-0",
+                        amortized_runner_symbolize_0.socket_path,
+                    ]
+                )
             if plugin_link_flags:
                 cmd.append(
                     "--amortized-plugin-fallback-link-flags="

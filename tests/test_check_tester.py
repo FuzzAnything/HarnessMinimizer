@@ -2,6 +2,7 @@ import importlib.util
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +34,16 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow /src/lib.c:10:3 in crash_func
 
 
 class TestCheckTesterEvaluation(unittest.TestCase):
+    def test_execution_env_can_disable_symbolization(self):
+        env = _check_tester._execution_env(
+            SimpleNamespace(link_flags=None, fdp_trace="/tmp/fdp-trace.log"),
+            symbolize=False,
+        )
+
+        self.assertIn("symbolize=0", env["ASAN_OPTIONS"])
+        self.assertIn("symbolize=0", env["UBSAN_OPTIONS"])
+        self.assertEqual(env["FDP_TRACE_PATH"], "/tmp/fdp-trace.log")
+
     def test_level_same_is_false_when_frame_count_differs(self):
         result = evaluate_check_candidate(
             run_returncode=77,
