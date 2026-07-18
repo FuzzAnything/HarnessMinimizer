@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import signal
 import socket
@@ -25,6 +26,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from harnessreducer import reducer_runner as rr  # noqa: E402
+
+
+AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
+    rb"dlopen candidate failed: .*undefined symbol:"
+)
 
 
 TIMING_RUNNER_SOURCE = r'''
@@ -623,32 +629,59 @@ RUNNER_METRIC_NAMES = (
 )
 
 
+def timing_runner_request(
+    socket_path: Path,
+    plugin_path: Path,
+) -> tuple[int, bytes, list[int], int]:
+    start_ns = time.perf_counter_ns()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(socket_path))
+        client.sendall(str(plugin_path.resolve()).encode("utf-8") + b"\n")
+        stream = client.makefile("rb")
+        header = stream.readline()
+        if not header:
+            raise RuntimeError("Timing runner closed the connection")
+        fields = header.decode("ascii").strip().split()
+        if len(fields) != 10:
+            raise RuntimeError(f"Invalid timing runner response: {header!r}")
+        status = int(fields[0])
+        output_size = int(fields[1])
+        metric_values = [int(value) for value in fields[2:]]
+        output = read_exact(stream, output_size)
+    elapsed_ns = time.perf_counter_ns() - start_ns
+    return status, output, metric_values, elapsed_ns
+
+
+def should_retry_timing_plugin_with_fallback(status: int, output: bytes) -> bool:
+    return status == 125 and bool(AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN.search(output))
+
+
 def measure_runner_requests(
     socket_path: Path,
     plugin_path: Path,
     iterations: int,
+    fallback_plugin_path: Path | None = None,
 ) -> tuple[dict[str, list[int]], Counter[int]]:
-    samples = {"end_to_end_ns": []}
+    samples = {"end_to_end_ns": [], "fallback_trigger_request_ns": []}
     samples.update({name: [] for name in RUNNER_METRIC_NAMES})
     statuses: Counter[int] = Counter()
 
     for _ in range(iterations):
-        start_ns = time.perf_counter_ns()
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.connect(str(socket_path))
-            client.sendall(str(plugin_path.resolve()).encode("utf-8") + b"\n")
-            stream = client.makefile("rb")
-            header = stream.readline()
-            if not header:
-                raise RuntimeError("Timing runner closed the connection")
-            fields = header.decode("ascii").strip().split()
-            if len(fields) != 10:
-                raise RuntimeError(f"Invalid timing runner response: {header!r}")
-            status = int(fields[0])
-            output_size = int(fields[1])
-            metric_values = [int(value) for value in fields[2:]]
-            read_exact(stream, output_size)
-        samples["end_to_end_ns"].append(time.perf_counter_ns() - start_ns)
+        total_start_ns = time.perf_counter_ns()
+        status, output, metric_values, initial_elapsed_ns = timing_runner_request(
+            socket_path,
+            plugin_path,
+        )
+        if (
+            fallback_plugin_path is not None
+            and should_retry_timing_plugin_with_fallback(status, output)
+        ):
+            samples["fallback_trigger_request_ns"].append(initial_elapsed_ns)
+            status, output, metric_values, _ = timing_runner_request(
+                socket_path,
+                fallback_plugin_path,
+            )
+        samples["end_to_end_ns"].append(time.perf_counter_ns() - total_start_ns)
         statuses[status] += 1
         for name, value in zip(RUNNER_METRIC_NAMES, metric_values, strict=True):
             samples[name].append(value)
@@ -919,6 +952,7 @@ def main() -> int:
 
         standalone = output_dir / output_name
         plugin = output_dir / "candidate.so"
+        fallback_plugin = output_dir / "candidate.fallback.so"
         commands["normal_executable_link"] = [
             "clang++",
             "-Qunused-arguments",
@@ -937,12 +971,27 @@ def main() -> int:
             "-o",
             str(plugin),
         ]
+        if link_inputs.plugin_link_flags:
+            commands["candidate_plugin_fallback_link"] = [
+                "clang++",
+                "-Qunused-arguments",
+                "-shared",
+                *rr.PHASE3_PLUGIN_SANITIZER_FLAGS,
+                str(plugin_pch_object),
+                *link_inputs.plugin_link_flags,
+                "-o",
+                str(fallback_plugin),
+            ]
         samples["normal_executable_link"] = measure_checked_command(
             commands["normal_executable_link"], args.iterations
         )
         samples["candidate_plugin_link"] = measure_checked_command(
             commands["candidate_plugin_link"], args.iterations
         )
+        if "candidate_plugin_fallback_link" in commands:
+            samples["candidate_plugin_fallback_link"] = measure_checked_command(
+                commands["candidate_plugin_fallback_link"], args.iterations
+            )
 
         runner_source = PROJECT_ROOT / "src" / "harnessreducer" / "harness_runner.cpp"
         production_runner = output_dir / "harness_runner"
@@ -997,7 +1046,14 @@ def main() -> int:
             )
             try:
                 current_samples, statuses = measure_runner_requests(
-                    socket_path, plugin, args.iterations
+                    socket_path,
+                    plugin,
+                    args.iterations,
+                    (
+                        fallback_plugin
+                        if "candidate_plugin_fallback_link" in commands
+                        else None
+                    ),
                 )
             finally:
                 stop_runner(process, socket_path)
@@ -1140,17 +1196,30 @@ def main() -> int:
         )
 
         report.section("D", f"OUTPUT LINKING — {args.iterations} ITERATIONS")
+        link_rows = [
+            stats_row("Normal executable", samples["normal_executable_link"]),
+            stats_row("Candidate plugin.so", samples["candidate_plugin_link"]),
+        ]
+        if "candidate_plugin_fallback_link" in samples:
+            link_rows.append(
+                stats_row(
+                    "Candidate plugin fallback.so",
+                    samples["candidate_plugin_fallback_link"],
+                )
+            )
         report.table(
             ["Output", "N", "Mean ms", "Median", "Stddev", "Min", "Max"],
-            [
-                stats_row("Normal executable", samples["normal_executable_link"]),
-                stats_row("Candidate plugin.so", samples["candidate_plugin_link"]),
-            ],
+            link_rows,
         )
         report.add(
             "Plugin-link speedup over normal executable link: "
             + speedup(samples["normal_executable_link"], samples["candidate_plugin_link"])
         )
+        if "candidate_plugin_fallback_link" in samples:
+            report.add(
+                "Fallback plugin linking is only used after a lightweight "
+                "candidate fails to load with an unresolved symbol."
+            )
 
         report.section("E", f"END-TO-END EXECUTION — {args.iterations} ITERATIONS")
         execution_rows: list[list[str]] = []
@@ -1216,6 +1285,17 @@ def main() -> int:
                 ["Stage", "N", "Mean us", "Median", "Stddev", "Min", "Max"],
                 [
                     stats_row("Socket + complete request", current["end_to_end_ns"], "us"),
+                    *(
+                        [
+                            stats_row(
+                                "Failed fast-path request before fallback",
+                                current["fallback_trigger_request_ns"],
+                                "us",
+                            )
+                        ]
+                        if current["fallback_trigger_request_ns"]
+                        else []
+                    ),
                     stats_row("Monitor fork", current["monitor_fork_ns"], "us"),
                     stats_row("Executor fork", current["executor_fork_ns"], "us"),
                     stats_row("dlopen(candidate.so)", current["candidate_dlopen_ns"], "us"),
@@ -1229,6 +1309,11 @@ def main() -> int:
         report.add(
             "Note: 'Call to child termination' includes target execution and sanitizer crash "
             "reporting. The output-pipe interval overlaps that time and must not be added to it."
+        )
+        report.add(
+            "If fallback is triggered, the request end-to-end row includes the failed "
+            "fast-path load request plus the successful fallback load request. The fallback "
+            "plugin link itself is measured in section D."
         )
 
         report.section("G", "COMMANDS USED")
@@ -1247,6 +1332,11 @@ def main() -> int:
             ("Include-free harness body", body_source),
             ("Representative executable", standalone),
             ("Candidate plugin", plugin),
+            *(
+                [("Fallback candidate plugin", fallback_plugin)]
+                if "candidate_plugin_fallback_link" in commands
+                else []
+            ),
             ("Production runner", production_runner),
             ("Instrumented runner", timing_runner),
         ]
@@ -1266,6 +1356,7 @@ def main() -> int:
                 "static_libraries": list(link_inputs.static_libraries),
                 "shared_libraries": list(link_inputs.shared_libraries),
                 "runner_link_flags": list(link_inputs.runner_link_flags),
+                "plugin_fallback_link_flags": list(link_inputs.plugin_link_flags),
             },
             "one_time_ns": one_time,
             "startup_metrics": startup_metrics,

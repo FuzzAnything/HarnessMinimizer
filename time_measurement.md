@@ -105,6 +105,8 @@ The main files are:
 <timing-directory>/harness_prefix.normal.pch
 <timing-directory>/harness_prefix.amortized.pch
 <timing-directory>/candidate.so             representative candidate plugin
+<timing-directory>/candidate.fallback.so    plugin linked with --link-flags
+                                            when static fallback is measurable
 <timing-directory>/harness_runner           normal production runner build
 <timing-directory>/timing_runner            instrumented measurement runner
 ```
@@ -132,6 +134,7 @@ The report also measures:
 - source splitting and PCH creation;
 - normal executable linking;
 - candidate plugin linking;
+- fallback candidate plugin linking, when static archives are present;
 - static/dynamic/mixed library classification;
 - production runner build time;
 - dynamic-target `dlopen()` and crash-input loading;
@@ -148,6 +151,11 @@ copying every object file from the static archives into the runner. The
 dynamic-target `dlopen()` row is shown as not applicable because a static
 archive is not loaded with `dlopen()`. In a mixed configuration, the build rows
 carry the static-object note and the `dlopen()` row measures the dynamic targets.
+If a lightweight plugin load fails with `undefined symbol`, the timing runner
+request measurement retries that iteration with `candidate.fallback.so`. The
+failed fast-path request is reported separately in the amortized request
+breakdown, while the fallback plugin link cost is reported in the output-linking
+section.
 
 `dlsym()` only finds the harness function address. The following function-pointer
 call performs the actual candidate execution. If the candidate crashes, its
@@ -189,15 +197,15 @@ python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libaom-1/harness.out
 
-python3 crash_triage.py benchmark/library-bug/libaom-4/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-4/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-4/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-5/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-5/crash-input
 
-python3 crash_triage.py benchmark/library-bug/libaom-4/reduced.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-4/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-4/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-5/reduced.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-5/crash-input
 
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
