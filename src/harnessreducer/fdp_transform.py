@@ -752,6 +752,14 @@ def _ensure_values_header_include(source: str, header_name: str) -> str:
     return include_line + "\n" + source
 
 
+def _range_overlaps_any(
+    start: int,
+    end: int,
+    ranges: list[tuple[int, int]],
+) -> bool:
+    return any(start < range_end and range_start < end for range_start, range_end in ranges)
+
+
 def inline_source_with_report(
     source: str,
     streams: dict[int, Deque[tuple[str, Any]]],
@@ -769,8 +777,22 @@ def inline_source_with_report(
     loop_replaced = 0
     header_replaced = 0
     large_buffer_replaced = 0
+    replaced_ranges: list[tuple[int, int]] = []
 
-    for call in calls:
+    # Nested FDP expressions can produce overlapping source ranges, for example:
+    #
+    #   fdp.ConsumeIntegralInRange<size_t>(0, fdp.remaining_bytes(...), ...)
+    #   └────────────── outer replacement range ───────────────┘
+    #                                      └─ inner range ─┘
+    #
+    # If the outer call is replayed, replacing the inner call separately is both
+    # unnecessary and unsafe for textual rewriting: the stale inner replacement
+    # offsets can corrupt the already-replaced outer text. Process outer calls
+    # first, then skip any later call whose range overlaps an accepted replay.
+    for call in sorted(calls, key=lambda item: (item.start, -item.end)):
+        if _range_overlaps_any(call.start, call.end, replaced_ranges):
+            continue
+
         matched_key: int | None = None
         candidate_keys: list[int] = []
         if call.key is not None:
@@ -795,6 +817,7 @@ def inline_source_with_report(
             if large_buffer is not None:
                 literal, header_entry = large_buffer
                 replacements.append((call.start, call.end, literal))
+                replaced_ranges.append((call.start, call.end))
                 replaced += 1
                 header_replaced += 1
                 large_buffer_replaced += 1
@@ -807,6 +830,7 @@ def inline_source_with_report(
             if literal is None:
                 continue
             replacements.append((call.start, call.end, literal))
+            replaced_ranges.append((call.start, call.end))
             replaced += 1
             continue
 
@@ -825,6 +849,7 @@ def inline_source_with_report(
 
         literal, header_entry = repeated
         replacements.append((call.start, call.end, literal))
+        replaced_ranges.append((call.start, call.end))
         replaced += 1
         loop_replaced += 1
         header_replaced += 1

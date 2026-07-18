@@ -204,15 +204,15 @@ python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libpcap-2/harness.out
 
-python3 crash_triage.py benchmark/library-bug/libaom-5/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-5/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-7/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-7/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-7/crash-input
 
-python3 crash_triage.py benchmark/library-bug/libaom-5/reduced.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-5/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-7/reduced.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-7/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-7/crash-input
 
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \

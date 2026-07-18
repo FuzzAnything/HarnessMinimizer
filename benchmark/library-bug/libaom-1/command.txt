@@ -73,6 +73,17 @@ harnessreducer harness.cpp \
   --statistics \
   -o reduced.cpp
 
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libaom.a" \
+  --work-dir ./statistics-pch-link-static \
+  --crash-input crash-input \
+  --pch \
+  --stable \
+  --statistics \
+  --check \
+  -o reduced.cpp
+
 
 --pch
 [INFO] Total time: 321076ms
