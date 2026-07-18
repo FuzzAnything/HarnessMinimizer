@@ -104,6 +104,52 @@ size_t g(uint8_t* data, int size) {
     assert "static const size_t fuzz_values_100004[]" in result.header_source
 
 
+def test_inline_nested_fdp_call_keeps_outer_replay_replacement() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  int bytes_to_fill = fdp.ConsumeIntegralInRange<size_t>(
+      0, fdp.remaining_bytes(/*FDP_ID:100029*/ 100029), /*FDP_ID:100028*/ 100028);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100028].append(("S", 172))
+    streams[100028].append(("S", 172))
+    streams[100029].append(("R", 362))
+    streams[100029].append(("R", 362))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert result.loop_replaced == 1
+    assert "int bytes_to_fill = fuzz_values_100028[fuzz_index_100028++];" in result.source
+    assert "remaining_bytes" not in result.source
+    assert "100029" not in result.source
+    assert "fuzz_values_100028" in result.header_source
+    assert "fuzz_values_100029" not in result.header_source
+
+
+def test_inline_nested_inner_call_still_replays_when_outer_has_no_trace() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  int bytes_to_fill = fdp.ConsumeIntegralInRange<size_t>(
+      0, fdp.remaining_bytes(/*FDP_ID:100029*/ 100029));
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100029].append(("R", 362))
+
+    transformed, replaced = inline_source(source, streams)
+
+    assert replaced == 1
+    assert "fdp.ConsumeIntegralInRange<size_t>(" in transformed
+    assert "static_cast<size_t>(362)" in transformed
+    assert "remaining_bytes" not in transformed
+
+
 def test_large_single_byte_vector_moves_to_values_header() -> None:
     source = """
 void f(uint8_t* data, int size) {
