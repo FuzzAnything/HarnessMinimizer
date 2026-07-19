@@ -42,6 +42,7 @@ TIMING_RUNNER_SOURCE = r'''
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -129,6 +130,79 @@ int WaitStatusToExitCode(int status) {
   if (WIFSIGNALED(status))
     return 128 + WTERMSIG(status);
   return 1;
+}
+
+void CloseHandles(std::vector<void *> &handles) {
+  for (void *handle : handles) {
+    if (handle != nullptr)
+      dlclose(handle);
+  }
+  handles.clear();
+}
+
+bool LoadTargetLibraries(
+    const std::vector<std::string> &paths,
+    const char *order_name,
+    std::vector<void *> &handles,
+    std::vector<std::pair<std::string, uint64_t>> &target_times,
+    uint64_t &target_dlopen_total_ns,
+    std::string &error) {
+  target_times.clear();
+  target_dlopen_total_ns = 0;
+  for (const std::string &path : paths) {
+    const uint64_t before_ns = NowNs();
+    void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    const uint64_t elapsed_ns = NowNs() - before_ns;
+    if (handle == nullptr) {
+      error = std::string("dlopen target failed during ") + order_name +
+              " order for " + path + ": " + dlerror();
+      return false;
+    }
+    target_times.emplace_back(path, elapsed_ns);
+    target_dlopen_total_ns += elapsed_ns;
+    handles.push_back(handle);
+  }
+  return true;
+}
+
+bool LoadTargetLibrariesWithRetry(
+    const std::vector<std::string> &paths,
+    std::vector<void *> &handles,
+    std::vector<std::pair<std::string, uint64_t>> &target_times,
+    uint64_t &target_dlopen_total_ns) {
+  std::string forward_error;
+  if (LoadTargetLibraries(paths, "original", handles, target_times,
+                          target_dlopen_total_ns, forward_error))
+    return true;
+
+  CloseHandles(handles);
+  if (paths.size() <= 1) {
+    std::fprintf(stderr, "%s\n", forward_error.c_str());
+    std::fprintf(stderr,
+                 "Amortized-link runner could not load the target shared "
+                 "library. Try rerunning without --amortize-link.\n");
+    return false;
+  }
+
+  std::vector<std::string> reversed_paths = paths;
+  std::reverse(reversed_paths.begin(), reversed_paths.end());
+  std::fprintf(stderr, "%s\n", forward_error.c_str());
+  std::fprintf(stderr, "Retrying target dlopen in reverse order.\n");
+
+  std::string reverse_error;
+  if (LoadTargetLibraries(reversed_paths, "reverse", handles, target_times,
+                          target_dlopen_total_ns, reverse_error))
+    return true;
+
+  CloseHandles(handles);
+  std::fprintf(stderr, "%s\n", reverse_error.c_str());
+  std::fprintf(stderr,
+               "Amortized-link runner could not load target shared libraries "
+               "in original or reverse order. This usually means a target "
+               "shared library has unresolved dynamic dependencies that are "
+               "not available to the persistent runner. Try rerunning without "
+               "--amortize-link.\n");
+  return false;
 }
 
 struct PluginMetrics {
@@ -285,22 +359,16 @@ int main(int argc, char **argv) {
       static_cast<unsigned int>(parsed_timeout);
 
   const uint64_t startup_begin_ns = NowNs();
+  std::vector<std::string> target_paths;
+  for (int index = 5; index < argc; ++index) {
+    target_paths.emplace_back(argv[index]);
+  }
   std::vector<void *> target_handles;
   std::vector<std::pair<std::string, uint64_t>> target_times;
   uint64_t target_dlopen_total_ns = 0;
-  for (int index = 5; index < argc; ++index) {
-    const uint64_t before_ns = NowNs();
-    void *handle = dlopen(argv[index], RTLD_NOW | RTLD_GLOBAL);
-    const uint64_t elapsed_ns = NowNs() - before_ns;
-    if (handle == nullptr) {
-      std::fprintf(stderr, "dlopen target failed for %s: %s\n", argv[index],
-                   dlerror());
-      return 2;
-    }
-    target_times.emplace_back(argv[index], elapsed_ns);
-    target_dlopen_total_ns += elapsed_ns;
-    target_handles.push_back(handle);
-  }
+  if (!LoadTargetLibrariesWithRetry(target_paths, target_handles, target_times,
+                                    target_dlopen_total_ns))
+    return 2;
 
   const uint64_t input_start_ns = NowNs();
   std::vector<uint8_t> crash_data;
@@ -519,17 +587,19 @@ def measure_standalone_execution(
 
 
 def runner_link_tail(link_inputs: rr.AmortizedLinkInputs) -> list[str]:
-    if not link_inputs.static_libraries:
-        return []
-    return [
-        "-no-pie",
-        "-Wl,--export-dynamic",
-        "-Wl,--whole-archive",
-        *link_inputs.static_libraries,
-        "-Wl,--no-whole-archive",
-        *link_inputs.shared_libraries,
-        *link_inputs.runner_link_flags,
-    ]
+    tail: list[str] = []
+    if link_inputs.static_libraries:
+        tail.extend(
+            [
+                "-no-pie",
+                "-Wl,--export-dynamic",
+                "-Wl,--whole-archive",
+                *link_inputs.static_libraries,
+                "-Wl,--no-whole-archive",
+            ]
+        )
+    tail.extend(rr.runner_dynamic_dependency_link_flags(link_inputs))
+    return tail
 
 
 def parse_startup_file(path: Path) -> dict[str, object]:

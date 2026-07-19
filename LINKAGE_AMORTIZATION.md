@@ -455,10 +455,52 @@ What is done:
 The normal shared-only runner build does not copy all libaom machine code into
 the runner executable. The `.so` path is passed to the runner at startup.
 
+The runner is still linked once with the dynamic libraries and dependency flags
+from `--link-flags` inside this linker region:
+
+```bash
+-Wl,--no-as-needed  target-or-dependency-dynamic-flags  -Wl,--as-needed
+```
+
 Why:
 
 A shared object is already a loadable image. Copying it into the runner would
 remove the main benefit of using a shared library and could duplicate code.
+
+The `--no-as-needed` part handles a common real-world problem. Some target
+shared libraries use functions from helper libraries but do not record those
+helper libraries in their own `DT_NEEDED` entries.
+
+Example:
+
+```text
+libpcap.so
+  needs symbol: nl_socket_alloc
+  but readelf -d libpcap.so does not list libnl-3.so as NEEDED
+```
+
+If the runner later does only:
+
+```cpp
+dlopen("libpcap.so", RTLD_NOW | RTLD_GLOBAL);
+```
+
+the loader may fail immediately:
+
+```text
+undefined symbol: nl_socket_alloc
+```
+
+By linking the runner once with:
+
+```bash
+-Wl,--no-as-needed -L/build/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1 -Wl,--as-needed
+```
+
+we ask the linker to keep those helper dynamic libraries in the runner's own
+runtime dependency list even if `harness_runner.cpp` does not directly call
+them. Then they are already available when the runner calls `dlopen()` for the
+target.
 
 ### 7.3 Load with `RTLD_NOW`
 
@@ -475,6 +517,31 @@ Why:
 If libaom is missing a dependency or incompatible with the process, the runner
 should fail during startup. Without immediate resolution, the error might appear
 only after many reduction attempts when a particular function is first called.
+
+When several target `.so` files are passed, HarnessReducer first tries to load
+them in the order inferred from `--link-flags`. If that fails, it closes the
+partially loaded handles and tries the reverse order once.
+
+Why:
+
+Normal linker command order sometimes expresses dependency direction:
+
+```bash
+-ltarget -lhelper
+```
+
+but direct `dlopen()` can need the opposite order if `libtarget.so` has an
+unrecorded reference to `libhelper.so`:
+
+```text
+original order: dlopen(libtarget.so) -> may fail: missing helper symbol
+reverse order:  dlopen(libhelper.so)
+                dlopen(libtarget.so) -> helper symbol is already visible
+```
+
+The reverse retry is only a backup. If both orders fail, the tool stops with an
+error and suggests running without `--amortize-link`, because the dependency set
+cannot be prepared safely by the persistent runner.
 
 ### 7.4 Load with `RTLD_GLOBAL`
 
@@ -1106,6 +1173,12 @@ A well-built `libaom.so` records the shared libraries it needs. When the runner
 loads libaom, the Linux loader loads those dependencies recursively and retains
 them in the persistent process.
 
+For dependency flags that appear in `--link-flags`, HarnessReducer also links
+the persistent runner once with `--no-as-needed`. This can keep helper dynamic
+libraries in the runner's own `DT_NEEDED` list. That is different from manually
+calling `dlopen()` for every `-lfoo`: the normal linker and dynamic loader still
+choose the correct runtime objects.
+
 ### Why `-lpthread` is not always a loadable filename
 
 `-lpthread` is a linker request, not necessarily a runtime path. Depending on
@@ -1130,7 +1203,8 @@ Applying `--whole-archive` to all system static libraries could:
 
 The optimization focuses on large, unchanged target libraries. Normal runtime
 dependencies are still loaded once through the standard linker/loader
-mechanisms.
+mechanisms, and dynamic helper dependencies from `--link-flags` are retained by
+the one-time runner link when possible.
 
 ## 13. Why the sanitizer flags differ from normal fuzz executables
 
@@ -1192,6 +1266,8 @@ during loading.
 | `-Wl,--whole-archive` | Forces all members from following archives into the output. | Keeps static target functions that only future plugins will reference. |
 | `-Wl,--no-whole-archive` | Returns to normal selective archive behavior. | Prevents whole-archive behavior from affecting system dependencies. |
 | `-Wl,--export-dynamic` | Publishes executable symbols to the dynamic loader. | Lets candidate plugins resolve calls against static target code in the runner. |
+| `-Wl,--no-as-needed` | Keeps following dynamic libraries as runtime dependencies even if the runner code does not directly call them. | Lets the persistent runner retain helper DSOs such as libnl when a target `.so` has unresolved helper symbols. |
+| `-Wl,--as-needed` | Restores normal behavior after the protected dynamic dependency region. | Prevents the retention rule from unintentionally affecting later linker inputs. |
 | `-no-pie` | Builds a non-position-independent executable. | Improves compatibility with static target objects not compiled as PIC. |
 
 ## 15. PCH and linkage amortization save different work
@@ -1307,6 +1383,9 @@ feature.
   is slower and requires the archive objects to be usable in a shared object.
 - Mixed libraries with conflicting symbol definitions can produce
   order-dependent symbol resolution.
+- If dynamic target libraries still cannot be loaded after dependency retention
+  and the reverse-order retry, HarnessReducer fails early and suggests rerunning
+  without `--amortize-link`.
 - `--amortize-link` works with split or PCH mode, not direct/single-step mode.
 - Candidate `.o` and `.so` files are still written to disk; this is not an
   in-memory JIT.
@@ -1323,6 +1402,8 @@ Problem:
 
 Shared target solution:
   Load the `.so` once with RTLD_GLOBAL.
+  Retain dynamic helper libraries in the runner with --no-as-needed.
+  If loading multiple target .so files fails, retry the opposite order once.
   Future candidate plugins find target symbols in that loaded library.
 
 Static target solution:

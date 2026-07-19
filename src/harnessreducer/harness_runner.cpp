@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -65,6 +66,64 @@ int WaitStatusToExitCode(int status) {
   if (WIFSIGNALED(status))
     return 128 + WTERMSIG(status);
   return 1;
+}
+
+void CloseHandles(std::vector<void *> &handles) {
+  for (void *handle : handles) {
+    if (handle != nullptr)
+      dlclose(handle);
+  }
+  handles.clear();
+}
+
+bool LoadTargetLibraries(const std::vector<std::string> &paths,
+                         const char *order_name,
+                         std::vector<void *> &handles, std::string &error) {
+  for (const std::string &path : paths) {
+    void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (handle == nullptr) {
+      error = std::string("dlopen target failed during ") + order_name +
+              " order for " + path + ": " + dlerror();
+      return false;
+    }
+    handles.push_back(handle);
+  }
+  return true;
+}
+
+bool LoadTargetLibrariesWithRetry(const std::vector<std::string> &paths,
+                                  std::vector<void *> &handles) {
+  std::string forward_error;
+  if (LoadTargetLibraries(paths, "original", handles, forward_error))
+    return true;
+
+  CloseHandles(handles);
+  if (paths.size() <= 1) {
+    std::fprintf(stderr, "%s\n", forward_error.c_str());
+    std::fprintf(stderr,
+                 "Amortized-link runner could not load the target shared "
+                 "library. Try rerunning without --amortize-link.\n");
+    return false;
+  }
+
+  std::vector<std::string> reversed_paths = paths;
+  std::reverse(reversed_paths.begin(), reversed_paths.end());
+  std::fprintf(stderr, "%s\n", forward_error.c_str());
+  std::fprintf(stderr, "Retrying target dlopen in reverse order.\n");
+
+  std::string reverse_error;
+  if (LoadTargetLibraries(reversed_paths, "reverse", handles, reverse_error))
+    return true;
+
+  CloseHandles(handles);
+  std::fprintf(stderr, "%s\n", reverse_error.c_str());
+  std::fprintf(stderr,
+               "Amortized-link runner could not load target shared libraries "
+               "in original or reverse order. This usually means a target "
+               "shared library has unresolved dynamic dependencies that are "
+               "not available to the persistent runner. Try rerunning without "
+               "--amortize-link.\n");
+  return false;
 }
 
 void HandleRequest(int connection, int listen_fd,
@@ -159,16 +218,13 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  std::vector<void *> target_handles;
+  std::vector<std::string> target_paths;
   for (int index = 3; index < argc; ++index) {
-    void *handle = dlopen(argv[index], RTLD_NOW | RTLD_GLOBAL);
-    if (handle == nullptr) {
-      std::fprintf(stderr, "dlopen target failed for %s: %s\n", argv[index],
-                   dlerror());
-      return 2;
-    }
-    target_handles.push_back(handle);
+    target_paths.emplace_back(argv[index]);
   }
+  std::vector<void *> target_handles;
+  if (!LoadTargetLibrariesWithRetry(target_paths, target_handles))
+    return 2;
 
   std::vector<uint8_t> crash_data;
   if (argv[2][0] != '\0') {

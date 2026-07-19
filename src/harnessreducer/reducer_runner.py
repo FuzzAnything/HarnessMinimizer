@@ -815,6 +815,24 @@ def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...
     return resolve_amortized_link_inputs(link_flags).shared_libraries
 
 
+def runner_dynamic_dependency_link_flags(
+    link_inputs: AmortizedLinkInputs,
+) -> list[str]:
+    """Return one-time runner flags that retain dynamic dependencies.
+
+    The runner may not directly reference symbols from target DSOs or their
+    helper libraries.  Without --no-as-needed, the linker can omit them from the
+    runner's DT_NEEDED list, leaving a later dlopen(target.so, RTLD_NOW) unable
+    to resolve helper symbols such as libpcap's nl_socket_alloc.
+    """
+    dynamic_flags = [*link_inputs.shared_libraries, *link_inputs.runner_link_flags]
+    if not dynamic_flags:
+        return []
+    if not link_inputs.shared_libraries:
+        return list(link_inputs.runner_link_flags)
+    return ["-Wl,--no-as-needed", *dynamic_flags, "-Wl,--as-needed"]
+
+
 def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
     source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
@@ -826,11 +844,8 @@ def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
             "-Wl,--whole-archive",
             *link_inputs.static_libraries,
             "-Wl,--no-whole-archive",
-            # Shared targets follow the archives so they can satisfy symbols
-            # referenced by static objects in a mixed configuration.
-            *link_inputs.shared_libraries,
-            *link_inputs.runner_link_flags,
         ]
+    dynamic_dependency_flags = runner_dynamic_dependency_link_flags(link_inputs)
     run_command(
         [
             "clang++",
@@ -841,6 +856,7 @@ def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
             "-fno-omit-frame-pointer",
             str(source),
             *static_link_flags,
+            *dynamic_dependency_flags,
             "-ldl",
             "-o",
             str(output),
@@ -891,7 +907,9 @@ def start_amortized_runner(
                 stdout, stderr = process.communicate()
                 raise RuntimeError(
                     "Amortized-link runner failed during startup:\n"
-                    f"{stdout}{stderr}"
+                    f"{stdout}{stderr}\n"
+                    "If the persistent runner cannot load this dependency set, "
+                    "rerun without --amortize-link."
                 )
             if time.monotonic() >= deadline:
                 raise RuntimeError("Timed out waiting for amortized-link runner socket.")
