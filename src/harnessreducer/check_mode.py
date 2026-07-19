@@ -327,7 +327,7 @@ def emit_check_statistics_summary(path: str | None = None) -> CheckStatistics:
 
 def run_treereducer_with_check(
     harness_path: str,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     crash_pattern: str,
     compile_flags: str | None,
     link_flags: str | None,
@@ -350,7 +350,7 @@ def run_treereducer_with_check(
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
-            use_replay=True,
+            use_replay=fdp_trace_file is not None,
             amortize_link=amortize_link,
         )
         reducer_source = pch_artifacts.body_source
@@ -384,8 +384,6 @@ def run_treereducer_with_check(
             crash_input or "",
             f"--compile-flags={compile_flags or ''}",
             f"--link-flags={link_flags or ''}",
-            "--fdp-trace",
-            fdp_trace_file,
             "--check-reference-file",
             get_check_reference_file(),
             "--check-statistics-file",
@@ -396,6 +394,8 @@ def run_treereducer_with_check(
             get_stack_trace_file(),
         ]
     )
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))

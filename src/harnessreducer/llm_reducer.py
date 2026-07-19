@@ -108,7 +108,7 @@ def apply_llm_reduction(
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     phase3_mode: str = "direct",
 ) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")

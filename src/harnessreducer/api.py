@@ -10,7 +10,16 @@ from harnessreducer.check_mode import (
     reset_check_state,
     run_treereducer_with_check,
 )
-from harnessreducer.fdp_transform import inline_source_with_report, inject_ids, load_trace, strip_injected_ids
+from harnessreducer.fdp_transform import (
+    PARSER,
+    VALUES_HEADER_NAME,
+    _iter_nodes,
+    _node_text,
+    inline_source_with_report,
+    inject_ids,
+    load_trace,
+    strip_injected_ids,
+)
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_SPLIT,
@@ -57,6 +66,20 @@ ADDITIONAL_HEADERS = [
     "#include <limits>",
 ]
 
+DIRECT_INPUT_HEADER_NAME = VALUES_HEADER_NAME
+
+
+@dataclass(frozen=True)
+class TaggedHarness:
+    path: str
+    fdp_callsite_count: int
+
+    def __fspath__(self) -> str:
+        return self.path
+
+    def __str__(self) -> str:
+        return self.path
+
 @dataclass(frozen=True)
 class ReductionConfig:
     harness_path: str
@@ -80,12 +103,16 @@ class ReductionConfig:
 class ReductionResult:
     reduced_harness: str
     tagged_harness: str
-    fdp_trace: str
+    fdp_trace: str | None
     generated_headers: tuple[str, ...] = ()
     success: bool = True
 
 
-def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> str:
+def tag_harness_with_fdp_ids(
+    harness_path: str,
+    start_id: int,
+    marker: str,
+) -> TaggedHarness:
     source_path = Path(harness_path)
     source = source_path.read_text(encoding="utf-8")
     transformed, count = inject_ids(source, start_id, marker)
@@ -97,7 +124,17 @@ def tag_harness_with_fdp_ids(harness_path: str, start_id: int, marker: str) -> s
     tagged_harness_file = str(Path(get_work_dir()) / tagged_name)
     Path(tagged_harness_file).write_text(transformed, encoding="utf-8")
     print(f"Injected {count} FDP callsite IDs into {tagged_harness_file}")
-    return tagged_harness_file
+    return TaggedHarness(tagged_harness_file, count)
+
+
+def _tagged_harness_path(tagged: TaggedHarness | str) -> str:
+    return tagged.path if isinstance(tagged, TaggedHarness) else str(tagged)
+
+
+def _tagged_harness_fdp_count(tagged: TaggedHarness | str) -> int:
+    # Backward-compatible fallback for tests or callers that mock the older
+    # string return value.
+    return tagged.fdp_callsite_count if isinstance(tagged, TaggedHarness) else 1
 
 
 def _prepend_additional_headers(harness_path: str) -> None:
@@ -215,9 +252,247 @@ def _append_inline_stack_diagnostics(
         handle.write("\n".join(lines))
 
 
+def _cpp_byte(value: int) -> str:
+    return f"0x{value & 0xFF:02x}"
+
+
+def _direct_input_header_source(data: bytes) -> str:
+    byte_values = list(data)
+    if byte_values:
+        lines = ["{"]
+        for start in range(0, len(byte_values), 16):
+            chunk = byte_values[start : start + 16]
+            suffix = "," if start + 16 < len(byte_values) else ""
+            byte_text = ", ".join(_cpp_byte(value) for value in chunk)
+            lines.append("    " + byte_text + suffix)
+        lines.append("}")
+        initializer = "\n".join(lines)
+        size_expression = "sizeof(fuzz_values)"
+        declaration = f"static uint8_t fuzz_values[] = {initializer};"
+    else:
+        declaration = "static uint8_t fuzz_values[1] = {0x00};"
+        size_expression = "0"
+
+    return (
+        "#pragma once\n"
+        "#include <stddef.h>\n"
+        "#include <stdint.h>\n\n"
+        f"{declaration}\n"
+        f"static constexpr size_t fuzz_index = {size_expression};\n"
+    )
+
+
+def _find_first_descendant(node, node_type: str):
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == node_type:
+            return current
+        stack.extend(reversed(current.children))
+    return None
+
+
+def _last_identifier_text(node, source_bytes: bytes) -> str | None:
+    identifiers: list[str] = []
+    for child in _iter_nodes(node):
+        if child.type == "identifier":
+            text = _node_text(source_bytes, child).strip()
+            if text:
+                identifiers.append(text)
+    return identifiers[-1] if identifiers else None
+
+
+def _function_declarator_has_name(
+    node,
+    source_bytes: bytes,
+    expected_name: str,
+) -> bool:
+    return any(
+        child.type == "identifier"
+        and _node_text(source_bytes, child).strip() == expected_name
+        for child in _iter_nodes(node)
+    )
+
+
+def _find_fuzzer_entry_for_direct_input(source: str) -> tuple[int, str, str]:
+    source_bytes = source.encode("utf-8")
+    tree = PARSER.parse(source_bytes)
+
+    for node in _iter_nodes(tree.root_node):
+        if node.type != "function_definition":
+            continue
+        declarator = node.child_by_field_name("declarator")
+        if declarator is None or not _function_declarator_has_name(
+            declarator, source_bytes, "LLVMFuzzerTestOneInput"
+        ):
+            continue
+
+        parameter_list = _find_first_descendant(declarator, "parameter_list")
+        if parameter_list is None:
+            break
+        parameter_names = [
+            name
+            for child in parameter_list.named_children
+            if child.type == "parameter_declaration"
+            for name in [_last_identifier_text(child, source_bytes)]
+            if name is not None
+        ]
+        if len(parameter_names) < 2:
+            break
+
+        body = next(
+            (child for child in node.children if child.type == "compound_statement"),
+            None,
+        )
+        if body is None:
+            break
+        return body.start_byte + 1, parameter_names[0], parameter_names[1]
+
+    raise ValueError(
+        "Could not find LLVMFuzzerTestOneInput with named data and size parameters."
+    )
+
+
+def _inline_direct_input_source(source: str, header_name: str) -> str:
+    insert_pos, data_name, size_name = _find_fuzzer_entry_for_direct_input(source)
+    assignment = (
+        f"\n    {data_name} = ::fuzz_values;\n"
+        f"    {size_name} = ::fuzz_index;\n"
+    )
+    transformed = source[:insert_pos] + assignment + source[insert_pos:]
+    include_line = f'#include "{header_name}"\n'
+    if include_line.strip() not in transformed:
+        transformed = include_line + transformed
+    return transformed
+
+
+def _inline_direct_input_in_reduced_harness(
+    reduced_harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    start_id: int,
+    phase3_mode: str,
+    snapshot: bool,
+) -> tuple[str, tuple[str, ...]]:
+    if not crash_input:
+        print(
+            "[!] Direct-input inlining requires --crash-input. "
+            "Returning the tree-reduced harness."
+        )
+        return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+
+    crash_input_path = Path(crash_input)
+    if not crash_input_path.exists():
+        print(
+            f"[!] Direct-input inlining could not find crash input {crash_input}. "
+            "Returning the tree-reduced harness."
+        )
+        return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+
+    crash_bytes = crash_input_path.read_bytes()
+
+    def _attempt_direct_inline(
+        base_harness_path: str,
+        *,
+        attempt_label: str,
+    ) -> tuple[str, tuple[str, ...]] | None:
+        source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
+        header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
+        try:
+            transformed = _inline_direct_input_source(
+                source,
+                DIRECT_INPUT_HEADER_NAME,
+            )
+        except ValueError as exc:
+            print(
+                f"[!] Direct-input inlining skipped for the {attempt_label} harness: {exc}"
+            )
+            return _finalize_fallback_harness(base_harness_path, start_id), ()
+
+        header_path.write_text(
+            _direct_input_header_source(crash_bytes),
+            encoding="utf-8",
+        )
+        Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+        _prepend_additional_headers(inline_harness_path)
+        print(
+            f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
+            f"{inline_harness_path} using {header_path}"
+        )
+
+        validation_log_path = f"{inline_harness_path}.validation.log"
+        print(
+            "Verifying crash preservation for direct-input inlined harness: "
+            f"{inline_harness_path}"
+        )
+        if validate_stack_trace(
+            inline_harness_path,
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=None,
+            phase3_mode=phase3_mode,
+            validation_log_path=validation_log_path,
+        ):
+            print("[+] Direct-input inline reduction preserved crash behavior.")
+            return inline_harness_path, (str(header_path),)
+
+        print(
+            f"[-] Direct-input inline reduction failed to preserve crash behavior for "
+            f"the {attempt_label} harness. Validation log: {validation_log_path}"
+        )
+        _append_inline_stack_diagnostics(
+            validation_log_path,
+            before_path=base_harness_path,
+            after_path=inline_harness_path,
+            crash_pattern=crash_pattern,
+            crash_input=crash_input,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            fdp_trace_file=None,
+        )
+        return None
+
+    direct_result = _attempt_direct_inline(
+        reduced_harness_path,
+        attempt_label="tree-reduced",
+    )
+    if direct_result is not None:
+        return direct_result
+
+    if snapshot:
+        last_interesting_path = get_last_interesting_file()
+        if (
+            os.path.exists(last_interesting_path)
+            and not candidate_files_match(reduced_harness_path, last_interesting_path)
+        ):
+            print(
+                "[!] Retrying direct-input inline reduction from the last interesting "
+                f"snapshot: {last_interesting_path}"
+            )
+            snapshot_result = _attempt_direct_inline(
+                last_interesting_path,
+                attempt_label="last interesting snapshot",
+            )
+            if snapshot_result is not None:
+                return snapshot_result
+            print(
+                "[-] Snapshot direct-input inline reduction also failed. "
+                "Falling back to the last interesting snapshot harness."
+            )
+            return _finalize_fallback_harness(last_interesting_path, start_id), ()
+
+    print("[-] Falling back to the tree-reduced harness.")
+    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+
+
 def inline_literals_in_reduced_harness(
     reduced_harness_path: str,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     crash_pattern: str,
     crash_input: str | None,
     compile_flags: str | None,
@@ -226,6 +501,18 @@ def inline_literals_in_reduced_harness(
     phase3_mode: str = PHASE3_DIRECT,
     snapshot: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
+    if fdp_trace_file is None:
+        return _inline_direct_input_in_reduced_harness(
+            reduced_harness_path,
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            start_id,
+            phase3_mode,
+            snapshot,
+        )
+
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
         streams = load_trace(Path(fdp_trace_file))
@@ -406,21 +693,30 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
     else:
         effective_harness_path = config.harness_path
-    tagged_harness_file = tag_harness_with_fdp_ids(
+    tagged_harness = tag_harness_with_fdp_ids(
         effective_harness_path,
         start_id=config.start_id,
         marker=config.marker,
     )
-    tagged_harness_bin = compile_dump_mode_harness(
-        tagged_harness_file,
-        config.compile_flags,
-        config.link_flags,
-    )
-    fdp_trace_file = dump_fdp_trace(
-        tagged_harness_bin,
-        config.crash_input,
-        config.link_flags,
-    )
+    tagged_harness_file = _tagged_harness_path(tagged_harness)
+    fdp_callsite_count = _tagged_harness_fdp_count(tagged_harness)
+    fdp_trace_file: str | None = None
+    if fdp_callsite_count > 0:
+        tagged_harness_bin = compile_dump_mode_harness(
+            tagged_harness_file,
+            config.compile_flags,
+            config.link_flags,
+        )
+        fdp_trace_file = dump_fdp_trace(
+            tagged_harness_bin,
+            config.crash_input,
+            config.link_flags,
+        )
+    else:
+        print(
+            "[+] No FDP callsites detected; using direct crash input during "
+            "reduction and direct-input inlining after reduction."
+        )
     if config.check:
         reduced_harness = run_treereducer_with_check(
             tagged_harness_file,
