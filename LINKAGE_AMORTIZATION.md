@@ -1052,6 +1052,9 @@ The offset check is intentionally applied to `symbolize=0` executions. A
 function name and source line, so the raw shared-library offset may no longer be
 visible in that output. Symbolized validation still checks stack shape/source
 patterns; the dynamic offset check belongs to the fast unsymbolized path.
+During repeated candidate checks, the library comparison uses only stack-trace
+strings, path text, and library basenames; it does not resolve symlinks or query
+the filesystem.
 
 This helps distinguish two crashes that both say, for example,
 `SUMMARY: AddressSanitizer: ABRT` and have the same number of frames, but stop

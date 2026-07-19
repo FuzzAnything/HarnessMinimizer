@@ -497,13 +497,10 @@ def infer_target_dynamic_library_hints(link_flags: str | None) -> DynamicLibrary
 
 
 def _normalize_library_path_for_compare(path_text: str) -> str:
-    path = Path(path_text)
-    try:
-        if path.is_absolute() and path.exists():
-            return str(path.resolve())
-    except OSError:
-        pass
-    return path_text
+    # Keep candidate checking on string operations only.  This function runs in
+    # the hot path for dynamic-library offset validation, so avoid filesystem
+    # metadata calls such as exists() or resolve().
+    return os.path.normpath(path_text)
 
 
 def _library_matches_name_or_prefix(
