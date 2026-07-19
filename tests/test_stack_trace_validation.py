@@ -11,18 +11,26 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harnessreducer.reducer_runner import (
+    DynamicCrashSite,
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     count_first_stack_trace_frames,
+    dynamic_crash_site_tester_args,
     extract_crash_pattern_from_output,
+    extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
     extract_stack_trace,
+    get_dynamic_crash_site_file,
+    get_dynamic_reference_crash_site,
     get_normal_reference_stack_depth,
     get_symbolized_reference_stack_depth,
+    has_static_target_libraries,
+    infer_target_dynamic_library_hints,
     normalize_crash_signature,
     get_stack_trace_file,
     reset_stack_trace_state,
+    set_dynamic_reference_crash_site,
     set_normal_reference_stack_depth,
     set_symbolized_reference_stack_depth,
     stack_depth_tester_args,
@@ -49,6 +57,7 @@ _spec.loader.exec_module(_ct_module)
 
 ct_extract_stack_trace = _ct_module.extract_stack_trace
 ct_check_stack_trace = _ct_module._check_stack_trace
+ct_check_dynamic_crash_site = _ct_module._check_dynamic_crash_site
 ct_compile_error_mentions_uninitialized = _ct_module.compile_error_mentions_uninitialized
 
 
@@ -108,6 +117,29 @@ SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED = """\
 allocated by thread T0 here:
     #0 0xddd4  (/tmp/poc.out+0x444)
 SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/poc.out+0x111)
+"""
+
+SAMPLE_DYNAMIC_LIBRARY_OUTPUT = """\
+=================================================================
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow
+    #0 0x1111  (/lib/x86_64-linux-gnu/libc.so.6+0x9eb2c)
+    #1 0x2222  (/tmp/build/lib/libtarget.so+0xbeaf0)
+    #2 0x3333  (/tmp/harness+0x123)
+
+allocated by thread T0 here:
+    #0 0x4444  (/tmp/build/lib/libtarget.so+0x999)
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/build/lib/libtarget.so+0xbeaf0)
+"""
+
+SAMPLE_DYNAMIC_LIBRARY_FIRST_TRACE_OUTPUT = """\
+=================================================================
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow
+    #0 0x1111  (/tmp/build/lib/libaom.so+0x201cf25)
+    #1 0x2222  (/tmp/harness+0x123)
+
+allocated by thread T0 here:
+    #0 0x3333  (/tmp/build/lib/libaom.so+0x13ce1c3)
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/build/lib/libaom.so+0x201cf25)
 """
 
 
@@ -214,6 +246,61 @@ class TestExtractStackTrace(unittest.TestCase):
         )
 
 
+class TestDynamicCrashSiteExtraction(unittest.TestCase):
+    def setUp(self):
+        set_dynamic_reference_crash_site(None)
+
+    def test_extracts_first_target_library_offset_from_first_trace_only(self):
+        site = extract_first_dynamic_library_crash_site(
+            SAMPLE_DYNAMIC_LIBRARY_FIRST_TRACE_OUTPUT,
+            "-laom",
+        )
+
+        self.assertIsNotNone(site)
+        self.assertEqual(site.library_name, "libaom.so")
+        self.assertEqual(site.offset, "0x201cf25")
+
+    def test_uses_crash_output_when_link_flags_have_no_library_directory(self):
+        site = extract_first_dynamic_library_crash_site(
+            SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+            "-ltarget -lpthread",
+        )
+
+        self.assertIsNotNone(site)
+        self.assertEqual(site.library_path, "/tmp/build/lib/libtarget.so")
+        self.assertEqual(site.offset, "0xbeaf0")
+
+    def test_expected_library_offset_search_uses_same_first_trace(self):
+        site = extract_first_dynamic_library_crash_site(
+            SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+            expected_library="/other/location/libtarget.so.1",
+        )
+
+        self.assertIsNotNone(site)
+        self.assertEqual(site.library_name, "libtarget.so")
+        self.assertEqual(site.offset, "0xbeaf0")
+
+    def test_static_target_does_not_enable_unresolved_dependency_fallback(self):
+        site = extract_first_dynamic_library_crash_site(
+            SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+            "/tmp/build/lib/libtarget.a -ldependency",
+        )
+
+        self.assertIsNone(site)
+
+    def test_static_target_detection_handles_explicit_archive_and_bstatic(self):
+        self.assertTrue(has_static_target_libraries("/tmp/build/lib/libtarget.a -lm"))
+        self.assertTrue(
+            has_static_target_libraries("-Wl,-Bstatic -ltarget -Wl,-Bdynamic")
+        )
+
+    def test_dynamic_hints_keep_unresolved_l_names_without_static_targets(self):
+        hints = infer_target_dynamic_library_hints("-ltarget -ldependency")
+
+        self.assertIn("libtarget.so", hints.exact_names)
+        self.assertTrue(hints.allow_output_fallback)
+
+
 class TestNormalizeCrashSignature(unittest.TestCase):
     """Test normalize_crash_signature() for stack trace use."""
 
@@ -287,6 +374,22 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
         finally:
             os.unlink(trace_file)
 
+    def test_dynamic_offset_check_passes_and_fails(self):
+        self.assertTrue(
+            ct_check_dynamic_crash_site(
+                SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+                "/tmp/build/lib/libtarget.so",
+                "0xbeaf0",
+            )
+        )
+        self.assertFalse(
+            ct_check_dynamic_crash_site(
+                SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+                "/tmp/build/lib/libtarget.so",
+                "0x999",
+            )
+        )
+
 
 class TestCrashTesterCompileDiagnostics(unittest.TestCase):
     def test_compile_error_mentions_uninitialized_detects_warning_error(self):
@@ -336,16 +439,29 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             mock_run.side_effect = [
-                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_DYNAMIC_LIBRARY_OUTPUT, "stderr": ""})(),
                 type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT, "stderr": ""})(),
             ]
 
-            extract_crash_pattern_from_output(None, harness_path="harness.cpp")
+            extract_crash_pattern_from_output(
+                None,
+                harness_path="harness.cpp",
+                link_flags="-ltarget -lpthread",
+            )
 
             self.assertEqual(get_normal_reference_stack_depth(), 3)
             self.assertEqual(get_symbolized_reference_stack_depth(), 6)
             self.assertEqual(stack_depth_tester_args(symbolized=False), ["--stack-depth", "3"])
             self.assertEqual(stack_depth_tester_args(symbolized=True), ["--stack-depth", "6"])
+            self.assertEqual(
+                dynamic_crash_site_tester_args(),
+                [
+                    "--dynamic-crash-site-library",
+                    "/tmp/build/lib/libtarget.so",
+                    "--dynamic-crash-site-offset",
+                    "0xbeaf0",
+                ],
+            )
 
 
 class TestStackTraceStateManagement(unittest.TestCase):
@@ -353,10 +469,20 @@ class TestStackTraceStateManagement(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
+            Path(get_dynamic_crash_site_file()).write_text("{}", encoding="utf-8")
+            set_dynamic_reference_crash_site(
+                DynamicCrashSite(
+                    library_path="/tmp/libtarget.so",
+                    library_name="libtarget.so",
+                    offset="0x123",
+                )
+            )
 
             reset_stack_trace_state()
 
             self.assertFalse(os.path.exists(get_stack_trace_file()))
+            self.assertFalse(os.path.exists(get_dynamic_crash_site_file()))
+            self.assertIsNone(get_dynamic_reference_crash_site())
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
@@ -364,6 +490,8 @@ class TestStackTraceStateManagement(unittest.TestCase):
             configure_work_dir(tmpdir)
             trace_file = get_stack_trace_file()
             Path(trace_file).write_text("stale-pattern", encoding="utf-8")
+            dynamic_file = get_dynamic_crash_site_file()
+            Path(dynamic_file).write_text("stale-dynamic-site", encoding="utf-8")
             mock_run.side_effect = [
                 type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
                 type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
@@ -373,6 +501,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
 
             self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
             self.assertFalse(os.path.exists(trace_file))
+            self.assertFalse(os.path.exists(dynamic_file))
 
 
 class TestValidateStackTraceInvocation(unittest.TestCase):
@@ -381,6 +510,13 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             set_symbolized_reference_stack_depth(6)
+            set_dynamic_reference_crash_site(
+                DynamicCrashSite(
+                    library_path="/tmp/build/lib/libtarget.so",
+                    library_name="libtarget.so",
+                    offset="0xbeaf0",
+                )
+            )
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
             mock_run.return_value.returncode = 77
             mock_run.return_value.stdout = ""
@@ -402,6 +538,8 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--symbolize", cmd)
             self.assertIn("--stack-trace-file", cmd)
             self.assertIn("--stack-depth", cmd)
+            self.assertIn("--dynamic-crash-site-library", cmd)
+            self.assertIn("--dynamic-crash-site-offset", cmd)
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
 
@@ -410,6 +548,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             set_symbolized_reference_stack_depth(6)
+            set_dynamic_reference_crash_site(None)
             mock_run.return_value.returncode = 77
             mock_run.return_value.stdout = ""
             mock_run.return_value.stderr = ""
@@ -433,6 +572,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             set_symbolized_reference_stack_depth(6)
+            set_dynamic_reference_crash_site(None)
             mock_run.return_value.returncode = 1
             mock_run.return_value.stdout = "oops stdout\n"
             mock_run.return_value.stderr = "oops stderr\n"

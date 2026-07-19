@@ -1000,15 +1000,85 @@ Target symbols must be global because later candidates need them. Candidate
 symbols should not be global because one candidate must not affect symbol
 resolution for another candidate.
 
-### 11.7 Return the result to TreeReduce
+### 11.7 Extra crash check for dynamic target libraries
+
+The reducer already checks two things for every candidate:
+
+```text
+1. Does the crash pattern still appear?
+2. Does the first stack trace have the same number of frames?
+```
+
+For static libraries, HarnessReducer still uses those checks. Static target code
+is copied into the executable or runner, so the exact executable offsets may move
+when the harness changes. When static target libraries are detected, the tool
+prints:
+
+```text
+[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.
+```
+
+For dynamic target libraries, HarnessReducer can check one more stable fact.
+The target `.so` is already built and does not change during reduction, so an
+offset inside that `.so` should stay the same if the crash stays the same.
+
+Example first stack trace:
+
+```text
+#0 0x7d1f099eff25  (/path/build/lib/libaom.so+0x201cf25)
+#1 0x0000005567d0  (/path/harness+0x5567d0)
+#2 0x00000044d5af  (/path/harness+0x44d5af)
+```
+
+HarnessReducer records this from the initial fast reference run
+(`symbolize=0`), because candidate checks during reduction use the same fast
+execution style:
+
+```text
+dynamic crash-site library: /path/build/lib/libaom.so
+dynamic crash-site offset:  0x201cf25
+```
+
+Then a candidate is interesting only if all three checks pass:
+
+```text
+same crash pattern
+same first-trace depth
+same first target-library .so offset
+```
+
+This helps distinguish two crashes that both say, for example,
+`SUMMARY: AddressSanitizer: ABRT` and have the same number of frames, but stop
+inside different parts of the target library.
+
+Important details:
+
+- Only the first stack trace is used. If the output later contains another
+  trace such as “allocated by thread T0 here,” that later trace is ignored for
+  this offset check.
+- The code looks for stack frames shaped like `(.../libtarget.so+0x1234)`.
+  This is common in sanitizer and libFuzzer outputs, but the logic is not tied
+  to ASan specifically.
+- If `--link-flags` contains a clear shared-library path or `-L/path -ltarget`,
+  that information is used as the target-library hint.
+- If there is no `-L` directory, HarnessReducer can still use the first crash
+  output to discover which `.so` actually appears in the first stack trace.
+- Runtime libraries such as `libc.so`, `libasan.so`, `libstdc++.so`,
+  `libpthread.so`, `libm.so`, and the dynamic loader are ignored when using
+  this fallback.
+
+### 11.8 Return the result to TreeReduce
 
 The monitor returns the exit status and captured sanitizer output. The tester
-checks whether the expected crash pattern and required stack behavior were
-preserved. Exit code `77` is used as TreeReduce's “interesting candidate” code.
+checks whether the expected crash pattern, required stack behavior, and any
+recorded dynamic-library crash-site offset were preserved. Exit code `77` is
+used as TreeReduce's “interesting candidate” code.
 
 Before reduction begins, the original harness is run through this same plugin
 path. This calibrates the expected stack depth for the runner/plugin process
 layout rather than comparing it with a differently linked standalone program.
+If a dynamic target offset was recorded earlier, the original harness must also
+preserve that offset in the runner/plugin path.
 
 ## 12. Why the runner does not explicitly load every system library
 

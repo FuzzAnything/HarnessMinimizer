@@ -26,6 +26,7 @@ from harnessreducer.reducer_runner import (
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
     count_first_stack_trace_frames,
+    extract_first_dynamic_library_crash_site,
     runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
@@ -500,6 +501,34 @@ def _check_stack_trace(
     return False
 
 
+def _check_dynamic_crash_site(
+    run_log: str,
+    expected_library: str,
+    expected_offset: str,
+) -> bool:
+    site = extract_first_dynamic_library_crash_site(
+        run_log,
+        expected_library=expected_library,
+    )
+    if site is None:
+        print(
+            "[-] Dynamic crash-site offset did not match. "
+            f"Could not find a frame for {expected_library} in the first stack trace."
+        )
+        return False
+
+    if site.offset.lower() == expected_offset.lower():
+        print("[+] Dynamic crash-site offset validation passed.")
+        return True
+
+    print(
+        "[-] Dynamic crash-site offset did not match. "
+        f"Expected {expected_library}+{expected_offset.lower()}, "
+        f"got {site.library_path}+{site.offset}."
+    )
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -517,6 +546,8 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
+    parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
+    parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
@@ -599,6 +630,14 @@ def main() -> int:
                     "Stack depth did not match. "
                     f"Expected {args.stack_depth}, got {candidate_stack_depth}."
                 )
+                return _finalize_result(args, 1)
+
+        if args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
+            if not _check_dynamic_crash_site(
+                run_log,
+                args.dynamic_crash_site_library,
+                args.dynamic_crash_site_offset,
+            ):
                 return _finalize_result(args, 1)
 
         # Crash pattern matched.  If symbolized, also validate stack trace.

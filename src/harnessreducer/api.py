@@ -28,6 +28,7 @@ from harnessreducer.reducer_runner import (
     dump_fdp_trace,
     format_reduced_harness,
     get_work_dir,
+    has_static_target_libraries,
     reset_stack_trace_state,
     reset_last_interesting_state,
     resolve_amortized_link_inputs,
@@ -238,6 +239,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
     if config.amortize_link:
         resolve_amortized_link_inputs(config.link_flags)
+    if has_static_target_libraries(config.link_flags):
+        print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
     check_tree_reducer()
