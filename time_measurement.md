@@ -204,15 +204,15 @@ python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libpcap-2/harness.out
 
-python3 crash_triage.py benchmark/library-bug/libaom-7/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-7/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-7/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-6/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-6/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-6/crash-input
 
-python3 crash_triage.py benchmark/library-bug/libaom-7/reduced.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-7/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-7/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-6/reduced.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-6/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-6/crash-input
 
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
@@ -224,3 +224,23 @@ docker run -d \
   --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark,dst=/root/benchmark \
   harnessminimizer:latest \
   tail -f /dev/null
+
+git config --global user.email "lihy2022@connect.hku.hk"
+git config --global user.name "FalconLi"
+
+cat <<'EOF' >> ~/.bashrc
+
+# Fast sanitizer symbolization inside container
+export DEBUGINFOD_URLS=
+export ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-21/bin/llvm-symbolizer
+export UBSAN_SYMBOLIZER_PATH=/usr/lib/llvm-21/bin/llvm-symbolizer
+EOF
+
+source ~/.bashrc
+
+echo "$DEBUGINFOD_URLS"
+echo "$ASAN_SYMBOLIZER_PATH"
+echo "$UBSAN_SYMBOLIZER_PATH"
+
+export ASAN_OPTIONS=symbolize=0:handle_abort=1
+export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:symbolize=0
