@@ -56,6 +56,32 @@ def test_amortized_link_resolves_multiple_dynamic_libraries(tmp_path: Path) -> N
     assert "-lpthread" in inputs.runner_link_flags
 
 
+def test_runner_dynamic_dependency_flags_retain_dynamic_libraries() -> None:
+    inputs = reducer_runner.AmortizedLinkInputs(
+        shared_libraries=("/tmp/libtarget.so",),
+        static_libraries=(),
+        runner_link_flags=("-L/tmp/deps", "-ldep"),
+    )
+
+    assert reducer_runner.runner_dynamic_dependency_link_flags(inputs) == [
+        "-Wl,--no-as-needed",
+        "/tmp/libtarget.so",
+        "-L/tmp/deps",
+        "-ldep",
+        "-Wl,--as-needed",
+    ]
+
+
+def test_runner_dependency_flags_do_not_wrap_static_only_dependencies() -> None:
+    inputs = reducer_runner.AmortizedLinkInputs(
+        shared_libraries=(),
+        static_libraries=("/tmp/libtarget.a",),
+        runner_link_flags=("-lm",),
+    )
+
+    assert reducer_runner.runner_dynamic_dependency_link_flags(inputs) == ["-lm"]
+
+
 def test_amortized_link_resolves_multiple_static_libraries(tmp_path: Path) -> None:
     first = _compile_static_archive(
         tmp_path,
@@ -468,6 +494,124 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
                 "--amortized-runner-socket",
                 runner.socket_path,
                 "--amortized-plugin-fallback-link-flags=-lthis_fallback_must_not_be_used",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert result.returncode == 77, result.stdout + result.stderr
+    assert "AddressSanitizer" in result.stdout + result.stderr
+
+
+def test_amortized_runner_retains_dynamic_dependency_for_unresolved_target_symbol(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-dynamic-dependency"))
+    dependency_source = tmp_path / "dynamic_dep.cpp"
+    dependency_library = tmp_path / "libdynamic_dep.so"
+    target_source = tmp_path / "dynamic_target.cpp"
+    target_library = tmp_path / "libdynamic_target.so"
+    harness_source = tmp_path / "dynamic_dependency_harness.cpp"
+    trace_path = tmp_path / "dynamic_dependency_fdp_trace.log"
+    trace_path.write_text("", encoding="utf-8")
+
+    dependency_source.write_text(
+        """
+extern "C" __attribute__((noinline)) void dependency_crash() {
+  volatile int *values = new int[1];
+  values[4] = 7;
+}
+""",
+        encoding="utf-8",
+    )
+    target_source.write_text(
+        """
+extern "C" void dependency_crash();
+extern "C" void dynamic_target_entry() { dependency_crash(); }
+""",
+        encoding="utf-8",
+    )
+    harness_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+extern "C" void dynamic_target_entry();
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
+  dynamic_target_entry();
+  return 0;
+}
+""",
+        encoding="utf-8",
+    )
+
+    compile_dependency = subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            "-fsanitize=address,undefined",
+            "-O1",
+            "-gline-tables-only",
+            str(dependency_source),
+            "-o",
+            str(dependency_library),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_dependency.returncode == 0, compile_dependency.stderr
+    compile_target = subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            "-fsanitize=address,undefined",
+            "-O1",
+            "-gline-tables-only",
+            str(target_source),
+            "-Wl,--allow-shlib-undefined",
+            "-o",
+            str(target_library),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_target.returncode == 0, compile_target.stderr
+
+    link_flags = f"-L{tmp_path} -ldynamic_target -ldynamic_dep"
+    inputs = reducer_runner.resolve_amortized_link_inputs(link_flags)
+    assert inputs.shared_libraries == (
+        str(target_library.resolve()),
+        str(dependency_library.resolve()),
+    )
+    assert reducer_runner.runner_dynamic_dependency_link_flags(inputs) == [
+        "-Wl,--no-as-needed",
+        str(target_library.resolve()),
+        str(dependency_library.resolve()),
+        f"-L{tmp_path.resolve()}",
+        "-Wl,--as-needed",
+    ]
+
+    with reducer_runner.start_amortized_runner(
+        link_flags,
+        None,
+        str(trace_path),
+        symbolize=False,
+    ) as runner:
+        result = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                str(harness_source),
+                "AddressSanitizer",
+                "--split",
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
             ],
             text=True,
             capture_output=True,
