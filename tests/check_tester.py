@@ -23,6 +23,7 @@ from harnessreducer.check_mode import (
     record_check_statistics,
 )
 from harnessreducer.reducer_runner import extract_stack_trace, runtime_library_env
+from harnessreducer.reducer_runner import extract_first_dynamic_library_crash_site
 
 _crash_tester_spec = importlib.util.spec_from_file_location(
     "crash_tester_support",
@@ -92,12 +93,28 @@ def _evaluate_check_candidate(
     stored_compare_pattern: str,
     reference_frame_count: int,
     candidate_source: str,
+    dynamic_crash_site_library: str | None = None,
+    dynamic_crash_site_offset: str | None = None,
 ) -> tuple[bool, int, bool, bool, str | None, str | None]:
     candidate_full_trace = extract_first_entire_stack_trace(run_log)
     candidate_compare_trace = extract_stack_trace(run_log, harness_path=candidate_source)
     candidate_frames = count_stack_trace_frames(candidate_full_trace)
     crash_pattern_matched = run_returncode == 77 and re.search(crash_pattern, run_log) is not None
-    level_same = crash_pattern_matched and candidate_frames == reference_frame_count
+    dynamic_site_same = True
+    if dynamic_crash_site_library and dynamic_crash_site_offset:
+        site = extract_first_dynamic_library_crash_site(
+            run_log,
+            expected_library=dynamic_crash_site_library,
+        )
+        dynamic_site_same = (
+            site is not None
+            and site.offset.lower() == dynamic_crash_site_offset.lower()
+        )
+    level_same = (
+        crash_pattern_matched
+        and candidate_frames == reference_frame_count
+        and dynamic_site_same
+    )
     stack_same = level_same and bool(stored_compare_pattern) and candidate_compare_trace is not None and (
         re.search(stored_compare_pattern, candidate_compare_trace) is not None
     )
@@ -128,6 +145,8 @@ def main() -> int:
     parser.add_argument("--check-statistics-file", type=str, required=True, help="Path to the check statistics file")
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
+    parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
+    parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
     parser.add_argument(
@@ -279,6 +298,8 @@ def main() -> int:
             stored_compare_pattern=stored_compare_pattern,
             reference_frame_count=reference.frame_count,
             candidate_source=args.source,
+            dynamic_crash_site_library=args.dynamic_crash_site_library,
+            dynamic_crash_site_offset=args.dynamic_crash_site_offset,
         )
         append_candidate_stack_trace(
             args.check_stack_log_file,

@@ -15,6 +15,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_SPLIT,
     PchArtifacts,
     STACK_FRAME_COUNT_PATTERN,
+    dynamic_crash_site_tester_args,
     get_last_interesting_file,
     extract_first_sanitizer_stack_trace,
     get_project_root,
@@ -398,6 +399,7 @@ def run_treereducer_with_check(
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(dynamic_crash_site_tester_args())
 
     runner_context = (
         start_amortized_runner(

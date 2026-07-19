@@ -32,6 +32,13 @@ SAMPLE_SYMBOLIZED_LOG_DIFFERENT_PREFIX = """\
 SUMMARY: AddressSanitizer: heap-buffer-overflow /src/lib.c:10:3 in crash_func
 """
 
+SAMPLE_DYNAMIC_LOG = """\
+==1==ERROR: AddressSanitizer: heap-buffer-overflow
+    #0 0x1111  (/tmp/build/lib/libtarget.so+0xbeaf0)
+    #1 0x2222  (/tmp/harness+0x123)
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/build/lib/libtarget.so+0xbeaf0)
+"""
+
 
 class TestCheckTesterEvaluation(unittest.TestCase):
     def test_execution_env_can_disable_symbolization(self):
@@ -78,6 +85,23 @@ class TestCheckTesterEvaluation(unittest.TestCase):
         crash_pattern_matched, _, level_same, stack_same, _, _ = result
         self.assertTrue(crash_pattern_matched)
         self.assertTrue(level_same)
+        self.assertFalse(stack_same)
+
+    def test_dynamic_offset_mismatch_makes_candidate_not_interesting(self):
+        result = evaluate_check_candidate(
+            run_returncode=77,
+            run_log=SAMPLE_DYNAMIC_LOG,
+            crash_pattern=re.escape("SUMMARY: AddressSanitizer: heap-buffer-overflow"),
+            stored_compare_pattern="",
+            reference_frame_count=2,
+            candidate_source="/tmp/harness.cpp",
+            dynamic_crash_site_library="/tmp/build/lib/libtarget.so",
+            dynamic_crash_site_offset="0x999",
+        )
+
+        crash_pattern_matched, _, level_same, stack_same, _, _ = result
+        self.assertTrue(crash_pattern_matched)
+        self.assertFalse(level_same)
         self.assertFalse(stack_same)
 
 

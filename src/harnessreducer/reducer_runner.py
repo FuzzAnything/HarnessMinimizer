@@ -43,11 +43,13 @@ STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
+DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
 HARNESS_RUNNER_BINARY_NAME = "harness_runner"
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
+DYNAMIC_REFERENCE_CRASH_SITE = None
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
@@ -56,6 +58,10 @@ STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVM_COV_SHOW_LINE_PATTERN = re.compile(r"^\s*(\d+)\|\s*([^|]*)\|")
+SHARED_LIBRARY_FRAME_PATTERN = re.compile(
+    r"\((?P<library>[^()\s]+?\.so(?:\.[^()+\s]+)?)\+"
+    r"(?P<offset>0x[0-9a-fA-F]+)\)"
+)
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,25 @@ class PchArtifacts:
     prefix_header: str
     pch_file: str
     restore_prefix: str
+
+
+@dataclass(frozen=True)
+class DynamicCrashSite:
+    library_path: str
+    library_name: str
+    offset: str
+
+
+@dataclass(frozen=True)
+class DynamicLibraryHints:
+    exact_paths: tuple[str, ...] = ()
+    exact_names: tuple[str, ...] = ()
+    soname_prefixes: tuple[str, ...] = ()
+    allow_output_fallback: bool = False
+
+    @property
+    def has_library_hints(self) -> bool:
+        return bool(self.exact_paths or self.exact_names or self.soname_prefixes)
 
 
 @dataclass(frozen=True)
@@ -226,6 +251,399 @@ def _is_shared_library_path(path: Path) -> bool:
 
 def _is_static_library_path(path: Path) -> bool:
     return path.name.endswith(".a")
+
+
+def _dedupe_preserving_order(values: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))
+
+
+def _shared_library_prefix_for_name(name: str) -> str | None:
+    marker = ".so"
+    index = name.find(marker)
+    if index < 0:
+        return None
+    return name[: index + len(marker)]
+
+
+def _add_shared_library_name_hints(
+    *,
+    name: str,
+    exact_names: list[str],
+    soname_prefixes: list[str],
+) -> None:
+    if not name:
+        return
+    exact_names.append(name)
+    prefix = _shared_library_prefix_for_name(name)
+    if prefix:
+        soname_prefixes.append(prefix)
+
+
+def _library_names_for_link_flag(library_name: str) -> tuple[str, ...]:
+    if library_name.startswith(":"):
+        return (library_name[1:],)
+    return (f"lib{library_name}.so",)
+
+
+def _find_existing_shared_library(
+    library_name: str,
+    library_dirs: list[Path],
+) -> Path | None:
+    file_names = _library_names_for_link_flag(library_name)
+    for directory in library_dirs:
+        for file_name in file_names:
+            candidate = directory / file_name
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _find_existing_static_library(
+    library_name: str,
+    library_dirs: list[Path],
+) -> Path | None:
+    file_names = (
+        (library_name[1:],)
+        if library_name.startswith(":")
+        else (f"lib{library_name}.a",)
+    )
+    for directory in library_dirs:
+        for file_name in file_names:
+            candidate = directory / file_name
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def _linker_mode_token(token: str) -> str | None:
+    # The normal spelling is one token, e.g. -Wl,-Bstatic.  Some command
+    # generators can place several linker options in the same comma-separated
+    # token, so check the comma fields instead of only exact equality.
+    if not token.startswith("-Wl,"):
+        return None
+    fields = token.split(",")[1:]
+    if "-Bstatic" in fields:
+        return "static"
+    if "-Bdynamic" in fields:
+        return "dynamic"
+    return None
+
+
+def _collect_link_library_dirs(tokens: list[str]) -> list[Path]:
+    library_dirs: list[Path] = []
+    for index, token in enumerate(tokens):
+        if token == "-L" and index + 1 < len(tokens):
+            library_dirs.append(Path(tokens[index + 1]).expanduser().resolve())
+        elif token.startswith("-L") and len(token) > 2:
+            library_dirs.append(Path(token[2:]).expanduser().resolve())
+    return library_dirs
+
+
+def has_static_target_libraries(link_flags: str | None) -> bool:
+    """Best-effort static-library detection for user-facing warnings."""
+    tokens = _split_flags(link_flags)
+    library_dirs = _collect_link_library_dirs(tokens)
+    prefer_static = False
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        mode = _linker_mode_token(token)
+        if mode == "static":
+            prefer_static = True
+            index += 1
+            continue
+        if mode == "dynamic":
+            prefer_static = False
+            index += 1
+            continue
+        if token == "-L":
+            index += 2
+            continue
+        if token.startswith("-L") and len(token) > 2:
+            index += 1
+            continue
+        if token == "-l" and index + 1 < len(tokens):
+            library_name = tokens[index + 1]
+            if prefer_static or _find_existing_static_library(library_name, library_dirs):
+                return True
+            index += 2
+            continue
+        if token.startswith("-l") and len(token) > 2:
+            library_name = token[2:]
+            if prefer_static or _find_existing_static_library(library_name, library_dirs):
+                return True
+            index += 1
+            continue
+        if _is_static_library_path(Path(token)):
+            return True
+        index += 1
+    return False
+
+
+def infer_target_dynamic_library_hints(link_flags: str | None) -> DynamicLibraryHints:
+    """Infer which shared libraries may represent the fuzzed target.
+
+    Link flags give strong hints when they contain explicit .so paths or when a
+    -l name can be resolved through an explicit -L directory.  If there are no
+    static target libraries, unresolved -l names are also kept as weak hints so
+    container/runtime search paths can still be handled from the crash output.
+    """
+    tokens = _split_flags(link_flags)
+    if not tokens:
+        return DynamicLibraryHints()
+
+    library_dirs = _collect_link_library_dirs(tokens)
+    exact_paths: list[str] = []
+    exact_names: list[str] = []
+    soname_prefixes: list[str] = []
+    unresolved_dynamic_names: list[str] = []
+    unresolved_after_explicit_dynamic_mode: list[str] = []
+    saw_static_target = False
+    explicit_dynamic_target = False
+    prefer_static = False
+    saw_explicit_dynamic_mode = False
+
+    def add_shared_path(path: Path) -> None:
+        nonlocal explicit_dynamic_target
+        candidate = path.expanduser()
+        resolved = candidate.resolve() if candidate.exists() else candidate
+        exact_paths.append(str(resolved))
+        _add_shared_library_name_hints(
+            name=resolved.name,
+            exact_names=exact_names,
+            soname_prefixes=soname_prefixes,
+        )
+        explicit_dynamic_target = True
+
+    def add_shared_link_name(library_name: str) -> None:
+        for name in _library_names_for_link_flag(library_name):
+            _add_shared_library_name_hints(
+                name=name,
+                exact_names=exact_names,
+                soname_prefixes=soname_prefixes,
+            )
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        mode = _linker_mode_token(token)
+        if mode == "static":
+            prefer_static = True
+            index += 1
+            continue
+        if mode == "dynamic":
+            prefer_static = False
+            saw_explicit_dynamic_mode = True
+            index += 1
+            continue
+        if token == "-L":
+            index += 2
+            continue
+        if token.startswith("-L") and len(token) > 2:
+            index += 1
+            continue
+
+        library_name: str | None = None
+        if token == "-l" and index + 1 < len(tokens):
+            library_name = tokens[index + 1]
+            index += 2
+        elif token.startswith("-l") and len(token) > 2:
+            library_name = token[2:]
+            index += 1
+        else:
+            path = Path(token)
+            if _is_shared_library_path(path):
+                add_shared_path(path)
+            elif _is_static_library_path(path):
+                saw_static_target = True
+            index += 1
+            continue
+
+        if prefer_static:
+            saw_static_target = True
+            continue
+
+        shared = _find_existing_shared_library(library_name, library_dirs)
+        static = _find_existing_static_library(library_name, library_dirs)
+        if shared is not None:
+            add_shared_path(shared)
+        elif static is not None:
+            saw_static_target = True
+        else:
+            unresolved_dynamic_names.append(library_name)
+            if saw_explicit_dynamic_mode:
+                unresolved_after_explicit_dynamic_mode.append(library_name)
+
+    include_unresolved = (
+        unresolved_after_explicit_dynamic_mode
+        if saw_static_target
+        else unresolved_dynamic_names
+    )
+    if not explicit_dynamic_target:
+        for library_name in include_unresolved:
+            add_shared_link_name(library_name)
+
+    return DynamicLibraryHints(
+        exact_paths=_dedupe_preserving_order(exact_paths),
+        exact_names=_dedupe_preserving_order(exact_names),
+        soname_prefixes=_dedupe_preserving_order(soname_prefixes),
+        allow_output_fallback=explicit_dynamic_target or bool(include_unresolved),
+    )
+
+
+def _normalize_library_path_for_compare(path_text: str) -> str:
+    path = Path(path_text)
+    try:
+        if path.is_absolute() and path.exists():
+            return str(path.resolve())
+    except OSError:
+        pass
+    return path_text
+
+
+def _library_matches_name_or_prefix(
+    library_name: str,
+    *,
+    exact_names: tuple[str, ...],
+    soname_prefixes: tuple[str, ...],
+) -> bool:
+    if library_name in exact_names:
+        return True
+    return any(
+        library_name == prefix or library_name.startswith(prefix + ".")
+        for prefix in soname_prefixes
+    )
+
+
+def _dynamic_site_matches_hints(
+    site: DynamicCrashSite,
+    hints: DynamicLibraryHints,
+) -> bool:
+    normalized_site_path = _normalize_library_path_for_compare(site.library_path)
+    if normalized_site_path in hints.exact_paths:
+        return True
+    return _library_matches_name_or_prefix(
+        site.library_name,
+        exact_names=hints.exact_names,
+        soname_prefixes=hints.soname_prefixes,
+    )
+
+
+def _dynamic_site_matches_expected_library(
+    site: DynamicCrashSite,
+    expected_library: str,
+) -> bool:
+    expected_path = _normalize_library_path_for_compare(expected_library)
+    site_path = _normalize_library_path_for_compare(site.library_path)
+    if expected_path == site_path:
+        return True
+
+    expected_name = Path(expected_library).name
+    prefix = _shared_library_prefix_for_name(expected_name)
+    return _library_matches_name_or_prefix(
+        site.library_name,
+        exact_names=(expected_name,),
+        soname_prefixes=(prefix,) if prefix else (),
+    )
+
+
+def _is_runtime_shared_library(library_name: str) -> bool:
+    runtime_prefixes = (
+        "ld-linux",
+        "linux-vdso",
+        "libasan.so",
+        "libubsan.so",
+        "liblsan.so",
+        "libtsan.so",
+        "libmsan.so",
+        "libc.so",
+        "libstdc++.so",
+        "libgcc_s.so",
+        "libpthread.so",
+        "libdl.so",
+        "libm.so",
+        "librt.so",
+        "libatomic.so",
+        "libunwind.so",
+    )
+    return any(
+        library_name == prefix or library_name.startswith(prefix + ".")
+        for prefix in runtime_prefixes
+    )
+
+
+def _extract_shared_library_sites_from_first_trace(
+    output: str,
+) -> list[DynamicCrashSite]:
+    trace = extract_first_sanitizer_stack_trace(output)
+    if not trace:
+        return []
+
+    sites: list[DynamicCrashSite] = []
+    for line in trace.splitlines():
+        match = SHARED_LIBRARY_FRAME_PATTERN.search(line)
+        if not match:
+            continue
+        library_path = match.group("library")
+        sites.append(
+            DynamicCrashSite(
+                library_path=library_path,
+                library_name=Path(library_path).name,
+                offset=match.group("offset").lower(),
+            )
+        )
+    return sites
+
+
+def extract_first_dynamic_library_crash_site(
+    output: str,
+    link_flags: str | None = None,
+    *,
+    expected_library: str | None = None,
+) -> DynamicCrashSite | None:
+    """Extract the first relevant shared-library + offset frame.
+
+    Only the first contiguous stack-trace block is examined.  With an expected
+    library, the first frame from that library is returned.  Otherwise link
+    flags are used as target-library hints, falling back to the first
+    non-runtime .so frame only when the flags suggest a dynamic target but do
+    not give a resolvable path.
+    """
+    sites = _extract_shared_library_sites_from_first_trace(output)
+    if not sites:
+        return None
+
+    if expected_library:
+        return next(
+            (
+                site
+                for site in sites
+                if _dynamic_site_matches_expected_library(site, expected_library)
+            ),
+            None,
+        )
+
+    hints = infer_target_dynamic_library_hints(link_flags)
+    if hints.has_library_hints:
+        matched = next(
+            (site for site in sites if _dynamic_site_matches_hints(site, hints)),
+            None,
+        )
+        if matched is not None:
+            return matched
+
+    if not hints.allow_output_fallback:
+        return None
+
+    return next(
+        (
+            site
+            for site in sites
+            if not _is_runtime_shared_library(site.library_name)
+        ),
+        None,
+    )
 
 
 def resolve_amortized_link_inputs(
@@ -531,6 +949,7 @@ def run_amortized_reference_candidate(
         )
     if symbolize:
         cmd.append("--symbolize")
+    cmd.extend(dynamic_crash_site_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(
         cmd,
@@ -944,8 +1363,22 @@ def get_symbolized_reference_stack_depth() -> int | None:
     return SYMBOLIZED_REFERENCE_STACK_DEPTH
 
 
+def set_dynamic_reference_crash_site(site: DynamicCrashSite | None) -> None:
+    global DYNAMIC_REFERENCE_CRASH_SITE
+    DYNAMIC_REFERENCE_CRASH_SITE = site
+
+
+def get_dynamic_reference_crash_site() -> DynamicCrashSite | None:
+    return DYNAMIC_REFERENCE_CRASH_SITE
+
+
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
+
+
+def get_dynamic_crash_site_file() -> str:
+    return os.path.join(get_work_dir(), DYNAMIC_CRASH_SITE_FILE_NAME)
+
 
 def get_last_interesting_file() -> str:
     return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
@@ -958,7 +1391,8 @@ def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
     set_normal_reference_stack_depth(None)
     set_symbolized_reference_stack_depth(None)
-    for path in (get_stack_trace_file(),):
+    set_dynamic_reference_crash_site(None)
+    for path in (get_stack_trace_file(), get_dynamic_crash_site_file()):
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -1234,6 +1668,42 @@ def _run_harness_for_crash_reference(
     )
 
 
+def _persist_dynamic_reference_crash_site(site: DynamicCrashSite | None) -> None:
+    path = Path(get_dynamic_crash_site_file())
+    if site is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    path.write_text(
+        json.dumps(
+            {
+                "library_path": site.library_path,
+                "library_name": site.library_name,
+                "offset": site.offset,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _record_dynamic_reference_crash_site(
+    output: str,
+    link_flags: str | None,
+) -> DynamicCrashSite | None:
+    site = extract_first_dynamic_library_crash_site(output, link_flags)
+    set_dynamic_reference_crash_site(site)
+    _persist_dynamic_reference_crash_site(site)
+    if site is not None:
+        print(f"[+] Recorded dynamic crash-site library: {site.library_path}")
+        print(f"[+] Recorded dynamic crash-site offset: {site.offset}")
+    return site
+
+
 def _extract_crash_signature_from_output(output: str) -> str | None:
     abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(output)
     if abort_assert_match:
@@ -1290,6 +1760,8 @@ def extract_crash_pattern_from_output(
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
         set_normal_reference_stack_depth(None)
         set_symbolized_reference_stack_depth(None)
+        set_dynamic_reference_crash_site(None)
+        _persist_dynamic_reference_crash_site(None)
         return None
 
     normal_reference_stack_depth = count_first_stack_trace_frames(output)
@@ -1298,6 +1770,8 @@ def extract_crash_pattern_from_output(
         print(f"[+] Recorded fast-path stack trace depth: {normal_reference_stack_depth}")
     else:
         print("[!] No fast-path stack-trace frames found for reference depth extraction.")
+
+    _record_dynamic_reference_crash_site(output, link_flags)
 
     crash_pattern = _extract_crash_signature_from_output(output)
     if not crash_pattern:
@@ -1377,6 +1851,7 @@ def check_reducer_crash_pattern(
         f"--link-flags={link_flags or ''}",
     ]
     cmd.extend(stack_depth_tester_args(symbolized=False))
+    cmd.extend(dynamic_crash_site_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
     if proc.returncode != 77:
@@ -1499,6 +1974,7 @@ def run_treereducer(
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
+    cmd.extend(dynamic_crash_site_tester_args())
 
     runner_context = (
         start_amortized_runner(
@@ -1580,6 +2056,18 @@ def stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:
     return ["--stack-depth", str(depth)]
 
 
+def dynamic_crash_site_tester_args() -> list[str]:
+    site = get_dynamic_reference_crash_site()
+    if site is None:
+        return []
+    return [
+        "--dynamic-crash-site-library",
+        site.library_path,
+        "--dynamic-crash-site-offset",
+        site.offset,
+    ]
+
+
 def validate_stack_trace(
     harness_path: str,
     crash_pattern: str,
@@ -1629,6 +2117,7 @@ def validate_stack_trace(
     ]
     cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args(symbolized=True))
+    cmd.extend(dynamic_crash_site_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
