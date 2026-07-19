@@ -1047,6 +1047,12 @@ same first-trace depth
 same first target-library .so offset
 ```
 
+The offset check is intentionally applied to `symbolize=0` executions. A
+`symbolize=1` stack trace often replaces `(/path/libtarget.so+0xOFFSET)` with a
+function name and source line, so the raw shared-library offset may no longer be
+visible in that output. Symbolized validation still checks stack shape/source
+patterns; the dynamic offset check belongs to the fast unsymbolized path.
+
 This helps distinguish two crashes that both say, for example,
 `SUMMARY: AddressSanitizer: ABRT` and have the same number of frames, but stop
 inside different parts of the target library.

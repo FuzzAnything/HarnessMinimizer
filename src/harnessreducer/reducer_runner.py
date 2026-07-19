@@ -365,13 +365,17 @@ def has_static_target_libraries(link_flags: str | None) -> bool:
             continue
         if token == "-l" and index + 1 < len(tokens):
             library_name = tokens[index + 1]
-            if prefer_static or _find_existing_static_library(library_name, library_dirs):
+            shared = _find_existing_shared_library(library_name, library_dirs)
+            static = _find_existing_static_library(library_name, library_dirs)
+            if prefer_static or (static is not None and shared is None):
                 return True
             index += 2
             continue
         if token.startswith("-l") and len(token) > 2:
             library_name = token[2:]
-            if prefer_static or _find_existing_static_library(library_name, library_dirs):
+            shared = _find_existing_shared_library(library_name, library_dirs)
+            static = _find_existing_static_library(library_name, library_dirs)
+            if prefer_static or (static is not None and shared is None):
                 return True
             index += 1
             continue
@@ -949,7 +953,8 @@ def run_amortized_reference_candidate(
         )
     if symbolize:
         cmd.append("--symbolize")
-    cmd.extend(dynamic_crash_site_tester_args())
+    else:
+        cmd.extend(dynamic_crash_site_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(
         cmd,
@@ -2117,7 +2122,6 @@ def validate_stack_trace(
     ]
     cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args(symbolized=True))
-    cmd.extend(dynamic_crash_site_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))

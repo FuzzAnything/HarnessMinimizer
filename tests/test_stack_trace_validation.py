@@ -294,6 +294,14 @@ class TestDynamicCrashSiteExtraction(unittest.TestCase):
             has_static_target_libraries("-Wl,-Bstatic -ltarget -Wl,-Bdynamic")
         )
 
+    def test_static_target_detection_prefers_shared_for_plain_l_flag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_dir = Path(tmpdir)
+            (lib_dir / "libtarget.so").write_text("", encoding="utf-8")
+            (lib_dir / "libtarget.a").write_text("", encoding="utf-8")
+
+            self.assertFalse(has_static_target_libraries(f"-L{lib_dir} -ltarget"))
+
     def test_dynamic_hints_keep_unresolved_l_names_without_static_targets(self):
         hints = infer_target_dynamic_library_hints("-ltarget -ldependency")
 
@@ -538,8 +546,8 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--symbolize", cmd)
             self.assertIn("--stack-trace-file", cmd)
             self.assertIn("--stack-depth", cmd)
-            self.assertIn("--dynamic-crash-site-library", cmd)
-            self.assertIn("--dynamic-crash-site-offset", cmd)
+            self.assertNotIn("--dynamic-crash-site-library", cmd)
+            self.assertNotIn("--dynamic-crash-site-offset", cmd)
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
 

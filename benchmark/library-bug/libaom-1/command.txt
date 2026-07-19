@@ -75,8 +75,8 @@ harnessreducer harness.cpp \
 
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
-  --link-flags="$(pwd)/build/sanitizer/lib/libaom.a" \
-  --work-dir ./statistics-pch-link-static \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -laom" \
+  --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
   --stable \

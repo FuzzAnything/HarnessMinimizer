@@ -104,6 +104,24 @@ class TestCheckTesterEvaluation(unittest.TestCase):
         self.assertFalse(level_same)
         self.assertFalse(stack_same)
 
+    def test_dynamic_offset_can_use_symbolize_0_log(self):
+        result = evaluate_check_candidate(
+            run_returncode=77,
+            run_log=SAMPLE_SYMBOLIZED_LOG,
+            crash_pattern=re.escape("SUMMARY: AddressSanitizer: heap-buffer-overflow"),
+            stored_compare_pattern="",
+            reference_frame_count=3,
+            candidate_source="/tmp/harness.cpp",
+            dynamic_crash_site_library="/tmp/build/lib/libtarget.so",
+            dynamic_crash_site_offset="0xbeaf0",
+            dynamic_crash_site_log=SAMPLE_DYNAMIC_LOG,
+        )
+
+        crash_pattern_matched, _, level_same, stack_same, _, _ = result
+        self.assertTrue(crash_pattern_matched)
+        self.assertTrue(level_same)
+        self.assertFalse(stack_same)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,7 +44,7 @@ harnessreducer harness.cpp \
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
   --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
-  --work-dir ./statistics-pch-link-dynamic \
+  --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
   --amortize-link \
