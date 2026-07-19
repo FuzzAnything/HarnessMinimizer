@@ -19,6 +19,10 @@ from harnessreducer.reducer_runner import (
     check_reducer_crash_pattern,
     check_tree_reducer,
     extract_crash_pattern_from_output,
+    extract_first_dynamic_library_crash_site,
+    extract_first_sanitizer_stack_trace,
+    get_crash_tester_path,
+    get_dynamic_reference_crash_site,
     get_last_interesting_file,
     get_normal_reference_stack_depth,
     get_symbolized_reference_stack_depth,
@@ -33,6 +37,7 @@ from harnessreducer.reducer_runner import (
     reset_last_interesting_state,
     resolve_amortized_link_inputs,
     run_treereducer,
+    run_command,
     validate_phase3_mode,
     validate_stack_trace,
 )
@@ -112,6 +117,102 @@ def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
     _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
+
+
+def _run_inline_stack_diagnostic(
+    harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None,
+    *,
+    symbolize: bool,
+) -> tuple[int, str, str | None]:
+    cmd = [
+        get_crash_tester_path(),
+        harness_path,
+        crash_pattern,
+        "--crash-input",
+        crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+    ]
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
+    if symbolize:
+        cmd.append("--symbolize")
+
+    proc = run_command(
+        cmd,
+        "Inline stack diagnostic failed",
+        ignore_errors=True,
+    )
+    output = proc.stdout + "\n" + proc.stderr
+    return proc.returncode, output, extract_first_sanitizer_stack_trace(output)
+
+
+def _append_inline_stack_diagnostics(
+    log_path: str,
+    *,
+    before_path: str,
+    after_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None,
+) -> None:
+    expected_dynamic_site = get_dynamic_reference_crash_site()
+    lines = [
+        "\n===== inline before/after stack diagnostics =====",
+        "These diagnostics are not used for the pass/fail decision above.",
+    ]
+    if expected_dynamic_site is not None:
+        lines.extend(
+            [
+                "expected_dynamic_crash_site:",
+                f"  library: {expected_dynamic_site.library_path}",
+                f"  offset: {expected_dynamic_site.offset}",
+            ]
+        )
+
+    for label, source_path in (
+        ("before_inlining", before_path),
+        ("after_inlining", after_path),
+    ):
+        lines.append(f"\n--- {label}: {source_path} ---")
+        for symbolize in (False, True):
+            returncode, output, trace = _run_inline_stack_diagnostic(
+                source_path,
+                crash_pattern,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file,
+                symbolize=symbolize,
+            )
+            mode_label = f"symbolize={int(symbolize)}"
+            lines.append(f"{mode_label} returncode: {returncode}")
+            if expected_dynamic_site is not None:
+                actual_site = extract_first_dynamic_library_crash_site(
+                    output,
+                    link_flags,
+                    expected_library=expected_dynamic_site.library_path,
+                )
+                if actual_site is None:
+                    lines.append(f"{mode_label} dynamic_crash_site: <not found>")
+                else:
+                    lines.append(
+                        f"{mode_label} dynamic_crash_site: "
+                        f"{actual_site.library_path}+{actual_site.offset}"
+                    )
+            lines.append(f"{mode_label} first_stack_trace:")
+            lines.append(trace if trace else "<no-first-stack-trace-found>")
+
+    lines.append("===== end inline before/after stack diagnostics =====\n")
+    with Path(log_path).open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
 
 
 def inline_literals_in_reduced_harness(
@@ -194,6 +295,16 @@ def inline_literals_in_reduced_harness(
         print(
             f"[-] Inline reduction failed to preserve crash behavior for the {attempt_label} harness. "
             f"Validation log: {validation_log_path}"
+        )
+        _append_inline_stack_diagnostics(
+            validation_log_path,
+            before_path=base_harness_path,
+            after_path=inline_harness_path,
+            crash_pattern=crash_pattern,
+            crash_input=crash_input,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            fdp_trace_file=fdp_trace_file,
         )
         return None
 

@@ -95,6 +95,7 @@ def _evaluate_check_candidate(
     candidate_source: str,
     dynamic_crash_site_library: str | None = None,
     dynamic_crash_site_offset: str | None = None,
+    dynamic_crash_site_log: str | None = None,
 ) -> tuple[bool, int, bool, bool, str | None, str | None]:
     candidate_full_trace = extract_first_entire_stack_trace(run_log)
     candidate_compare_trace = extract_stack_trace(run_log, harness_path=candidate_source)
@@ -103,7 +104,7 @@ def _evaluate_check_candidate(
     dynamic_site_same = True
     if dynamic_crash_site_library and dynamic_crash_site_offset:
         site = extract_first_dynamic_library_crash_site(
-            run_log,
+            dynamic_crash_site_log if dynamic_crash_site_log is not None else run_log,
             expected_library=dynamic_crash_site_library,
         )
         dynamic_site_same = (
@@ -244,6 +245,7 @@ def main() -> int:
             )
 
         candidate_full_trace_symbolize_0 = None
+        candidate_run_log_symbolize_0 = None
         try:
             if args.amortized_runner_socket:
                 if args.amortized_runner_socket_symbolize_0:
@@ -259,6 +261,7 @@ def main() -> int:
                             "<symbolize=0 diagnostic compile/link failed>"
                         )
                     else:
+                        candidate_run_log_symbolize_0 = symbolize_0_log
                         candidate_full_trace_symbolize_0 = (
                             extract_first_entire_stack_trace(symbolize_0_log)
                         )
@@ -274,6 +277,7 @@ def main() -> int:
                         "<symbolize=0 diagnostic compile/link failed>"
                     )
                 else:
+                    candidate_run_log_symbolize_0 = symbolize_0_log
                     candidate_full_trace_symbolize_0 = (
                         extract_first_entire_stack_trace(symbolize_0_log)
                     )
@@ -300,6 +304,7 @@ def main() -> int:
             candidate_source=args.source,
             dynamic_crash_site_library=args.dynamic_crash_site_library,
             dynamic_crash_site_offset=args.dynamic_crash_site_offset,
+            dynamic_crash_site_log=candidate_run_log_symbolize_0,
         )
         append_candidate_stack_trace(
             args.check_stack_log_file,
