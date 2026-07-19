@@ -636,7 +636,7 @@ def timing_runner_request(
     start_ns = time.perf_counter_ns()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))
-        client.sendall(str(plugin_path.resolve()).encode("utf-8") + b"\n")
+        client.sendall(str(plugin_path).encode("utf-8") + b"\n")
         stream = client.makefile("rb")
         header = stream.readline()
         if not header:
@@ -661,10 +661,11 @@ def measure_runner_requests(
     plugin_path: Path,
     iterations: int,
     fallback_plugin_path: Path | None = None,
-) -> tuple[dict[str, list[int]], Counter[int]]:
+) -> tuple[dict[str, list[int]], Counter[int], bytes | None]:
     samples = {"end_to_end_ns": [], "fallback_trigger_request_ns": []}
     samples.update({name: [] for name in RUNNER_METRIC_NAMES})
     statuses: Counter[int] = Counter()
+    representative_output: bytes | None = None
 
     for _ in range(iterations):
         total_start_ns = time.perf_counter_ns()
@@ -681,11 +682,63 @@ def measure_runner_requests(
                 socket_path,
                 fallback_plugin_path,
             )
+        if representative_output is None:
+            representative_output = output
         samples["end_to_end_ns"].append(time.perf_counter_ns() - total_start_ns)
         statuses[status] += 1
         for name, value in zip(RUNNER_METRIC_NAMES, metric_values, strict=True):
             samples[name].append(value)
-    return samples, statuses
+    return samples, statuses, representative_output
+
+
+def measure_oracle_checks(
+    output: bytes | None,
+    iterations: int,
+    link_flags: str | None,
+    *,
+    check_dynamic_site: bool,
+) -> tuple[dict[str, list[int]], rr.DynamicCrashSite | None, int]:
+    samples: dict[str, list[int]] = {
+        "stack_depth_ns": [],
+        "dynamic_crash_site_ns": [],
+        "combined_ns": [],
+    }
+    if output is None:
+        return samples, None, 0
+
+    text = output.decode("utf-8", errors="replace")
+    expected_depth = rr.count_first_stack_trace_frames(text)
+    expected_site = (
+        rr.extract_first_dynamic_library_crash_site(text, link_flags)
+        if check_dynamic_site
+        else None
+    )
+
+    for _ in range(iterations):
+        start_ns = time.perf_counter_ns()
+        rr.count_first_stack_trace_frames(text)
+        samples["stack_depth_ns"].append(time.perf_counter_ns() - start_ns)
+
+        if expected_site is not None:
+            start_ns = time.perf_counter_ns()
+            site = rr.extract_first_dynamic_library_crash_site(
+                text,
+                expected_library=expected_site.library_path,
+            )
+            _ = site is not None and site.offset == expected_site.offset
+            samples["dynamic_crash_site_ns"].append(time.perf_counter_ns() - start_ns)
+
+        start_ns = time.perf_counter_ns()
+        rr.count_first_stack_trace_frames(text)
+        if expected_site is not None:
+            site = rr.extract_first_dynamic_library_crash_site(
+                text,
+                expected_library=expected_site.library_path,
+            )
+            _ = site is not None and site.offset == expected_site.offset
+        samples["combined_ns"].append(time.perf_counter_ns() - start_ns)
+
+    return samples, expected_site, expected_depth
 
 
 class Report:
@@ -837,6 +890,9 @@ def main() -> int:
     one_time: dict[str, int] = {}
     startup_metrics: dict[str, object] = {}
     runner_request_samples: dict[str, dict[str, list[int]]] = {}
+    runner_representative_outputs: dict[str, bytes | None] = {}
+    oracle_check_samples: dict[str, dict[str, list[int]]] = {}
+    oracle_references: dict[str, object] = {}
 
     try:
         compile_flags = rr._split_flags(args.compile_flags)
@@ -1045,7 +1101,7 @@ def main() -> int:
                 args.timeout,
             )
             try:
-                current_samples, statuses = measure_runner_requests(
+                current_samples, statuses, representative_output = measure_runner_requests(
                     socket_path,
                     plugin,
                     args.iterations,
@@ -1058,10 +1114,33 @@ def main() -> int:
             finally:
                 stop_runner(process, socket_path)
             runner_request_samples[label] = current_samples
+            runner_representative_outputs[label] = representative_output
             execution_statuses[f"amortized_{label}"] = statuses
             if not symbolize:
                 one_time["runner_startup_wall_ns"] = startup_wall_ns
                 startup_metrics = current_startup
+
+        for symbolize in (False, True):
+            label = f"symbolize_{int(symbolize)}"
+            current_samples, expected_site, expected_depth = measure_oracle_checks(
+                runner_representative_outputs.get(label),
+                args.iterations,
+                args.link_flags,
+                check_dynamic_site=not symbolize,
+            )
+            oracle_check_samples[label] = current_samples
+            oracle_references[label] = {
+                "expected_stack_depth": expected_depth,
+                "dynamic_crash_site": (
+                    {
+                        "library_path": expected_site.library_path,
+                        "library_name": expected_site.library_name,
+                        "offset": expected_site.offset,
+                    }
+                    if expected_site is not None
+                    else None
+                ),
+            }
 
         for symbolize in (False, True):
             label = f"symbolize_{int(symbolize)}"
@@ -1275,6 +1354,65 @@ def main() -> int:
                 ),
             ],
         )
+        report.subsection("Python-side candidate oracle parsing")
+        oracle_rows: list[list[str]] = []
+        for label in ("symbolize_0", "symbolize_1"):
+            reference = oracle_references.get(label, {})
+            expected_depth = (
+                reference.get("expected_stack_depth", 0)
+                if isinstance(reference, dict)
+                else 0
+            )
+            dynamic_site = (
+                reference.get("dynamic_crash_site")
+                if isinstance(reference, dict)
+                else None
+            )
+            current = oracle_check_samples[label]
+            oracle_rows.append(
+                [
+                    label,
+                    f"stack-depth check (expected {expected_depth})",
+                    *stats_row("", current["stack_depth_ns"], "us")[1:],
+                ]
+            )
+            oracle_rows.append(
+                [
+                    label,
+                    (
+                        "dynamic .so offset check"
+                        if dynamic_site is not None
+                        else "dynamic .so offset check (not active)"
+                    ),
+                    *stats_row("", current["dynamic_crash_site_ns"], "us")[1:],
+                ]
+            )
+            oracle_rows.append(
+                [
+                    label,
+                    "combined active checks",
+                    *stats_row("", current["combined_ns"], "us")[1:],
+                ]
+            )
+        report.table(
+            ["Output", "Check", "N", "Mean us", "Median", "Stddev", "Min", "Max"],
+            oracle_rows,
+        )
+        dynamic_reference = oracle_references.get("symbolize_0", {})
+        dynamic_site = (
+            dynamic_reference.get("dynamic_crash_site")
+            if isinstance(dynamic_reference, dict)
+            else None
+        )
+        if isinstance(dynamic_site, dict):
+            report.add(
+                "Recorded dynamic crash-site used for timing: "
+                f"{dynamic_site['library_path']}+{dynamic_site['offset']}"
+            )
+        report.add(
+            "These rows measure Python parsing of already captured output. They are "
+            "not extra harness executions."
+        )
 
         report.section("F", f"AMORTIZED REQUEST BREAKDOWN — {args.iterations} ITERATIONS")
         for symbolize in (0, 1):
@@ -1362,6 +1500,8 @@ def main() -> int:
             "startup_metrics": startup_metrics,
             "repeated_samples_ns": samples,
             "runner_request_samples_ns": runner_request_samples,
+            "oracle_check_samples_ns": oracle_check_samples,
+            "oracle_references": oracle_references,
             "execution_statuses": {
                 key: dict(value) for key, value in execution_statuses.items()
             },

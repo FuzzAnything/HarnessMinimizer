@@ -280,6 +280,17 @@ class TestDynamicCrashSiteExtraction(unittest.TestCase):
         self.assertEqual(site.library_name, "libtarget.so")
         self.assertEqual(site.offset, "0xbeaf0")
 
+    def test_expected_library_match_does_not_query_filesystem(self):
+        with patch("pathlib.Path.exists", side_effect=AssertionError("no fs")):
+            with patch("pathlib.Path.resolve", side_effect=AssertionError("no fs")):
+                site = extract_first_dynamic_library_crash_site(
+                    SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
+                    expected_library="/tmp/build/lib/libtarget.so",
+                )
+
+        self.assertIsNotNone(site)
+        self.assertEqual(site.offset, "0xbeaf0")
+
     def test_static_target_does_not_enable_unresolved_dependency_fallback(self):
         site = extract_first_dynamic_library_crash_site(
             SAMPLE_DYNAMIC_LIBRARY_OUTPUT,
