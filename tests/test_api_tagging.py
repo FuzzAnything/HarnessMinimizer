@@ -22,13 +22,13 @@ class TestHarnessTagging(unittest.TestCase):
             source_path.write_text(original, encoding="utf-8")
             reducer_runner.configure_work_dir(tmpdir)
 
-            tagged_path = Path(
-                tag_harness_with_fdp_ids(str(source_path), 100000, "FDP_ID")
-            )
+            tagged = tag_harness_with_fdp_ids(str(source_path), 100000, "FDP_ID")
+            tagged_path = Path(tagged)
 
             self.assertEqual(source_path.read_text(encoding="utf-8"), original)
             self.assertEqual(tagged_path.name, "harness.tagged.cpp")
             self.assertNotEqual(tagged_path, source_path)
+            self.assertEqual(tagged.fdp_callsite_count, 1)
             self.assertIn("FDP_ID:100000", tagged_path.read_text(encoding="utf-8"))
 
 

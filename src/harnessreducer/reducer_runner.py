@@ -870,7 +870,7 @@ def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
 def start_amortized_runner(
     link_flags: str | None,
     crash_input: str | None,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     *,
     symbolize: bool,
 ):
@@ -884,7 +884,10 @@ def start_amortized_runner(
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     )
-    env["FDP_TRACE_PATH"] = fdp_trace_file
+    if fdp_trace_file is not None:
+        env["FDP_TRACE_PATH"] = fdp_trace_file
+    else:
+        env.pop("FDP_TRACE_PATH", None)
     library_dirs = tuple(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
     if library_dirs:
         existing = env.get("LD_LIBRARY_PATH", "")
@@ -937,7 +940,7 @@ def start_amortized_runner(
 
 def run_amortized_reference_candidate(
     harness_path: str,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     crash_pattern: str,
     compile_flags: str | None,
     link_flags: str | None,
@@ -957,11 +960,11 @@ def run_amortized_reference_candidate(
         crash_input or "",
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
-        "--fdp-trace",
-        fdp_trace_file,
         "--amortized-runner-socket",
         runner_socket,
     ]
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
     if plugin_link_flags:
         cmd.append(
             f"--amortized-plugin-fallback-link-flags={' '.join(plugin_link_flags)}"
@@ -1929,7 +1932,7 @@ def dump_fdp_trace(
 
 def run_treereducer(
     harness_path: str,
-    fdp_trace_file: str,
+    fdp_trace_file: str | None,
     crash_pattern: str,
     compile_flags: str | None,
     link_flags: str | None,
@@ -1954,7 +1957,7 @@ def run_treereducer(
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
-            use_replay=True,
+            use_replay=fdp_trace_file is not None,
             amortize_link=amortize_link,
         )
         reducer_source = pch_artifacts.body_source
@@ -1987,8 +1990,9 @@ def run_treereducer(
         "--crash-input", crash_input or "",
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
-        "--fdp-trace", fdp_trace_file,
     ])
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))

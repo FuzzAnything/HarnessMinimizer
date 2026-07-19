@@ -33,6 +33,50 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
     assert "int y = 1;" in content
 
 
+def test_inline_literals_supports_direct_input_without_fdp_trace(
+    tmp_path: Path,
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  return data[0] == size ? 1 : 0;
+}
+""",
+        encoding="utf-8",
+    )
+    seed = tmp_path / "seed.bin"
+    seed.write_bytes(bytes([0x41, 0x42, 0x00]))
+
+    with patch("harnessreducer.api.validate_stack_trace", return_value=True) as mock_validate:
+        out, generated_headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            None,
+            "AddressSanitizer",
+            str(seed),
+            "-I/tmp/include",
+            "",
+        )
+
+    assert out.endswith(".inline.cpp")
+    assert len(generated_headers) == 1
+    header = Path(generated_headers[0])
+    assert header.name == "harness_values.h"
+    header_content = header.read_text(encoding="utf-8")
+    assert "static uint8_t fuzz_values[]" in header_content
+    assert "0x41, 0x42, 0x00" in header_content
+    assert "static constexpr size_t fuzz_index = sizeof(fuzz_values);" in header_content
+
+    content = Path(out).read_text(encoding="utf-8")
+    assert '#include "harness_values.h"' in content
+    assert "data = ::fuzz_values;" in content
+    assert "size = ::fuzz_index;" in content
+    mock_validate.assert_called_once()
+    assert mock_validate.call_args.kwargs["fdp_trace_file"] is None
+
+
 def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> None:
     reduced = tmp_path / "reduced.cpp"
     reduced.write_text(

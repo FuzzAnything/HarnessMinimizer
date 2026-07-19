@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from harnessreducer.api import ReductionConfig, process, reduce_with_config
+from harnessreducer.api import ReductionConfig, TaggedHarness, process, reduce_with_config
 
 
 class TestApiPipeline(unittest.TestCase):
@@ -395,6 +395,76 @@ class TestApiPipeline(unittest.TestCase):
 
         mock_slice.assert_not_called()
         mock_tag.assert_called_once_with("a.cpp", start_id=100000, marker="FDP_ID")
+
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.reset_last_interesting_state")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_skips_fdp_dump_for_direct_input_harness(
+        self,
+        mock_check,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_reset_last_interesting_state,
+        mock_compile,
+        mock_dump,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+    ):
+        mock_tag.return_value = TaggedHarness("/tmp/tagged.cpp", 0)
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+        )
+
+        result = reduce_with_config(config)
+
+        self.assertEqual(result.fdp_trace, None)
+        mock_compile.assert_not_called()
+        mock_dump.assert_not_called()
+        mock_reduce.assert_called_once_with(
+            "/tmp/tagged.cpp",
+            None,
+            "AddressSanitizer",
+            None,
+            None,
+            "seed.bin",
+            stable=False,
+            phase3_mode="split",
+            statistics=False,
+            snapshot=False,
+            amortize_link=False,
+        )
+        mock_inline.assert_called_once_with(
+            "/tmp/reduced.cpp",
+            None,
+            "AddressSanitizer",
+            "seed.bin",
+            None,
+            None,
+            100000,
+            phase3_mode="direct",
+            snapshot=False,
+        )
 
 
 if __name__ == "__main__":
