@@ -80,25 +80,6 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 5.  **No Vague Reports**: A report without a specific "Root Cause" and "Blame" is a failed task.
 6.  **No Slow-unit Detection**: Do not try to triage slow-unit artifacts. They are not crashes.
 
-
-## Accessible Information
-
-You can find the harnesses and fuzzers in the `$OUTPUT` directory.
-```
-$OUTPUT/
-├── harnesses/
-│   ├── harness_000.cpp    # Sequential numbering starting from 0
-│   ├── harness_001.cpp    # Each harness targets different APIs/strategies
-│   └── harness_<id>.cpp   # ID must be numeric and sequential
-├── fuzzers/
-│   ├── fuzzer_000/        # Compiled from harness_000.cpp
-│   │   ├── fuzzer         # Standard fuzzer executable
-│   │   ├── fuzzer_cov     # Coverage-instrumented executable
-│   │   └── crashes/       # Crash artifacts directory
-│   └── fuzzer_<id>/       # ID matches corresponding harness ID
-```
-
-
 ## Mandatory Workflow
 
 ### Phase 1: Forensics (Data Gathering)
