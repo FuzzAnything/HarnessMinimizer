@@ -234,7 +234,7 @@ Enables the experimental linkage-amortization backend for the Phase 3 candidate 
 - checks that `--link-flags` identifies at least one shared library (`.so`) or static archive (`.a`)
 - rejects standalone object files in this mode
 - builds one ASan/UBSan-enabled persistent runner
-- loads shared targets and links static targets into the runner once
+- loads shared targets and links the needed static archive members into the runner once
 - compiles each candidate as a small position-independent plugin
 - forks a child for each execution so a crashing candidate does not kill the runner
 - recalibrates the candidate stack-depth reference through the same runner before reduction
@@ -251,8 +251,12 @@ Using `-L/path/to/lib -ltarget` is also supported: libraries found in explicit
 archives. Use `-Wl,-Bstatic` and `-Wl,-Bdynamic` to select explicitly. Multiple
 shared libraries, multiple static archives, and mixed inputs are supported.
 Shared targets are preloaded with `dlopen`; static targets are linked once into
-the persistent runner with exported symbols. Normal dependency flags such as
-`-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`. HarnessReducer also
+the persistent runner with exported symbols. For static archives, HarnessReducer
+compiles a candidate-shaped object, extracts its unresolved symbols, and uses
+those symbols as archive roots so normal linker extraction pulls only the needed
+archive members. If no roots can be inferred, it falls back to the older
+whole-archive runner link. Normal dependency flags such as `-lpthread`, `-lm`,
+and `-ldl` may remain in `--link-flags`. HarnessReducer also
 converts relative `-L` paths to absolute paths and prepends shared-library
 directories to `LD_LIBRARY_PATH`, so an additional runtime `rpath` is not
 required when running through the tool.

@@ -108,6 +108,21 @@ class AmortizedLinkInputs:
     plugin_link_flags: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class StaticArchiveRootConfig:
+    source: str
+    compile_flags: str | None = None
+    pch_path: str | None = None
+    use_replay: bool = False
+
+
+@dataclass(frozen=True)
+class StaticArchiveLinkPlan:
+    flags: tuple[str, ...]
+    root_symbols: tuple[str, ...]
+    uses_whole_archive: bool
+
+
 def cleanup() -> None:
     global TREEDUCER_DIR
 
@@ -833,19 +848,154 @@ def runner_dynamic_dependency_link_flags(
     return ["-Wl,--no-as-needed", *dynamic_flags, "-Wl,--as-needed"]
 
 
-def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
-    source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
-    output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
-    static_link_flags: list[str] = []
-    if link_inputs.static_libraries:
-        static_link_flags = [
+def _nm_posix_symbols(
+    command: list[str],
+    error_prefix: str,
+    symbol_types: set[str] | None = None,
+) -> set[str]:
+    proc = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        err_msg = proc.stderr.strip() or proc.stdout.strip() or "Unknown nm error"
+        raise RuntimeError(f"{error_prefix}: {err_msg}")
+
+    symbols: set[str] = set()
+    for line in proc.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.endswith(":"):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2 and (
+            symbol_types is None or parts[1] in symbol_types
+        ):
+            symbols.add(parts[0])
+    return symbols
+
+
+def undefined_symbols_from_object(object_path: str | Path) -> tuple[str, ...]:
+    symbols = _nm_posix_symbols(
+        ["nm", "-u", "--format=posix", str(object_path)],
+        f"Failed to inspect undefined symbols in {object_path}",
+        symbol_types={"U"},
+    )
+    return tuple(sorted(symbols))
+
+
+def defined_symbols_from_static_libraries(
+    static_libraries: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not static_libraries:
+        return ()
+    symbols = _nm_posix_symbols(
+        ["nm", "--defined-only", "--format=posix", *static_libraries],
+        "Failed to inspect symbols in static target libraries",
+    )
+    return tuple(sorted(symbols))
+
+
+def static_archive_root_symbols_from_object(
+    object_path: str | Path,
+    static_libraries: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not static_libraries:
+        return ()
+    undefined_symbols = set(undefined_symbols_from_object(object_path))
+    defined_symbols = set(defined_symbols_from_static_libraries(static_libraries))
+    return tuple(sorted(undefined_symbols & defined_symbols))
+
+
+def plan_static_archive_runner_link(
+    link_inputs: AmortizedLinkInputs,
+    static_root_object: str | Path | None = None,
+) -> StaticArchiveLinkPlan:
+    if not link_inputs.static_libraries:
+        return StaticArchiveLinkPlan(flags=(), root_symbols=(), uses_whole_archive=False)
+
+    if static_root_object is not None:
+        root_symbols = static_archive_root_symbols_from_object(
+            static_root_object,
+            link_inputs.static_libraries,
+        )
+        if root_symbols:
+            flags: list[str] = [
+                "-no-pie",
+                "-Wl,--export-dynamic",
+                *(f"-Wl,-u,{symbol}" for symbol in root_symbols),
+                *link_inputs.static_libraries,
+            ]
+            return StaticArchiveLinkPlan(
+                flags=tuple(flags),
+                root_symbols=root_symbols,
+                uses_whole_archive=False,
+            )
+
+    return StaticArchiveLinkPlan(
+        flags=(
             "-no-pie",
             "-Wl,--export-dynamic",
             "-Wl,--whole-archive",
             *link_inputs.static_libraries,
             "-Wl,--no-whole-archive",
+        ),
+        root_symbols=(),
+        uses_whole_archive=True,
+    )
+
+
+def amortized_runner_link_tail(
+    link_inputs: AmortizedLinkInputs,
+    static_root_object: str | Path | None = None,
+) -> list[str]:
+    static_plan = plan_static_archive_runner_link(link_inputs, static_root_object)
+    return [
+        *static_plan.flags,
+        *runner_dynamic_dependency_link_flags(link_inputs),
+    ]
+
+
+def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
+    output = Path(get_work_dir()) / f"amortized_static_roots_{time.time_ns()}.o"
+    cmd = ["clang++", "-Qunused-arguments"]
+    if config.pch_path is not None:
+        cmd.extend(["-include-pch", config.pch_path])
+        opt_flags = PHASE3_PCH_OPT_FLAGS
+    else:
+        opt_flags = PHASE3_SPLIT_OPT_FLAGS
+    cmd.extend(
+        [
+            *_phase3_replay_flags(config.use_replay),
+            *PHASE3_PLUGIN_SANITIZER_FLAGS,
+            *opt_flags,
+            *PHASE3_WARNING_FLAGS,
+            "-fPIC",
+            "-c",
+            *_split_flags(config.compile_flags),
+            config.source,
+            "-o",
+            str(output),
         ]
-    dynamic_dependency_flags = runner_dynamic_dependency_link_flags(link_inputs)
+    )
+    run_command(cmd, "Failed to compile static-archive root object")
+    return str(output)
+
+
+def _compile_harness_runner(
+    link_inputs: AmortizedLinkInputs,
+    static_root_config: StaticArchiveRootConfig | None = None,
+) -> str:
+    source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
+    output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
+    static_root_object = (
+        compile_static_archive_root_object(static_root_config)
+        if static_root_config is not None and link_inputs.static_libraries
+        else None
+    )
+    link_tail = amortized_runner_link_tail(link_inputs, static_root_object)
     run_command(
         [
             "clang++",
@@ -855,8 +1005,7 @@ def _compile_harness_runner(link_inputs: AmortizedLinkInputs) -> str:
             "-gline-tables-only",
             "-fno-omit-frame-pointer",
             str(source),
-            *static_link_flags,
-            *dynamic_dependency_flags,
+            *link_tail,
             "-ldl",
             "-o",
             str(output),
@@ -873,10 +1022,11 @@ def start_amortized_runner(
     fdp_trace_file: str | None,
     *,
     symbolize: bool,
+    static_root_config: StaticArchiveRootConfig | None = None,
 ):
     link_inputs = resolve_amortized_link_inputs(link_flags)
     shared_libraries = link_inputs.shared_libraries
-    runner_binary = _compile_harness_runner(link_inputs)
+    runner_binary = _compile_harness_runner(link_inputs, static_root_config)
     socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
     env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
@@ -2006,6 +2156,12 @@ def run_treereducer(
             crash_input,
             fdp_trace_file,
             symbolize=False,
+            static_root_config=StaticArchiveRootConfig(
+                source=reducer_source,
+                compile_flags=compile_flags,
+                pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
+                use_replay=fdp_trace_file is not None,
+            ),
         )
         if amortize_link
         else nullcontext(None)
