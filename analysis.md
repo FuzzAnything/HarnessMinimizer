@@ -244,10 +244,13 @@ Phase 3 reduction-loop modes currently are:
 
 With `--amortize-link`, split and PCH candidates are compiled as PIC
 shared-object plugins without the stable target link flags. A persistent
-ASan/UBSan runner loads the target `.so` files and crash input once, then forks
-a child to `dlopen` and execute each candidate. Normal and check-mode stack
-references are recalibrated through this backend before `treereduce-c` starts.
-Direct/single-step mode and static target archives are currently rejected.
+ASan/UBSan runner loads target `.so` files, links needed static archive members,
+and reads the crash input once, then forks a child to `dlopen` and execute each
+candidate. Static archive members are selected from unresolved symbols in a
+candidate-shaped object, with whole-archive retained only as a compatibility
+fallback when no roots can be inferred. Normal and check-mode stack references
+are recalibrated through this backend before `treereduce-c` starts.
+Direct/single-step mode is incompatible with amortized linking.
 
 All Phase 3 modes now add `-Werror=uninitialized` and use `-O0` while keeping their mode-specific debug flags:
 

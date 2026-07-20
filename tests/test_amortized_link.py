@@ -33,6 +33,36 @@ def _compile_static_archive(
     return archive
 
 
+def _compile_static_archive_from_sources(
+    tmp_path: Path,
+    name: str,
+    sources: dict[str, str],
+) -> Path:
+    object_files: list[Path] = []
+    for source_name, source_text in sources.items():
+        source = tmp_path / f"{name}_{source_name}.cpp"
+        object_file = tmp_path / f"{name}_{source_name}.o"
+        source.write_text(source_text, encoding="utf-8")
+        subprocess.run(
+            [
+                "clang++",
+                "-c",
+                "-fsanitize=address,undefined",
+                "-O1",
+                "-gline-tables-only",
+                str(source),
+                "-o",
+                str(object_file),
+            ],
+            check=True,
+        )
+        object_files.append(object_file)
+
+    archive = tmp_path / f"lib{name}.a"
+    subprocess.run(["ar", "rcs", str(archive), *map(str, object_files)], check=True)
+    return archive
+
+
 def test_amortized_link_resolves_multiple_dynamic_libraries(tmp_path: Path) -> None:
     libraries: list[Path] = []
     for name in ("first", "second"):
@@ -322,6 +352,86 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
             str(entry_archive.resolve()),
             str(helper_archive.resolve()),
         )
+        result = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                str(harness_source),
+                "AddressSanitizer",
+                "--split",
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert result.returncode == 77, result.stdout + result.stderr
+    assert "AddressSanitizer" in result.stdout + result.stderr
+
+
+def test_amortized_static_runner_uses_rooted_archive_members(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-rooted-static"))
+    target_archive = _compile_static_archive_from_sources(
+        tmp_path,
+        "rooted_static",
+        {
+            "entry": """
+extern "C" void rooted_static_helper();
+extern "C" void rooted_static_crash() { rooted_static_helper(); }
+""",
+            "helper": """
+extern "C" __attribute__((noinline)) void rooted_static_helper() {
+  volatile int *values = new int[1];
+  values[4] = 7;
+}
+""",
+            "unused": """
+extern "C" void missing_unrelated_dependency();
+extern "C" void unused_static_feature() { missing_unrelated_dependency(); }
+""",
+        },
+    )
+    harness_source = tmp_path / "rooted_static_harness.cpp"
+    harness_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+extern "C" void rooted_static_crash();
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
+  rooted_static_crash();
+  return 0;
+}
+""",
+        encoding="utf-8",
+    )
+    trace_path = tmp_path / "rooted_static_fdp_trace.log"
+    trace_path.write_text("", encoding="utf-8")
+    root_object = reducer_runner.compile_static_archive_root_object(
+        reducer_runner.StaticArchiveRootConfig(source=str(harness_source))
+    )
+    plan = reducer_runner.plan_static_archive_runner_link(
+        reducer_runner.resolve_amortized_link_inputs(str(target_archive)),
+        root_object,
+    )
+    assert not plan.uses_whole_archive
+    assert "-Wl,--whole-archive" not in plan.flags
+    assert any(flag.endswith(",rooted_static_crash") for flag in plan.flags)
+
+    with reducer_runner.start_amortized_runner(
+        str(target_archive),
+        None,
+        str(trace_path),
+        symbolize=False,
+        static_root_config=reducer_runner.StaticArchiveRootConfig(
+            source=str(harness_source),
+        ),
+    ) as runner:
         result = subprocess.run(
             [
                 sys.executable,

@@ -15,6 +15,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_SPLIT,
     PchArtifacts,
     STACK_FRAME_COUNT_PATTERN,
+    StaticArchiveRootConfig,
     dynamic_crash_site_tester_args,
     get_last_interesting_file,
     extract_first_sanitizer_stack_trace,
@@ -407,6 +408,12 @@ def run_treereducer_with_check(
             crash_input,
             fdp_trace_file,
             symbolize=True,
+            static_root_config=StaticArchiveRootConfig(
+                source=reducer_source,
+                compile_flags=compile_flags,
+                pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
+                use_replay=fdp_trace_file is not None,
+            ),
         )
         if amortize_link
         else nullcontext(None)
@@ -417,6 +424,12 @@ def run_treereducer_with_check(
             crash_input,
             fdp_trace_file,
             symbolize=False,
+            static_root_config=StaticArchiveRootConfig(
+                source=reducer_source,
+                compile_flags=compile_flags,
+                pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
+                use_replay=fdp_trace_file is not None,
+            ),
         )
         if amortize_link
         else nullcontext(None)

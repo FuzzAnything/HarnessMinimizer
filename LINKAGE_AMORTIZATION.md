@@ -605,7 +605,7 @@ Why:
 The one-time runner link expects an archive of object files. Passing arbitrary
 data with an `.a` name would otherwise produce a confusing linker error.
 
-### 8.2 Link the archive into the runner once
+### 8.2 Link needed archive members into the runner once
 
 A simplified command is:
 
@@ -613,25 +613,30 @@ A simplified command is:
 clang++ ... harness_runner.cpp \
   -no-pie \
   -Wl,--export-dynamic \
-  -Wl,--whole-archive libtarget1.a libtarget2.a -Wl,--no-whole-archive \
+  -Wl,-u,_Z17target_entry_pointv \
+  libtarget1.a libtarget2.a \
   -lpthread -lm -ldl \
   -o harness_runner
 ```
 
 What is done:
 
-All target archive code needed by future candidate plugins is placed in the
-persistent runner. This link happens once, before TreeReduce starts testing
-candidates.
+HarnessReducer compiles a candidate-shaped object before building the persistent
+runner. It reads that object's unresolved symbols, intersects them with symbols
+defined by the target static archives, and passes the matches to the linker with
+`-Wl,-u,<symbol>`. Those symbols seed normal static archive extraction, so the
+runner gets the archive members reachable from the harness's real target API
+calls. This link happens once, before TreeReduce starts testing candidates.
 
 Why:
 
 A `.a` has no runtime loader representation. Some executable or shared object
 must contain its object code. Putting it in the persistent runner makes the
 code available to every forked candidate executor without linking it into every
-candidate plugin.
+candidate plugin. Using root symbols keeps the runner link close to the normal
+external harness link: unrelated archive members are not pulled into the runner.
 
-### 8.3 Why `--whole-archive` is required
+### 8.3 Why rooted archive extraction is used
 
 This is the most important static-library detail.
 
@@ -646,33 +651,30 @@ linker sees libtarget.a
              `-- no  -> leave member X in the archive
 ```
 
-At runner-build time, `harness_runner.cpp` does not call `aom_decode()`. The
-future candidate plugin will call it, but that plugin does not exist yet.
-
-Without `--whole-archive`, the linker sees no current reference from the runner
-to most target functions:
+At runner-build time, `harness_runner.cpp` itself does not call
+`aom_decode()`. The future candidate plugin will call it, but that plugin does
+not exist yet. HarnessReducer therefore creates an explicit linker root:
 
 ```text
-harness_runner.cpp          libaom.a
-  does not call aom_decode   contains aom_decode
-          |
-          `--> linker thinks the archive member is unused
-               and does not copy it into harness_runner
-```
-
-Later, `candidate.so` needs `aom_decode`, but the runner does not contain it. The
-plugin load fails.
-
-`--whole-archive` changes the rule:
-
-```text
--Wl,--whole-archive libaom.a
+-Wl,-u,aom_decode libaom.a
         |
-        `--> include every archive member, even if the runner does not
-             currently reference its symbols
+        `--> linker treats aom_decode as currently unresolved
+             and extracts the archive member that defines it
 ```
 
-This ensures that functions needed by any future candidate are present.
+The linker then follows normal references from extracted members. If the member
+that defines `aom_decode` references helper symbols in later archives, those
+helpers are resolved through the usual archive extraction rules and the original
+`--link-flags` order still matters.
+
+This is different from the older `--whole-archive` implementation, which copied
+every archive member into the runner. Whole-archive was robust for small
+archives but over-approximated large libraries: unrelated modules could require
+unrelated dependency libraries, forcing users to add link flags that a normal
+harness executable did not need.
+
+If HarnessReducer cannot infer any archive root symbols from the candidate-like
+object, it falls back to whole-archive for compatibility.
 
 ### 8.4 When static symbols are hidden
 
@@ -740,9 +742,10 @@ position-independent code, fallback linking into `candidate.so` may still fail;
 in that case the reliable choices are a default-visible shared target build or
 running without `--amortize-link`.
 
-### 8.5 Why `--no-whole-archive` is required afterward
+### 8.5 Whole-archive fallback boundaries
 
-What is done:
+When the rooted-symbol plan cannot find any static archive roots, HarnessReducer
+falls back to the older whole-archive link:
 
 ```bash
 -Wl,--whole-archive libaom.a -Wl,--no-whole-archive -lpthread -lm
@@ -818,18 +821,19 @@ remain position independent.
 
 ### 8.8 Multiple static archives
 
-Multiple archives are put inside the same controlled whole-archive region:
+Multiple archives are passed to the runner link in the order inferred from
+`--link-flags`:
 
 ```bash
--Wl,--whole-archive \
-  libtarget.a libhelper.a libcodec.a \
--Wl,--no-whole-archive
+-Wl,-u,target_entry \
+  libtarget.a libhelper.a libcodec.a
 ```
 
 Why:
 
-All members are included once, and references between the archives can be
-resolved during the one-time runner link. The candidate loop then reuses the
+Root symbols extract the directly needed members, and references between the
+archives can be resolved during the one-time runner link using normal linker
+archive rules. The candidate loop then reuses the
 combined result.
 
 The cost is that the runner can be larger than a normal selectively linked
@@ -843,9 +847,9 @@ to eliminate thousands of repeated target links.
 | What is the input? | A loadable ELF image. | An archive of object files. |
 | Can `dlopen()` load it? | Yes. | No. |
 | Where does target code live? | In a separately mapped `.so`. | Usually inside `harness_runner`; a candidate that needs hidden static symbols is retried with those symbols in `candidate.so`. |
-| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with `--whole-archive`; candidate-side fallback is only used after an actual unresolved-symbol load failure. |
+| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with a rooted archive-symbol closure; whole-archive is only a compatibility fallback when no roots are inferred. |
 | How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `--export-dynamic` publishes runner symbols, but it cannot publish hidden/protected symbols. |
-| Why not normal archive linking? | Not applicable. | The runner has no direct target references, so normal lazy extraction would omit needed members. |
+| Why not plain runner archive linking? | Not applicable. | The runner source has no direct target references, so HarnessReducer seeds archive extraction with unresolved symbols from the candidate-shaped object. |
 | What is inherited after `fork()`? | Shared-library mappings. | Runner text containing archive code; fallback candidate code is loaded only when needed. |
 | Is the target linked into each candidate? | No. | No normally; yes only for candidates that fail the fast `dlopen()` path with an unresolved symbol. |
 
@@ -875,16 +879,16 @@ The steps are:
 
 1. Resolve `libtarget.a` and `libhelper.a` as static targets.
 2. Resolve `libcodec.so` as a shared target.
-3. Link the static archives into `harness_runner` with
-   `--whole-archive`.
-4. Export their symbols with `--export-dynamic`.
-5. Make selected shared targets available during the one-time runner link when
+3. Compile a candidate-shaped object and infer static archive root symbols.
+4. Link the needed static archive members into `harness_runner`.
+5. Export their symbols with `--export-dynamic`.
+6. Make selected shared targets available during the one-time runner link when
    they are needed to satisfy references from static code.
-6. Start the runner.
-7. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
-8. Load each candidate plugin. Its unresolved target calls may now resolve from
+7. Start the runner.
+8. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
+9. Load each candidate plugin. Its unresolved target calls may now resolve from
    either the runner or the shared library.
-9. If loading a candidate fails with `undefined symbol`, relink that candidate
+10. If loading a candidate fails with `undefined symbol`, relink that candidate
    plugin with the original `--link-flags` and retry it once.
 
 The result is:
@@ -1193,7 +1197,7 @@ the wrong name or a non-loadable file.
 
 ### Why static system archives should not be forced in
 
-Applying `--whole-archive` to all system static libraries could:
+Forcing all members from every system static library into the runner could:
 
 - make the runner unnecessarily large;
 - introduce duplicate libc/runtime definitions;
@@ -1263,8 +1267,9 @@ during loading.
 | `-ldl` | Links the dynamic-loading API. | Provides `dlopen()` and `dlsym()` to the runner. |
 | `-O1` | Applies light optimization. | Used for stable runner code that is compiled only once. |
 | `-fno-omit-frame-pointer` | Retains frame pointers. | Improves sanitizer stack unwinding in runner code. |
-| `-Wl,--whole-archive` | Forces all members from following archives into the output. | Keeps static target functions that only future plugins will reference. |
-| `-Wl,--no-whole-archive` | Returns to normal selective archive behavior. | Prevents whole-archive behavior from affecting system dependencies. |
+| `-Wl,-u,<symbol>` | Adds an unresolved linker root. | Seeds normal static archive extraction with symbols used by the candidate-shaped object. |
+| `-Wl,--whole-archive` | Forces all members from following archives into the output. | Compatibility fallback when no static archive roots can be inferred. |
+| `-Wl,--no-whole-archive` | Returns to normal selective archive behavior. | Prevents fallback whole-archive behavior from affecting system dependencies. |
 | `-Wl,--export-dynamic` | Publishes executable symbols to the dynamic loader. | Lets candidate plugins resolve calls against static target code in the runner. |
 | `-Wl,--no-as-needed` | Keeps following dynamic libraries as runtime dependencies even if the runner code does not directly call them. | Lets the persistent runner retain helper DSOs such as libnl when a target `.so` has unresolved helper symbols. |
 | `-Wl,--as-needed` | Restores normal behavior after the protected dynamic dependency region. | Prevents the retention rule from unintentionally affecting later linker inputs. |
@@ -1375,8 +1380,8 @@ feature.
   archive.
 - A `.so` linker script is rejected because `dlopen()` needs a real ELF file.
 - Target code must be compatible with the runner's ASan/UBSan environment.
-- Static archives with duplicate definitions may fail the one-time
-  `--whole-archive` link.
+- Static archives with duplicate definitions can still fail the one-time link,
+  especially if the runner falls back to whole-archive mode.
 - Static archives with hidden/protected target symbols cannot expose those
   symbols from the runner. If a candidate actually needs one, HarnessReducer
   retries that candidate by linking it with the original `--link-flags`, which
@@ -1408,8 +1413,10 @@ Shared target solution:
 
 Static target solution:
   A `.a` cannot be loaded.
-  Link all members into the runner once with --whole-archive.
+  Compile a candidate-shaped object and use its undefined target symbols as
+  -u roots for normal static archive extraction.
   Export runner symbols with --export-dynamic.
+  Fall back to whole-archive only if no roots can be inferred.
   If one candidate still fails to load because it needs a hidden static symbol,
   relink only that candidate with the original --link-flags and retry it.
 

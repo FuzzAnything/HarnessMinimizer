@@ -146,11 +146,12 @@ The report also measures:
 - function-call start until child termination; and
 - socket request/response time.
 
-For static targets, both runner-build rows state that their time includes
-copying every object file from the static archives into the runner. The
-dynamic-target `dlopen()` row is shown as not applicable because a static
-archive is not loaded with `dlopen()`. In a mixed configuration, the build rows
-carry the static-object note and the `dlopen()` row measures the dynamic targets.
+For static targets, the report states whether the runner build used rooted
+static archive extraction or the whole-archive fallback, and it reports the
+number of inferred root symbols. The dynamic-target `dlopen()` row is shown as
+not applicable because a static archive is not loaded with `dlopen()`. In a
+mixed configuration, the build rows carry the static-target note and the
+`dlopen()` row measures the dynamic targets.
 If a lightweight plugin load fails with `undefined symbol`, the timing runner
 request measurement retries that iteration with `candidate.fallback.so`. The
 failed fast-path request is reported separately in the amortized request

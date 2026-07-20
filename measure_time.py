@@ -586,22 +586,6 @@ def measure_standalone_execution(
     return samples, statuses
 
 
-def runner_link_tail(link_inputs: rr.AmortizedLinkInputs) -> list[str]:
-    tail: list[str] = []
-    if link_inputs.static_libraries:
-        tail.extend(
-            [
-                "-no-pie",
-                "-Wl,--export-dynamic",
-                "-Wl,--whole-archive",
-                *link_inputs.static_libraries,
-                "-Wl,--no-whole-archive",
-            ]
-        )
-    tail.extend(rr.runner_dynamic_dependency_link_flags(link_inputs))
-    return tail
-
-
 def parse_startup_file(path: Path) -> dict[str, object]:
     result: dict[str, object] = {"target_dlopen_ns": []}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -1124,7 +1108,19 @@ def main() -> int:
         timing_source = output_dir / "timing_runner.cpp"
         timing_runner = output_dir / "timing_runner"
         timing_source.write_text(TIMING_RUNNER_SOURCE, encoding="utf-8")
-        link_tail = runner_link_tail(link_inputs)
+        static_root_object = plugin_pch_object if link_inputs.static_libraries else None
+        static_plan_start_ns = time.perf_counter_ns()
+        static_link_plan = rr.plan_static_archive_runner_link(
+            link_inputs,
+            static_root_object,
+        )
+        one_time["static_archive_link_plan_ns"] = (
+            time.perf_counter_ns() - static_plan_start_ns
+        )
+        link_tail = [
+            *static_link_plan.flags,
+            *rr.runner_dynamic_dependency_link_flags(link_inputs),
+        ]
         common_runner_prefix = [
             "clang++",
             "-std=c++17",
@@ -1259,18 +1255,51 @@ def main() -> int:
         report.table(["Kind", "Resolved path"], library_rows)
         report.subsection("Normal one-time runner dependencies")
         report.add(format_command(link_inputs.runner_link_flags) or "(none)")
+        if link_inputs.static_libraries:
+            report.subsection("Static archive runner extraction")
+            extraction_mode = (
+                "whole-archive fallback"
+                if static_link_plan.uses_whole_archive
+                else "rooted undefined-symbol closure"
+            )
+            report.table(
+                ["Field", "Value"],
+                [
+                    ("Mode", extraction_mode),
+                    ("Root symbol count", len(static_link_plan.root_symbols)),
+                    (
+                        "Root symbols",
+                        (
+                            ", ".join(static_link_plan.root_symbols[:20])
+                            + (
+                                " ..."
+                                if len(static_link_plan.root_symbols) > 20
+                                else ""
+                            )
+                        )
+                        or "(none)",
+                    ),
+                ],
+            )
 
         report.section("B", "ONE-TIME PREPARATION")
-        static_build_note = (
-            " (includes copying all static-archive object files)"
-            if link_inputs.static_libraries
-            else ""
-        )
+        if link_inputs.static_libraries:
+            static_build_note = (
+                " (rooted static archive extraction)"
+                if not static_link_plan.uses_whole_archive
+                else " (whole-archive static fallback)"
+            )
+        else:
+            static_build_note = ""
         one_time_rows = [
             ("Classify link flags", ns_to_ms(one_time["link_classification_ns"])),
             ("Split source and write PCH inputs", ns_to_ms(one_time["source_split_and_write_ns"])),
             ("Build normal PCH", ns_to_ms(one_time["normal_pch_build_ns"])),
             ("Build amortized PCH", ns_to_ms(one_time["amortized_pch_build_ns"])),
+            (
+                "Plan static archive runner link",
+                ns_to_ms(one_time["static_archive_link_plan_ns"]),
+            ),
             (
                 "Build production harness_runner" + static_build_note,
                 ns_to_ms(one_time["production_runner_build_ns"]),
@@ -1565,6 +1594,11 @@ def main() -> int:
                 "shared_libraries": list(link_inputs.shared_libraries),
                 "runner_link_flags": list(link_inputs.runner_link_flags),
                 "plugin_fallback_link_flags": list(link_inputs.plugin_link_flags),
+                "static_archive_link_plan": {
+                    "uses_whole_archive": static_link_plan.uses_whole_archive,
+                    "root_symbols": list(static_link_plan.root_symbols),
+                    "flags": list(static_link_plan.flags),
+                },
             },
             "one_time_ns": one_time,
             "startup_metrics": startup_metrics,
