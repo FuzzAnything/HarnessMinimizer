@@ -3,8 +3,10 @@
 .vscode/
 output/
 .env
-build/
-!benchmark/library-bug/libpcap-2/build/
+benchmark/*/*/build/sanitizer/lib
+benchmark/*/*/build/sanitizer/include
+!benchmark/library-bug/libpcap-2/build/sanitizer/lib
+!benchmark/library-bug/libpcap-2/build/sanitizer/include
 fdp_visible_recorder.h
 generate_reproducer.py
 mark_fdp_calls.py
