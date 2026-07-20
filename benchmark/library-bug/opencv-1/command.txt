@@ -1,10 +1,22 @@
+opencv-1
 harnessreducer harness.cpp \
-  --compile-flags="-I$(pwd)/build/sanitizer/include" \
-  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz" \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
   --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
   --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+opencv-2
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_objdetect -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
+  --work-dir ./statistics-pch \
+  --crash-input crash-input \
+  --pch \
   --stable \
   --statistics \
   -o reduced.cpp
