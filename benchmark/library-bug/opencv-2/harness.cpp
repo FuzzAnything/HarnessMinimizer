@@ -104,6 +104,8 @@ Mat createTestImage(FuzzedDataProvider& fdp, int max_width = 640, int max_height
 std::string getCascadeFilePath(const std::string& cascade_name) {
     // Try multiple possible locations for cascade files
     std::vector<std::string> possible_paths = {
+        "build/sanitizer/share/opencv4/haarcascades/" + cascade_name,
+        "./build/sanitizer/share/opencv4/haarcascades/" + cascade_name,
         "/root/src/opencv/data/haarcascades/" + cascade_name,
         "/usr/local/share/opencv4/haarcascades/" + cascade_name,
         "/usr/share/opencv4/haarcascades/" + cascade_name,

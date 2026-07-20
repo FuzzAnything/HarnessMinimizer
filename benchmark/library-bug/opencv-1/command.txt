@@ -14,9 +14,10 @@ opencv-2
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
   --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_objdetect -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
-  --work-dir ./statistics-pch \
+  --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
+  --amortize-link \
   --stable \
   --statistics \
   -o reduced.cpp
