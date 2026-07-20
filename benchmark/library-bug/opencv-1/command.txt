@@ -1,0 +1,10 @@
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz" \
+  --work-dir ./statistics-pch-link \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp

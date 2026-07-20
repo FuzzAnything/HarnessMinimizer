@@ -209,6 +209,11 @@ python3 crash_triage.py benchmark/library-bug/libpcap-3/harness.cpp \
   --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a" \
   --crash-input benchmark/library-bug/libpcap-3/crash-input
 
+python3 crash_triage.py benchmark/library-bug/libpcap-3/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-3/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --crash-input benchmark/library-bug/libpcap-3/crash-input
+
 python3 crash_triage.py benchmark/library-bug/libpcap-3/reduced.cpp \
   --compile-flags="-Ibenchmark/library-bug/libpcap-3/build/sanitizer/include" \
   --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a" \
