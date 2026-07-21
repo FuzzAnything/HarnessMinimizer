@@ -154,9 +154,9 @@ mixed configuration, the build rows carry the static-target note and the
 `dlopen()` row measures the dynamic targets.
 If a lightweight plugin load fails with `undefined symbol`, the timing runner
 request measurement retries that iteration with `candidate.fallback.so`. The
-failed fast-path request is reported separately in the amortized request
-breakdown, while the fallback plugin link cost is reported in the output-linking
-section.
+output-linking section reports whether fallback was actually needed for
+`symbolize=0` and `symbolize=1`. This distinguishes a fallback plugin that was
+merely link-timed from one that was required by the measured candidate.
 
 `dlsym()` only finds the harness function address. The following function-pointer
 call performs the actual candidate execution. If the candidate crashes, its
@@ -255,5 +255,5 @@ python3 measure_time.py benchmark/library-bug/opencv-1/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr" \
   --link-flags="-Lbenchmark/library-bug/opencv-1/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
   --crash-input benchmark/library-bug/opencv-1/crash-input \
-  --suffix dynamic \
+  --suffix static \
   -o benchmark/library-bug/opencv-1/harness.out
