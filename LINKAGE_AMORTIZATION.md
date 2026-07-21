@@ -726,20 +726,26 @@ first attempt for each candidate
 
 Why:
 
-The fallback is only used after a concrete loader failure. If an archive has
-hidden symbols that the current candidate never calls, the fast path still runs.
-If the current candidate does call a hidden static API such as `bpf_validate`,
-the fallback candidate plugin contains the needed static-library code itself,
-so `bpf_validate` is resolved inside `candidate.so` instead of through the
-runner.
+The fallback is enabled only after a concrete loader failure. If an archive has
+hidden symbols that candidates never call, the fast path still runs. If a
+candidate does call a hidden static API such as `bpf_validate`, the fallback
+candidate plugin contains the needed static-library code itself, so
+`bpf_validate` is resolved inside `candidate.so` instead of through the runner.
+
+After the first unresolved-symbol fallback succeeds, HarnessReducer records a
+small socket-local fallback window. Later candidates start with the original
+`--link-flags` during that window instead of first paying for a fast-path
+`dlopen()` failure. When the window expires, the tester probes the lightweight
+link again. If the fast path succeeds, fallback-first mode naturally stops; if
+it fails again, the window is renewed.
 
 Tradeoff:
 
-This fallback gives up the static-library speedup only for candidates that
-actually need hidden static symbols. Candidates that do not need those symbols
-continue using the fast runner-export path. If the archive was not compiled as
-position-independent code, fallback linking into `candidate.so` may still fail;
-in that case the reliable choices are a default-visible shared target build or
+This fallback gives up the static-library speedup only after candidates prove
+they need hidden static symbols, then periodically checks whether the fast path
+has become valid again. If the archive was not compiled as position-independent
+code, fallback linking into `candidate.so` may still fail; in that case the
+reliable choices are a default-visible shared target build or
 running without `--amortize-link`.
 
 ### 8.5 Whole-archive fallback boundaries
@@ -890,6 +896,8 @@ The steps are:
    either the runner or the shared library.
 10. If loading a candidate fails with `undefined symbol`, relink that candidate
    plugin with the original `--link-flags` and retry it once.
+11. After a successful fallback retry, link later candidates with the fallback
+   flags first for a bounded window, then probe the lightweight path again.
 
 The result is:
 
@@ -1001,9 +1009,11 @@ global process scope.
 If this load fails with `undefined symbol`, the tester does not immediately
 return a compile failure. It relinks the same `candidate.o` once with the
 original `--link-flags`, then asks the runner to load the new `candidate.so`.
-This fallback is only used for that candidate. If the hidden or otherwise
-unexported symbol disappears in a later reduced candidate, the later candidate
-returns to the lightweight link shown above.
+After one candidate needs this retry, the tester caches fallback-first mode next
+to the runner socket for a bounded number of candidate checks. When that
+countdown reaches zero, the tester links one lightweight candidate again as a
+probe. If the hidden or otherwise unexported symbol has disappeared in the
+reduced candidate, the fast path resumes.
 
 Why `-shared`:
 

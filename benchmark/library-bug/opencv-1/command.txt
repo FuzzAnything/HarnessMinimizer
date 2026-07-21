@@ -36,7 +36,7 @@ harnessreducer harness.cpp \
 opencv-3
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
-  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_stitching -lopencv_imgcodecs -lopencv_features2d -lopencv_calib3d -lopencv_flann -lopencv_imgproc -lopencv_core -llibjpeg-turbo -llibpng -llibtiff -llibwebp -llibopenjp2 -lIlmImf -lzlib -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
   --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \

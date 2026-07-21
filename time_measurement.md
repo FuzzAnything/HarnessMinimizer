@@ -250,3 +250,10 @@ echo "$UBSAN_SYMBOLIZER_PATH"
 
 export ASAN_OPTIONS=symbolize=0:handle_abort=1
 export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:symbolize=0
+
+python3 measure_time.py benchmark/library-bug/opencv-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr" \
+  --link-flags="-Lbenchmark/library-bug/opencv-1/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
+  --crash-input benchmark/library-bug/opencv-1/crash-input \
+  --suffix dynamic \
+  -o benchmark/library-bug/opencv-1/harness.out

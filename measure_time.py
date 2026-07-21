@@ -545,10 +545,18 @@ def read_exact(stream, size: int) -> bytes:
     return data
 
 
-def sanitizer_env(link_flags: str | None, symbolize: bool) -> dict[str, str]:
+def sanitizer_env(
+    link_flags: str | None,
+    symbolize: bool,
+    *,
+    detect_odr_violation: bool = True,
+) -> dict[str, str]:
     env = rr.runtime_library_env(link_flags)
     value = "1" if symbolize else "0"
-    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={value}:handle_abort=1"
+    env["ASAN_OPTIONS"] = rr.sanitizer_asan_options(
+        symbolize=symbolize,
+        detect_odr_violation=detect_odr_violation,
+    )
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:symbolize={value}:halt_on_error=1:print_stacktrace=1"
     )
@@ -618,7 +626,7 @@ def start_timing_runner(
     except FileNotFoundError:
         pass
 
-    env = sanitizer_env(link_flags, symbolize)
+    env = sanitizer_env(link_flags, symbolize, detect_odr_violation=False)
     command = [
         str(runner_binary),
         str(socket_path),

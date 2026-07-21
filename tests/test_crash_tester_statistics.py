@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 from tests import crash_tester
 
@@ -50,6 +51,94 @@ class TestCrashTesterStatistics(unittest.TestCase):
             source.write_text("int a = 2;\n", encoding="utf-8")
             crash_tester._update_last_interesting_file(str(source), str(snapshot))
             self.assertEqual(snapshot.read_text(encoding="utf-8"), "int a = 2;\n")
+
+    def test_amortized_fallback_state_uses_countdown_before_fast_probe(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = Namespace(
+                amortized_runner_socket=str(Path(tmpdir) / "runner.sock"),
+                amortized_plugin_fallback_link_flags="-ltarget",
+            )
+
+            self.assertIsNone(crash_tester.amortized_initial_plugin_link_flags(args))
+
+            crash_tester._enable_amortized_fallback_first(args, probe_interval=2)
+
+            self.assertEqual(
+                crash_tester.amortized_initial_plugin_link_flags(args),
+                "-ltarget",
+            )
+            self.assertEqual(
+                crash_tester.amortized_initial_plugin_link_flags(args),
+                "-ltarget",
+            )
+            self.assertIsNone(crash_tester.amortized_initial_plugin_link_flags(args))
+
+    def test_amortized_fallback_retry_enables_fallback_first_window(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = Namespace(
+                amortized_runner_socket=str(Path(tmpdir) / "runner.sock"),
+                amortized_plugin_fallback_link_flags="-ltarget",
+            )
+
+            with (
+                patch(
+                    "tests.crash_tester.run_with_amortized_runner",
+                    side_effect=[
+                        (125, "dlopen candidate failed: candidate.so: undefined symbol: hidden"),
+                        (77, "crash"),
+                    ],
+                ) as run_candidate,
+                patch("tests.crash_tester.link_amortized_plugin", return_value=0) as link_plugin,
+            ):
+                status, run_log = crash_tester.run_with_amortized_runner_maybe_fallback(
+                    args,
+                    "/tmp/candidate.so",
+                    "/tmp/candidate.o",
+                )
+
+            self.assertEqual(status, 77)
+            self.assertEqual(run_log, "crash")
+            self.assertTrue(args._amortized_plugin_fallback_linked)
+            link_plugin.assert_called_once_with(
+                args,
+                "/tmp/candidate.o",
+                "/tmp/candidate.so",
+                "-ltarget",
+            )
+            self.assertEqual(run_candidate.call_count, 2)
+            self.assertEqual(
+                crash_tester.amortized_initial_plugin_link_flags(args),
+                "-ltarget",
+            )
+
+    def test_amortized_fallback_retry_is_skipped_when_plugin_already_used_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = Namespace(
+                amortized_runner_socket=str(Path(tmpdir) / "runner.sock"),
+                amortized_plugin_fallback_link_flags="-ltarget",
+                _amortized_plugin_fallback_linked=True,
+            )
+
+            with (
+                patch(
+                    "tests.crash_tester.run_with_amortized_runner",
+                    return_value=(
+                        125,
+                        "dlopen candidate failed: candidate.so: undefined symbol: hidden",
+                    ),
+                ) as run_candidate,
+                patch("tests.crash_tester.link_amortized_plugin", return_value=0) as link_plugin,
+            ):
+                status, run_log = crash_tester.run_with_amortized_runner_maybe_fallback(
+                    args,
+                    "/tmp/candidate.so",
+                    "/tmp/candidate.o",
+                )
+
+            self.assertEqual(status, 125)
+            self.assertIn("undefined symbol", run_log)
+            run_candidate.assert_called_once()
+            link_plugin.assert_not_called()
 
 
 if __name__ == "__main__":
