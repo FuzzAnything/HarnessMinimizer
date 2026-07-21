@@ -1238,6 +1238,7 @@ def main() -> int:
         static_link_plan = rr.plan_static_archive_runner_link(
             link_inputs,
             static_root_object,
+            export_dir=output_dir,
         )
         one_time["static_archive_link_plan_ns"] = (
             time.perf_counter_ns() - static_plan_start_ns
@@ -1432,6 +1433,14 @@ def main() -> int:
                 [
                     ("Mode", extraction_mode),
                     ("Root symbol count", len(static_link_plan.root_symbols)),
+                    (
+                        "Visibility-normalized archive count",
+                        len(static_link_plan.visibility_exported_libraries),
+                    ),
+                    (
+                        "Visibility-normalized symbol count",
+                        static_link_plan.visibility_exported_symbol_count,
+                    ),
                     (
                         "Root symbols",
                         (
@@ -1817,6 +1826,17 @@ def main() -> int:
                 if "candidate_plugin_fallback_link" in commands
                 else []
             ),
+            *(
+                [
+                    (f"Visibility-normalized static archive {index}", path)
+                    for index, path in enumerate(
+                        static_link_plan.visibility_exported_libraries,
+                        start=1,
+                    )
+                ]
+                if static_link_plan.visibility_exported_libraries
+                else []
+            ),
             ("Production runner", production_runner),
             ("Instrumented runner", timing_runner),
         ]
@@ -1840,6 +1860,12 @@ def main() -> int:
                 "static_archive_link_plan": {
                     "uses_whole_archive": static_link_plan.uses_whole_archive,
                     "root_symbols": list(static_link_plan.root_symbols),
+                    "visibility_exported_libraries": list(
+                        static_link_plan.visibility_exported_libraries
+                    ),
+                    "visibility_exported_symbol_count": (
+                        static_link_plan.visibility_exported_symbol_count
+                    ),
                     "flags": list(static_link_plan.flags),
                 },
             },

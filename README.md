@@ -19,6 +19,7 @@ Install or make available in `PATH`:
 - `clang-format`
 - `llvm-profdata`
 - `llvm-cov`
+- `llvm-objcopy` (optional, used to export hidden static-archive symbols for faster `--amortize-link`)
 - `treereduce-c`
 - Python 3.12+
 
@@ -271,11 +272,14 @@ Shared targets are preloaded with `dlopen`; static targets are linked once into
 the persistent runner with exported symbols. For static archives, HarnessReducer
 compiles a candidate-shaped object, extracts its unresolved symbols, and uses
 those symbols as archive roots so normal linker extraction pulls only the needed
-archive members. If no roots can be inferred, it falls back to the older
-whole-archive runner link. If a candidate plugin still needs hidden or otherwise
-unexported static symbols, HarnessReducer relinks it once with the original
-`--link-flags`; after the first such loader failure, later candidates start with
-that fallback link for a bounded window before probing the fast path again.
+archive members. When `llvm-objcopy` is available, it also rewrites temporary
+copies of the affected static archives so those root symbols have default ELF
+visibility before the runner is linked. The original archives are not modified.
+If no roots can be inferred, it falls back to the older whole-archive runner
+link. If a candidate plugin still needs symbols the runner cannot export,
+HarnessReducer relinks it once with the original `--link-flags`; after the first
+such loader failure, later candidates start with that fallback link for a bounded
+window before probing the fast path again.
 Normal dependency flags such as `-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`. HarnessReducer also
 converts relative `-L` paths to absolute paths and prepends shared-library
 directories to `LD_LIBRARY_PATH`, so an additional runtime `rpath` is not

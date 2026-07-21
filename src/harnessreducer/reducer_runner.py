@@ -126,6 +126,8 @@ class StaticArchiveLinkPlan:
     flags: tuple[str, ...]
     root_symbols: tuple[str, ...]
     uses_whole_archive: bool
+    visibility_exported_libraries: tuple[str, ...] = ()
+    visibility_exported_symbol_count: int = 0
 
 
 def cleanup() -> None:
@@ -930,9 +932,98 @@ def static_archive_root_symbols_from_object(
     return tuple(sorted(undefined_symbols & defined_symbols))
 
 
+def _archive_magic(path: str | Path) -> bytes:
+    try:
+        with Path(path).open("rb") as handle:
+            return handle.read(8)
+    except OSError:
+        return b""
+
+
+def _llvm_objcopy_supports_symbol_visibility(objcopy: str) -> bool:
+    proc = subprocess.run(
+        [objcopy, "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0 and "--set-symbols-visibility" in proc.stdout
+
+
+def _prepare_visibility_exported_static_libraries(
+    static_libraries: tuple[str, ...],
+    root_symbols: tuple[str, ...],
+    *,
+    export_dir: str | Path | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+    if not static_libraries or not root_symbols:
+        return static_libraries, (), 0
+
+    objcopy = shutil.which("llvm-objcopy")
+    if objcopy is None or not _llvm_objcopy_supports_symbol_visibility(objcopy):
+        return static_libraries, (), 0
+
+    root_symbol_set = set(root_symbols)
+    output_root = Path(export_dir) if export_dir is not None else Path(get_work_dir())
+    output_dir = output_root / f"amortized_static_exports_{time.time_ns()}"
+    rewritten_libraries: list[str] = []
+    visibility_exported_libraries: list[str] = []
+    exported_symbol_count = 0
+
+    for index, library in enumerate(static_libraries):
+        library_path = Path(library)
+        if _archive_magic(library_path) != b"!<arch>\n":
+            rewritten_libraries.append(library)
+            continue
+
+        try:
+            library_symbols = set(defined_symbols_from_static_libraries((library,)))
+        except RuntimeError:
+            rewritten_libraries.append(library)
+            continue
+
+        exported_symbols = tuple(sorted(root_symbol_set & library_symbols))
+        if not exported_symbols:
+            rewritten_libraries.append(library)
+            continue
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        symbol_file = output_dir / f"{index}_{library_path.name}.symbols"
+        rewritten_library = output_dir / f"{index}_{library_path.name}"
+        symbol_file.write_text("\n".join(exported_symbols) + "\n", encoding="utf-8")
+        proc = subprocess.run(
+            [
+                objcopy,
+                f"--set-symbols-visibility={symbol_file}=default",
+                str(library_path),
+                str(rewritten_library),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0 or not rewritten_library.exists():
+            rewritten_libraries.append(library)
+            continue
+
+        rewritten_libraries.append(str(rewritten_library))
+        visibility_exported_libraries.append(str(rewritten_library))
+        exported_symbol_count += len(exported_symbols)
+
+    return (
+        tuple(rewritten_libraries),
+        tuple(visibility_exported_libraries),
+        exported_symbol_count,
+    )
+
+
 def plan_static_archive_runner_link(
     link_inputs: AmortizedLinkInputs,
     static_root_object: str | Path | None = None,
+    *,
+    export_dir: str | Path | None = None,
 ) -> StaticArchiveLinkPlan:
     if not link_inputs.static_libraries:
         return StaticArchiveLinkPlan(flags=(), root_symbols=(), uses_whole_archive=False)
@@ -943,16 +1034,27 @@ def plan_static_archive_runner_link(
             link_inputs.static_libraries,
         )
         if root_symbols:
+            (
+                static_libraries,
+                visibility_exported_libraries,
+                visibility_exported_symbol_count,
+            ) = _prepare_visibility_exported_static_libraries(
+                link_inputs.static_libraries,
+                root_symbols,
+                export_dir=export_dir,
+            )
             flags: list[str] = [
                 "-no-pie",
                 "-Wl,--export-dynamic",
                 *(f"-Wl,-u,{symbol}" for symbol in root_symbols),
-                *link_inputs.static_libraries,
+                *static_libraries,
             ]
             return StaticArchiveLinkPlan(
                 flags=tuple(flags),
                 root_symbols=root_symbols,
                 uses_whole_archive=False,
+                visibility_exported_libraries=visibility_exported_libraries,
+                visibility_exported_symbol_count=visibility_exported_symbol_count,
             )
 
     return StaticArchiveLinkPlan(
@@ -971,8 +1073,14 @@ def plan_static_archive_runner_link(
 def amortized_runner_link_tail(
     link_inputs: AmortizedLinkInputs,
     static_root_object: str | Path | None = None,
+    *,
+    export_dir: str | Path | None = None,
 ) -> list[str]:
-    static_plan = plan_static_archive_runner_link(link_inputs, static_root_object)
+    static_plan = plan_static_archive_runner_link(
+        link_inputs,
+        static_root_object,
+        export_dir=export_dir,
+    )
     return [
         *static_plan.flags,
         *runner_dynamic_dependency_link_flags(link_inputs),
