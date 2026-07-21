@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -456,6 +457,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
 def test_amortized_runner_links_hidden_static_symbols_in_candidate_plugin(
     tmp_path: Path,
 ) -> None:
+    if shutil.which("llvm-objcopy") is None:
+        pytest.skip("llvm-objcopy is required for static symbol visibility export")
+
     reducer_runner.configure_work_dir(str(tmp_path / "work-hidden-static"))
     target_source = tmp_path / "hidden_static.cpp"
     target_object = tmp_path / "hidden_static.o"
@@ -506,12 +510,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
     inputs = reducer_runner.resolve_amortized_link_inputs(link_flags)
     assert inputs.static_libraries == (str(target_archive.resolve()),)
     assert inputs.plugin_link_flags == (str(target_archive),)
+    root_object = reducer_runner.compile_static_archive_root_object(
+        reducer_runner.StaticArchiveRootConfig(source=str(harness_source))
+    )
+    plan = reducer_runner.plan_static_archive_runner_link(
+        inputs,
+        root_object,
+        export_dir=tmp_path / "hidden-static-exports",
+    )
+    assert not plan.uses_whole_archive
+    assert plan.visibility_exported_symbol_count == 1
+    assert len(plan.visibility_exported_libraries) == 1
 
     with reducer_runner.start_amortized_runner(
         link_flags,
         None,
         str(trace_path),
         symbolize=False,
+        static_root_config=reducer_runner.StaticArchiveRootConfig(
+            source=str(harness_source),
+        ),
     ) as runner:
         result = subprocess.run(
             [
@@ -524,8 +542,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
                 str(trace_path),
                 "--amortized-runner-socket",
                 runner.socket_path,
-                "--amortized-plugin-fallback-link-flags="
-                + " ".join(runner.plugin_link_flags),
+                "--amortized-plugin-fallback-link-flags=-lthis_fallback_must_not_be_used",
             ],
             text=True,
             capture_output=True,

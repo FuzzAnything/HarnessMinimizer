@@ -626,7 +626,11 @@ runner. It reads that object's unresolved symbols, intersects them with symbols
 defined by the target static archives, and passes the matches to the linker with
 `-Wl,-u,<symbol>`. Those symbols seed normal static archive extraction, so the
 runner gets the archive members reachable from the harness's real target API
-calls. This link happens once, before TreeReduce starts testing candidates.
+calls. When `llvm-objcopy` is available, HarnessReducer also rewrites temporary
+copies of the affected static archives so those same root symbols have default
+ELF visibility before the runner is linked. This link and any archive-copy
+normalization happen once, before TreeReduce starts testing candidates. The
+original archive files are not modified.
 
 Why:
 
@@ -678,8 +682,6 @@ object, it falls back to whole-archive for compatibility.
 
 ### 8.4 When static symbols are hidden
 
-There is one important exception to the static-runner path.
-
 Some static archives are built with hidden or protected symbol visibility. For
 example, a symbol table may contain:
 
@@ -694,7 +696,7 @@ What this means:
 - but `--export-dynamic` cannot publish that hidden symbol for a future
   `dlopen(candidate.so)` lookup.
 
-So this fails:
+Without additional handling, this fails:
 
 ```text
 harness_runner contains bpf_validate
@@ -706,7 +708,25 @@ dynamic loader cannot see the hidden runner symbol
 -> dlopen candidate failed: undefined symbol: bpf_validate
 ```
 
-What HarnessReducer does now:
+What HarnessReducer does first:
+
+```text
+compile candidate-shaped object
+        |
+        +-- infer static archive root symbols
+        |
+        +-- copy affected regular ELF .a archives into the work directory
+        |
+        +-- run llvm-objcopy --set-symbols-visibility=<roots>=default
+        |
+        `-- link harness_runner against the rewritten archive copies
+```
+
+Only symbols inferred from the candidate-shaped object are promoted, and only in
+temporary archive copies. Symbols already using default visibility are unchanged
+in practice. Thin archives or unsupported object formats keep the older path.
+
+The candidate path is still guarded by a fallback:
 
 ```text
 first attempt for each candidate
@@ -724,13 +744,14 @@ first attempt for each candidate
                    --link-flags, then retry
 ```
 
-Why:
+Why the fallback remains:
 
-The fallback is enabled only after a concrete loader failure. If an archive has
-hidden symbols that candidates never call, the fast path still runs. If a
-candidate does call a hidden static API such as `bpf_validate`, the fallback
-candidate plugin contains the needed static-library code itself, so
-`bpf_validate` is resolved inside `candidate.so` instead of through the runner.
+The fallback is enabled only after a concrete loader failure. It covers missing
+`llvm-objcopy`, unsupported archive members, symbols that were not part of the
+original root set, and other toolchain edge cases. If a candidate still cannot
+load through the runner, the fallback candidate plugin contains the needed
+static-library code itself, so the symbol is resolved inside `candidate.so`
+instead of through the runner.
 
 After the first unresolved-symbol fallback succeeds, HarnessReducer records a
 small socket-local fallback window. Later candidates start with the original
@@ -742,10 +763,10 @@ it fails again, the window is renewed.
 Tradeoff:
 
 This fallback gives up the static-library speedup only after candidates prove
-they need hidden static symbols, then periodically checks whether the fast path
-has become valid again. If the archive was not compiled as position-independent
-code, fallback linking into `candidate.so` may still fail; in that case the
-reliable choices are a default-visible shared target build or
+the normalized runner path is insufficient, then periodically checks whether the
+fast path has become valid again. If the archive was not compiled as
+position-independent code, fallback linking into `candidate.so` may still fail;
+in that case the reliable choices are a default-visible shared target build or
 running without `--amortize-link`.
 
 ### 8.5 Whole-archive fallback boundaries
@@ -852,9 +873,9 @@ to eliminate thousands of repeated target links.
 |---|---|---|
 | What is the input? | A loadable ELF image. | An archive of object files. |
 | Can `dlopen()` load it? | Yes. | No. |
-| Where does target code live? | In a separately mapped `.so`. | Usually inside `harness_runner`; a candidate that needs hidden static symbols is retried with those symbols in `candidate.so`. |
-| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with a rooted archive-symbol closure; whole-archive is only a compatibility fallback when no roots are inferred. |
-| How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `--export-dynamic` publishes runner symbols, but it cannot publish hidden/protected symbols. |
+| Where does target code live? | In a separately mapped `.so`. | Usually inside `harness_runner`; fallback candidate code is loaded only when the runner cannot export what the candidate needs. |
+| How is it prepared? | `dlopen(..., RTLD_NOW | RTLD_GLOBAL)`. | One-time runner link with a rooted archive-symbol closure; affected archive copies may have root-symbol visibility normalized first. |
+| How are symbols exposed? | `RTLD_GLOBAL` makes `.so` exports globally visible. | `llvm-objcopy` can promote selected root symbols in temporary archive copies, then `--export-dynamic` publishes eligible runner symbols. |
 | Why not plain runner archive linking? | Not applicable. | The runner source has no direct target references, so HarnessReducer seeds archive extraction with unresolved symbols from the candidate-shaped object. |
 | What is inherited after `fork()`? | Shared-library mappings. | Runner text containing archive code; fallback candidate code is loaded only when needed. |
 | Is the target linked into each candidate? | No. | No normally; yes only for candidates that fail the fast `dlopen()` path with an unresolved symbol. |
@@ -886,17 +907,19 @@ The steps are:
 1. Resolve `libtarget.a` and `libhelper.a` as static targets.
 2. Resolve `libcodec.so` as a shared target.
 3. Compile a candidate-shaped object and infer static archive root symbols.
-4. Link the needed static archive members into `harness_runner`.
-5. Export their symbols with `--export-dynamic`.
-6. Make selected shared targets available during the one-time runner link when
+4. Rewrite temporary copies of affected regular static archives so root symbols
+   have default visibility, when `llvm-objcopy` supports it.
+5. Link the needed static archive members into `harness_runner`.
+6. Export eligible runner symbols with `--export-dynamic`.
+7. Make selected shared targets available during the one-time runner link when
    they are needed to satisfy references from static code.
-7. Start the runner.
-8. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
-9. Load each candidate plugin. Its unresolved target calls may now resolve from
+8. Start the runner.
+9. Load `libcodec.so` with `RTLD_NOW | RTLD_GLOBAL`.
+10. Load each candidate plugin. Its unresolved target calls may now resolve from
    either the runner or the shared library.
-10. If loading a candidate fails with `undefined symbol`, relink that candidate
+11. If loading a candidate fails with `undefined symbol`, relink that candidate
    plugin with the original `--link-flags` and retry it once.
-11. After a successful fallback retry, link later candidates with the fallback
+12. After a successful fallback retry, link later candidates with the fallback
    flags first for a bounded window, then probe the lightweight path again.
 
 The result is:
@@ -1397,10 +1420,11 @@ feature.
 - Target code must be compatible with the runner's ASan/UBSan environment.
 - Static archives with duplicate definitions can still fail the one-time link,
   especially if the runner falls back to whole-archive mode.
-- Static archives with hidden/protected target symbols cannot expose those
-  symbols from the runner. If a candidate actually needs one, HarnessReducer
-  retries that candidate by linking it with the original `--link-flags`, which
-  is slower and requires the archive objects to be usable in a shared object.
+- Static archives with hidden/protected target symbols need `llvm-objcopy` for
+  the root-symbol visibility normalization path. If normalization is unavailable
+  or insufficient, HarnessReducer retries affected candidates by linking them
+  with the original `--link-flags`, which is slower and requires the archive
+  objects to be usable in a shared object.
 - Mixed libraries with conflicting symbol definitions can produce
   order-dependent symbol resolution.
 - If dynamic target libraries still cannot be loaded after dependency retention
@@ -1430,10 +1454,12 @@ Static target solution:
   A `.a` cannot be loaded.
   Compile a candidate-shaped object and use its undefined target symbols as
   -u roots for normal static archive extraction.
+  Promote those root symbols to default visibility in temporary archive copies
+  when llvm-objcopy supports it.
   Export runner symbols with --export-dynamic.
   Fall back to whole-archive only if no roots can be inferred.
-  If one candidate still fails to load because it needs a hidden static symbol,
-  relink only that candidate with the original --link-flags and retry it.
+  If one candidate still fails to load, relink only that candidate with the
+  original --link-flags and retry it.
 
 Candidate loop:
   Compile only the changing harness as a small candidate.so.
