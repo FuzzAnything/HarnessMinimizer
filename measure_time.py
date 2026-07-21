@@ -1434,11 +1434,11 @@ def main() -> int:
                     ("Mode", extraction_mode),
                     ("Root symbol count", len(static_link_plan.root_symbols)),
                     (
-                        "Visibility-normalized archive count",
+                        "Static archives copied for export fix",
                         len(static_link_plan.visibility_exported_libraries),
                     ),
                     (
-                        "Visibility-normalized symbol count",
+                        "Static symbols made exportable",
                         static_link_plan.visibility_exported_symbol_count,
                     ),
                     (
@@ -1828,7 +1828,7 @@ def main() -> int:
             ),
             *(
                 [
-                    (f"Visibility-normalized static archive {index}", path)
+                    (f"Temporary fixed static archive {index}", path)
                     for index, path in enumerate(
                         static_link_plan.visibility_exported_libraries,
                         start=1,
