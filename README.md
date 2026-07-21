@@ -255,8 +255,11 @@ the persistent runner with exported symbols. For static archives, HarnessReducer
 compiles a candidate-shaped object, extracts its unresolved symbols, and uses
 those symbols as archive roots so normal linker extraction pulls only the needed
 archive members. If no roots can be inferred, it falls back to the older
-whole-archive runner link. Normal dependency flags such as `-lpthread`, `-lm`,
-and `-ldl` may remain in `--link-flags`. HarnessReducer also
+whole-archive runner link. If a candidate plugin still needs hidden or otherwise
+unexported static symbols, HarnessReducer relinks it once with the original
+`--link-flags`; after the first such loader failure, later candidates start with
+that fallback link for a bounded window before probing the fast path again.
+Normal dependency flags such as `-lpthread`, `-lm`, and `-ldl` may remain in `--link-flags`. HarnessReducer also
 converts relative `-L` paths to absolute paths and prepends shared-library
 directories to `LD_LIBRARY_PATH`, so an additional runtime `rpath` is not
 required when running through the tool.

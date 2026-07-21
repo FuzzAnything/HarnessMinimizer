@@ -17,6 +17,7 @@ sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 
 from harnessreducer.reducer_runner import (
+    AMORTIZED_FALLBACK_STATE_SUFFIX,
     PHASE3_DIRECT_OPT_FLAGS,
     PHASE3_PCH_OPT_FLAGS,
     PHASE3_SPLIT_OPT_FLAGS,
@@ -35,6 +36,7 @@ UNINITIALIZED_COMPILE_ERROR_PATTERN = re.compile(r"(?i)(?:\[-Wuninitialized\]|un
 AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
     r"dlopen candidate failed: .*undefined symbol:"
 )
+AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL = 1000
 
 
 def get_project_root():
@@ -174,6 +176,83 @@ def _reset_compile_failure_state(args: argparse.Namespace) -> None:
     args._last_compile_error = None
     args._last_compile_cmd = None
     args._last_compile_uninitialized = False
+
+
+def _amortized_fallback_state_path(socket_path: str) -> Path:
+    return Path(socket_path + AMORTIZED_FALLBACK_STATE_SUFFIX)
+
+
+def _parse_amortized_fallback_remaining(text: str) -> int:
+    try:
+        return max(0, int(text.strip() or "0"))
+    except ValueError:
+        return 0
+
+
+def _read_locked_amortized_fallback_remaining(handle) -> int:
+    handle.seek(0)
+    return _parse_amortized_fallback_remaining(handle.read())
+
+
+def _write_locked_amortized_fallback_remaining(handle, remaining: int) -> None:
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"{max(0, remaining)}\n")
+    handle.flush()
+
+
+def _fallback_link_flags(args: argparse.Namespace) -> str | None:
+    return getattr(args, "amortized_plugin_fallback_link_flags", None)
+
+
+def _enable_amortized_fallback_first(
+    args: argparse.Namespace,
+    *,
+    probe_interval: int = AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL,
+) -> None:
+    socket_path = getattr(args, "amortized_runner_socket", None)
+    if not socket_path or not _fallback_link_flags(args):
+        return
+
+    state_path = _amortized_fallback_state_path(socket_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with state_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        remaining = _read_locked_amortized_fallback_remaining(handle)
+        _write_locked_amortized_fallback_remaining(
+            handle,
+            max(remaining, probe_interval),
+        )
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _reserve_amortized_fallback_first(args: argparse.Namespace) -> bool:
+    socket_path = getattr(args, "amortized_runner_socket", None)
+    if not socket_path or not _fallback_link_flags(args):
+        return False
+
+    state_path = _amortized_fallback_state_path(socket_path)
+    try:
+        handle = state_path.open("r+", encoding="utf-8")
+    except FileNotFoundError:
+        return False
+
+    with handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        remaining = _read_locked_amortized_fallback_remaining(handle)
+        if remaining <= 0:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
+        _write_locked_amortized_fallback_remaining(handle, remaining - 1)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def amortized_initial_plugin_link_flags(args: argparse.Namespace) -> str | None:
+    fallback_link_flags = _fallback_link_flags(args)
+    if fallback_link_flags and _reserve_amortized_fallback_first(args):
+        return fallback_link_flags
+    return None
 
 
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
@@ -338,9 +417,11 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
 def compile_amortized_plugin(
     args: argparse.Namespace,
     output_path: str,
+    link_flags: str | None = None,
 ) -> tuple[int, str | None]:
     """Compile a candidate as a small DSO without relinking target libraries."""
     _reset_compile_failure_state(args)
+    args._amortized_plugin_fallback_linked = False
     pid = os.getpid()
     with tempfile.NamedTemporaryFile(
         prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp"
@@ -385,8 +466,9 @@ def compile_amortized_plugin(
         print(f"Compilation failed: {compile_cmd} {err_msg}", file=sys.stderr)
         return -1, object_path
 
-    if link_amortized_plugin(args, object_path, output_path) != 0:
+    if link_amortized_plugin(args, object_path, output_path, link_flags) != 0:
         return -1, object_path
+    args._amortized_plugin_fallback_linked = bool(link_flags)
     return 0, object_path
 
 
@@ -461,6 +543,7 @@ def run_with_amortized_runner_maybe_fallback(
     if (
         object_path
         and fallback_link_flags
+        and not bool(getattr(args, "_amortized_plugin_fallback_linked", False))
         and should_retry_amortized_plugin_with_fallback(status, run_log)
     ):
         if link_amortized_plugin(
@@ -470,6 +553,8 @@ def run_with_amortized_runner_maybe_fallback(
             fallback_link_flags,
         ) != 0:
             return None, ""
+        args._amortized_plugin_fallback_linked = True
+        _enable_amortized_fallback_first(args)
         status, run_log = run_with_amortized_runner(
             args.amortized_runner_socket,
             output_path,
@@ -571,7 +656,12 @@ def main() -> int:
             if args.direct:
                 print("Compilation failed: amortized linking does not support direct mode", file=sys.stderr)
                 return _finalize_result(args, -1)
-            compile_status, object_path = compile_amortized_plugin(args, output_path)
+            initial_link_flags = amortized_initial_plugin_link_flags(args)
+            compile_status, object_path = compile_amortized_plugin(
+                args,
+                output_path,
+                initial_link_flags,
+            )
         elif args.pch:
             compile_status, object_path = compile_with_pch(args, output_path)
         elif args.split:

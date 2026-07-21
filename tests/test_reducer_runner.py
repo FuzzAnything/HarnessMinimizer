@@ -36,6 +36,19 @@ class TestReducerRunner(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             reducer_runner.run_command(["false"], "failed")
 
+    def test_sanitizer_asan_options_can_disable_odr_violation(self):
+        self.assertEqual(
+            reducer_runner.sanitizer_asan_options(symbolize=False),
+            "exitcode=77:symbolize=0:handle_abort=1",
+        )
+        self.assertEqual(
+            reducer_runner.sanitizer_asan_options(
+                symbolize=True,
+                detect_odr_violation=False,
+            ),
+            "exitcode=77:symbolize=1:handle_abort=1:detect_odr_violation=0",
+        )
+
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_sets_env(self, mock_run, mock_exists):

@@ -36,6 +36,7 @@ compile_direct = _crash_tester.compile_direct
 compile_split = _crash_tester.compile_split
 compile_with_pch = _crash_tester.compile_with_pch
 compile_amortized_plugin = _crash_tester.compile_amortized_plugin
+amortized_initial_plugin_link_flags = _crash_tester.amortized_initial_plugin_link_flags
 run_with_amortized_runner_maybe_fallback = (
     _crash_tester.run_with_amortized_runner_maybe_fallback
 )
@@ -177,7 +178,12 @@ def main() -> int:
         if args.amortized_runner_socket:
             if args.direct:
                 return -1
-            compile_status, object_path = compile_amortized_plugin(args, output_path)
+            initial_link_flags = amortized_initial_plugin_link_flags(args)
+            compile_status, object_path = compile_amortized_plugin(
+                args,
+                output_path,
+                initial_link_flags,
+            )
         elif args.pch:
             compile_status, object_path = compile_with_pch(args, output_path)
         elif args.split:

@@ -47,6 +47,7 @@ DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
 HARNESS_RUNNER_BINARY_NAME = "harness_runner"
+AMORTIZED_FALLBACK_STATE_SUFFIX = ".fallback-state"
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 DYNAMIC_REFERENCE_CRASH_SITE = None
@@ -229,6 +230,22 @@ def runtime_library_env(
     prefix = os.pathsep.join(directories)
     env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
     return env
+
+
+def sanitizer_asan_options(
+    *,
+    symbolize: bool,
+    detect_odr_violation: bool = True,
+) -> str:
+    symbolized = "1" if symbolize else "0"
+    options = [
+        "exitcode=77",
+        f"symbolize={symbolized}",
+        "handle_abort=1",
+    ]
+    if not detect_odr_violation:
+        options.append("detect_odr_violation=0")
+    return ":".join(options)
 
 
 def absolutize_link_flags(link_flags: str | None) -> str | None:
@@ -1030,7 +1047,10 @@ def start_amortized_runner(
     socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
     env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
-    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
+    env["ASAN_OPTIONS"] = sanitizer_asan_options(
+        symbolize=symbolize,
+        detect_odr_violation=False,
+    )
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     )
@@ -1084,6 +1104,10 @@ def start_amortized_runner(
                 process.wait(timeout=5)
         try:
             os.remove(socket_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.remove(socket_path + AMORTIZED_FALLBACK_STATE_SUFFIX)
         except FileNotFoundError:
             pass
 
