@@ -5,6 +5,20 @@ from harnessreducer.api import ReductionConfig, TaggedHarness, process, reduce_w
 
 
 class TestApiPipeline(unittest.TestCase):
+    def setUp(self):
+        self.check_symbolized_patch = patch(
+            "harnessreducer.api.check_reducer_symbolized_crash_pattern"
+        )
+        self.mock_check_symbolized_pattern = self.check_symbolized_patch.start()
+        self.addCleanup(self.check_symbolized_patch.stop)
+
+        self.symbolized_pattern_patch = patch(
+            "harnessreducer.api.get_reference_crash_pattern_symbolize_1",
+            return_value=None,
+        )
+        self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
+        self.addCleanup(self.symbolized_pattern_patch.stop)
+
     def test_amortize_link_rejects_direct_mode(self):
         with self.assertRaisesRegex(ValueError, "requires split or PCH"):
             reduce_with_config(
@@ -77,12 +91,12 @@ class TestApiPipeline(unittest.TestCase):
         mock_reset_last_interesting_state.assert_called_once_with()
         mock_reset_check_state.assert_called_once_with()
         mock_record_check_reference.assert_called_once_with(
-            "seed.bin", "AddressSanitizer", None
+            "seed.bin", ".*", None
         )
         mock_run_with_check.assert_called_once_with(
             "/tmp/tagged.cpp",
             "/tmp/fdp_trace.log",
-            "AddressSanitizer",
+            None,
             None,
             None,
             "seed.bin",
@@ -90,6 +104,8 @@ class TestApiPipeline(unittest.TestCase):
             phase3_mode="split",
             snapshot=False,
             amortize_link=False,
+            crash_pattern_symbolize_0="AddressSanitizer",
+            require_crash_pattern=False,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -131,6 +147,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_reduce.return_value = "/tmp/reduced.cpp"
         mock_inline.return_value = ("/tmp/reduced.cpp", ())
         mock_extract.return_value = "AddressSanitizer"
+        self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
         mock_slice.return_value = "/tmp/sliced.cpp"
 
         config = ReductionConfig(
@@ -165,13 +182,22 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             phase3_mode="direct",
         )
-        mock_slice.assert_called_once_with(
+        self.mock_check_symbolized_pattern.assert_called_once_with(
             "a.cpp",
-            "AddressSanitizer",
+            "SymbolizedPattern",
             "seed.bin",
             "-std=c++17",
             "-lm",
             phase3_mode="direct",
+        )
+        mock_slice.assert_called_once_with(
+            "a.cpp",
+            "SymbolizedPattern",
+            "seed.bin",
+            "-std=c++17",
+            "-lm",
+            phase3_mode="direct",
+            crash_pattern_symbolize_0="AddressSanitizer",
         )
         mock_tag.assert_called_once_with("/tmp/sliced.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
@@ -193,13 +219,14 @@ class TestApiPipeline(unittest.TestCase):
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
             "/tmp/fdp_trace.log",
-            "AddressSanitizer",
+            "SymbolizedPattern",
             "seed.bin",
             "-std=c++17",
             "-lm",
             123,
             phase3_mode="direct",
             snapshot=False,
+            crash_pattern_symbolize_0="AddressSanitizer",
         )
         mock_check.assert_called_once()
 
@@ -457,13 +484,14 @@ class TestApiPipeline(unittest.TestCase):
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
             None,
-            "AddressSanitizer",
+            None,
             "seed.bin",
             None,
             None,
             100000,
             phase3_mode="direct",
             snapshot=False,
+            crash_pattern_symbolize_0="AddressSanitizer",
         )
 
 

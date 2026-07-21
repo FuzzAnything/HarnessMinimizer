@@ -268,7 +268,7 @@ class TestReducerRunner(unittest.TestCase):
             self.assertEqual(result, str(trace_path))
             self.assertEqual(trace_path.read_text(encoding="utf-8"), "S 100000 1\n")
 
-    @patch("harnessreducer.reducer_runner.validate_stack_trace")
+    @patch("harnessreducer.reducer_runner.validate_crash_pattern_and_stack_trace")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
     @patch("harnessreducer.reducer_runner.compile_coverage_harness")
     def test_apply_coverage_guided_slice_returns_sliced_path_on_validation_success(
@@ -311,7 +311,7 @@ class TestReducerRunner(unittest.TestCase):
             self.assertNotIn("else", Path(out).read_text(encoding="utf-8"))
             mock_validate_trace.assert_called_once()
 
-    @patch("harnessreducer.reducer_runner.validate_stack_trace")
+    @patch("harnessreducer.reducer_runner.validate_crash_pattern_and_stack_trace")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")
     @patch("harnessreducer.reducer_runner.compile_coverage_harness")
     def test_apply_coverage_guided_slice_falls_back_on_stack_trace_mismatch(

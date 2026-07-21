@@ -73,8 +73,13 @@ The main workflow lives in `src/harnessreducer/api.py`.
 
 `extract_crash_pattern_from_output()` now performs two reference runs:
 
-- a `symbolize=0` run to extract the crash pattern and record the **fast-path** first-stack-trace depth
-- a `symbolize=1` run to record the **symbolized** first-stack-trace depth and save the truncated symbolized stack trace
+- a `symbolize=0` run to extract the fast crash pattern and record the **fast-path** first-stack-trace depth
+- a `symbolize=1` run to extract the symbolized crash pattern, record the **symbolized** first-stack-trace depth, and save the truncated symbolized stack trace
+
+The crash-pattern regexes are persisted as:
+
+- `crash_pattern.symbolize0`
+- `crash_pattern.symbolize1`, when the symbolized run yields a separate extractable signature
 
 From the symbolized run it:
 
@@ -83,7 +88,12 @@ From the symbolized run it:
 - normalizes the trace with `normalize_crash_signature(..., escape=True)`
 - stores it in `stack_trace.pattern`
 
-The crash pattern is intentionally coarse enough to tolerate cosmetic changes. The fast-path depth is used in normal candidate checks, while the symbolized depth plus the stored stack-trace pattern are used for deeper symbolized equivalence checking.
+The crash patterns are intentionally coarse enough to tolerate cosmetic changes.
+Normal candidate checks use the `symbolize=0` pattern and fast-path depth. Deeper
+symbolized equivalence checks use the `symbolize=1` pattern, symbolized depth,
+and stored stack-trace pattern. If no `symbolize=1` pattern can be extracted, the
+symbolized paths still require exit code `77`, symbolized depth, and the stored
+stack-trace pattern when available, but skip the symbolized crash-regex match.
 
 When `--check` is enabled, the tool also performs a second reference capture pass that:
 
@@ -94,7 +104,13 @@ When `--check` is enabled, the tool also performs a second reference capture pas
 
 ### 4. Validate the extracted crash pattern
 
-`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted pattern and recorded fast-path (`symbolize=0`) first-stack-trace depth are valid before reduction proceeds.
+`check_reducer_crash_pattern()` calls `tests/crash_tester.py` on the original harness to ensure the extracted `symbolize=0` pattern and recorded fast-path first-stack-trace depth are valid before reduction proceeds.
+
+`check_reducer_symbolized_crash_pattern()` then calls the symbolized
+`validate_stack_trace()` path to ensure the `symbolize=1` pattern, when
+available, symbolized first-stack-trace depth, and stored pre-harness trace are
+valid before reduction continues. If no `symbolize=1` pattern was extracted, it
+skips only the symbolized regex match.
 
 ### 5. Dynamic slicing (coverage-guided pre-slice)
 
@@ -177,9 +193,10 @@ It can remove or rewrite these constructs:
 
 After slicing, the candidate is validated with:
 
-- one `validate_stack_trace()` call, which checks:
-  - crash pattern
-  - first-stack-trace depth
+- one `validate_crash_pattern_and_stack_trace()` call, which checks:
+  - `symbolize=0` crash pattern and fast first-stack-trace depth
+  - symbolized first-stack-trace depth
+  - `symbolize=1` crash pattern when one was recorded
   - pre-harness stack trace when a stored `stack_trace.pattern` exists
 
 If compilation, coverage collection, slicing, crash validation, or stack-trace validation fails, the tool discards the sliced version and continues with the original harness.
@@ -220,12 +237,12 @@ When `--snapshot` is enabled, `tests/crash_tester.py` and `tests/check_tester.py
 `inline_literals_in_reduced_harness()` still tries `reduced_harness.cpp` first:
 
 1. inline/replay FDP calls into `reduced_harness.inline.cpp`
-2. validate that inline result with `validate_stack_trace()`
+2. validate that inline result with `validate_crash_pattern_and_stack_trace()`
 
 If `--snapshot` is enabled and `last_interesting.cpp` exists with different contents, the same inline/replay + validation flow is retried from the snapshot:
 
 3. inline/replay FDP calls into `last_interesting.inline.cpp`
-4. validate that inline result with `validate_stack_trace()`
+4. validate that inline result with `validate_crash_pattern_and_stack_trace()`
 
 If the snapshot inline result also fails, the tool falls back to the snapshot base harness; otherwise it returns the validated snapshot inline harness. Without `--snapshot`, the tool skips this retry path and falls back directly to the tree-reduced harness.
 
@@ -326,9 +343,12 @@ PCH mode is prepared by `prepare_phase3_pch_harness()` and restored afterward by
 
 ### Fast vs symbolized checks
 
-Most candidate checks use `symbolize=0` for speed and compare against the stored fast-path reference depth from the original unsymbolized run.
+Most candidate checks use `symbolize=0` for speed and compare against the stored fast-path crash pattern and reference depth from the original unsymbolized run.
 
-Explicit deeper validation paths such as `validate_stack_trace()` force `symbolize=1`, compare against the separately stored symbolized reference depth, and additionally compare the pre-harness stack trace against `stack_trace.pattern`.
+Explicit deeper validation paths first check the `symbolize=0` crash pattern
+under fast sanitizer output, then force `symbolize=1` to compare against the
+symbolized reference depth and pre-harness stack trace. The `symbolize=1` crash
+pattern is also checked when it was recorded.
 
 ### 9. Optional tree-reduction statistics
 
@@ -420,6 +440,8 @@ Typical work-dir files include:
 - `coverage.profdata`
 - `coverage_show.txt`
 - `coverage_export.json`
+- `crash_pattern.symbolize0`
+- `crash_pattern.symbolize1`
 - `stack_trace.pattern`
 - `fdp_trace.log`
 - `reduced_harness.cpp`

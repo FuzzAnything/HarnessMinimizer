@@ -97,11 +97,14 @@ def _evaluate_check_candidate(
     dynamic_crash_site_library: str | None = None,
     dynamic_crash_site_offset: str | None = None,
     dynamic_crash_site_log: str | None = None,
+    skip_crash_pattern: bool = False,
 ) -> tuple[bool, int, bool, bool, str | None, str | None]:
     candidate_full_trace = extract_first_entire_stack_trace(run_log)
     candidate_compare_trace = extract_stack_trace(run_log, harness_path=candidate_source)
     candidate_frames = count_stack_trace_frames(candidate_full_trace)
-    crash_pattern_matched = run_returncode == 77 and re.search(crash_pattern, run_log) is not None
+    crash_pattern_matched = run_returncode == 77 and (
+        skip_crash_pattern or re.search(crash_pattern, run_log) is not None
+    )
     dynamic_site_same = True
     if dynamic_crash_site_library and dynamic_crash_site_offset:
         site = extract_first_dynamic_library_crash_site(
@@ -147,6 +150,7 @@ def main() -> int:
     parser.add_argument("--check-statistics-file", type=str, required=True, help="Path to the check statistics file")
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
+    parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the symbolized crash regex")
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
     parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
@@ -311,6 +315,7 @@ def main() -> int:
             dynamic_crash_site_library=args.dynamic_crash_site_library,
             dynamic_crash_site_offset=args.dynamic_crash_site_offset,
             dynamic_crash_site_log=candidate_run_log_symbolize_0,
+            skip_crash_pattern=args.skip_crash_pattern,
         )
         append_candidate_stack_trace(
             args.check_stack_log_file,

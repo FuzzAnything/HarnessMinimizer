@@ -51,7 +51,8 @@ A regex-based signature is extracted in this priority order:
 7. Abseil `Check failed:` condition
 8. libFuzzer signal summary
 
-More explicitly, the current extraction order in `extract_crash_pattern_from_output()` is:
+More explicitly, each reference run uses this extraction order in
+`extract_crash_pattern_from_output()`:
 
 | Priority | Pattern name | Regex / source | Returned value |
 |---|---|---|---|
@@ -64,7 +65,12 @@ More explicitly, the current extraction order in `extract_crash_pattern_from_out
 | 7 | Abseil CHECK | `ABSL_CHECK_PATTERN` | extracted failed condition text |
 | 8 | libFuzzer signal | `LIBFUZZER_SIGNAL_PATTERN` | extracted signal description |
 
-The function returns the **first successful match only**.
+Each run records the **first successful match only**. The `symbolize=0` run is
+returned to the normal reducer and persisted as `crash_pattern.symbolize0`; the
+`symbolize=1` run is persisted as `crash_pattern.symbolize1` when it yields an
+extractable signature. If the symbolized signature is unavailable, symbolized
+stack validations skip the symbolized crash-regex match instead of applying the
+`symbolize=0` regex to symbolized output.
 
 All extracted signatures pass through `normalize_crash_signature()`:
 
@@ -97,10 +103,11 @@ and saved to:
 
 This stored value is a regex pattern, not a raw stack dump.
 
-HarnessReducer now keeps **two** reference depths in memory:
+HarnessReducer now keeps **two** crash-pattern references and **two** stack-depth
+references in memory:
 
-- a fast-path depth from the original `symbolize=0` run, passed into `crash_tester.py` for normal candidate checks
-- a symbolized depth from a separate `symbolize=1` run, used by explicit symbolized validation paths
+- a fast-path pattern and depth from the original `symbolize=0` run, passed into `crash_tester.py` for normal candidate checks
+- a symbolized pattern and depth from a separate `symbolize=1` run, used by explicit symbolized validation paths
 
 When `--check` is enabled, HarnessReducer also records a second reference for measurement purposes:
 
@@ -205,7 +212,8 @@ Currently implemented rules:
 
 ### 2.5 Validation and fallback
 
-A sliced harness candidate is accepted only if `validate_stack_trace()` passes.
+A sliced harness candidate is accepted only if
+`validate_crash_pattern_and_stack_trace()` passes.
 
 If slicing fails at any point, the tool falls back to the original harness and continues.
 
@@ -352,12 +360,14 @@ If HarnessReducer enables `--statistics-file` for `crash_tester.py`, each candid
 
 Outside the normal fast reduction loop, HarnessReducer still has explicit symbolize=1 validation paths.
 
-These use `validate_stack_trace()` and therefore enforce:
+These use `validate_crash_pattern_and_stack_trace()` or `validate_stack_trace()`
+and therefore enforce:
 
 1. exit code `77`
-2. crash-pattern match
-3. first-stack-trace depth match against the stored **symbolized** reference depth
-4. pre-harness stack-trace match against `stack_trace.pattern` when that stored pattern exists
+2. `symbolize=0` crash-pattern match when crash identity is being validated
+3. `symbolize=1` crash-pattern match only when a symbolized pattern was recorded
+4. first-stack-trace depth match against the stored **symbolized** reference depth
+5. pre-harness stack-trace match against `stack_trace.pattern` when that stored pattern exists
 
 This explicit path is used for:
 
@@ -372,7 +382,10 @@ changes the bottom of the call stack, HarnessReducer first executes the
 original tagged harness through the same plugin backend and uses that run's
 frame depth for the reduction oracle. Check mode similarly replaces its
 full-stack reference with a symbolized persistent-runner reference. The crash
-regex and pre-harness target-frame pattern remain the original references.
+regex remains mode-specific: normal amortized reduction uses the `symbolize=0`
+pattern, while check mode uses the `symbolize=1` pattern for its symbolized
+runner and the `symbolize=0` pattern for its unsymbolized diagnostic runner.
+The pre-harness target-frame pattern remains the original symbolized reference.
 
 ---
 
@@ -410,11 +423,13 @@ Crash equivalence is checked at multiple points:
 
 | Stage | Check |
 |---|---|
-| Initial validation | crash pattern + first-stack-trace depth from the original fast-path (`symbolize=0`) run must match |
-| Dynamic slicing acceptance | crash pattern + first-stack-trace depth + stack trace when available |
-| Tree reduction normal candidates | crash pattern + first-stack-trace depth |
-| FDP inline acceptance | crash pattern + first-stack-trace depth + stack trace when available |
-| LLM acceptance | crash pattern + first-stack-trace depth, plus the normal validation path used there |
+| Initial fast validation | `symbolize=0` crash pattern + fast first-stack-trace depth from the original run must match |
+| Initial symbolized validation | `symbolize=1` crash pattern when recorded + symbolized first-stack-trace depth + stack trace when available must match |
+| Dynamic slicing acceptance | `symbolize=0` crash pattern, plus `symbolize=1` crash pattern when recorded + symbolized first-stack-trace depth + stack trace when available |
+| Tree reduction normal candidates | `symbolize=0` crash pattern + fast first-stack-trace depth |
+| Check-mode candidates | `symbolize=1` crash pattern when recorded + symbolized first-stack-trace depth |
+| FDP inline acceptance | `symbolize=0` crash pattern, plus `symbolize=1` crash pattern when recorded + symbolized first-stack-trace depth + stack trace when available |
+| LLM acceptance | `symbolize=0` crash pattern + fast first-stack-trace depth, plus the normal validation path used there |
 
 When `--snapshot` is enabled, the latest candidate that actually returns `77` is snapshotted to `last_interesting.cpp` during normal or `--check` tree reduction. If inline validation of `reduced_harness.inline.cpp` fails later, HarnessReducer retries the same inline/replay + validation flow from that snapshot before giving up. Without `--snapshot`, no snapshot is maintained and no snapshot-based retry is attempted.
 

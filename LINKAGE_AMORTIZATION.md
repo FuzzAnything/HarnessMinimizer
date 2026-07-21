@@ -1086,7 +1086,7 @@ resolution for another candidate.
 The reducer already checks two things for every candidate:
 
 ```text
-1. Does the crash pattern still appear?
+1. Does the mode-appropriate crash pattern still appear?
 2. Does the first stack trace have the same number of frames?
 ```
 
@@ -1123,7 +1123,7 @@ dynamic crash-site offset:  0x201cf25
 Then a candidate is interesting only if all three checks pass:
 
 ```text
-same crash pattern
+same symbolize=0 crash pattern
 same first-trace depth
 same first target-library .so offset
 ```
@@ -1169,6 +1169,11 @@ path. This calibrates the expected stack depth for the runner/plugin process
 layout rather than comparing it with a differently linked standalone program.
 If a dynamic target offset was recorded earlier, the original harness must also
 preserve that offset in the runner/plugin path.
+
+Check mode has two amortized runners: the main symbolized runner validates the
+`symbolize=1` crash pattern when one was recorded and always validates
+symbolized stack depth, while the optional unsymbolized diagnostic runner
+validates the `symbolize=0` crash pattern and fast stack depth.
 
 ## 12. Why the runner does not explicitly load every system library
 

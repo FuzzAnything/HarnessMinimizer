@@ -21,9 +21,12 @@ from harnessreducer.reducer_runner import (
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
     extract_stack_trace,
+    get_crash_pattern_file,
     get_dynamic_crash_site_file,
     get_dynamic_reference_crash_site,
     get_normal_reference_stack_depth,
+    get_reference_crash_pattern_symbolize_0,
+    get_reference_crash_pattern_symbolize_1,
     get_symbolized_reference_stack_depth,
     has_static_target_libraries,
     infer_target_dynamic_library_hints,
@@ -34,6 +37,7 @@ from harnessreducer.reducer_runner import (
     set_normal_reference_stack_depth,
     set_symbolized_reference_stack_depth,
     stack_depth_tester_args,
+    validate_crash_pattern_and_stack_trace,
     validate_stack_trace,
     configure_work_dir,
 )
@@ -470,6 +474,16 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
 
             self.assertEqual(get_normal_reference_stack_depth(), 3)
             self.assertEqual(get_symbolized_reference_stack_depth(), 6)
+            self.assertEqual(
+                get_reference_crash_pattern_symbolize_0(),
+                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+            )
+            self.assertEqual(
+                get_reference_crash_pattern_symbolize_1(),
+                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+            )
+            self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=False)))
+            self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=True)))
             self.assertEqual(stack_depth_tester_args(symbolized=False), ["--stack-depth", "3"])
             self.assertEqual(stack_depth_tester_args(symbolized=True), ["--stack-depth", "6"])
             self.assertEqual(
@@ -482,12 +496,49 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 ],
             )
 
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_records_distinct_symbolized_pattern(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            fast_output = "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+            symbolized_output = (
+                "/root/src/opencv/modules/imgproc/src/drawing.cpp:1142:13: "
+                "runtime error: left shift of negative value -1\n"
+                "    #0 0xaaa in cv::line /root/src/opencv/modules/imgproc/src/drawing.cpp:1142:13\n"
+                "    #1 0xbbb in LLVMFuzzerTestOneInput /tmp/harness.cpp:10:3\n"
+            )
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": fast_output, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": symbolized_output, "stderr": ""})(),
+            ]
+
+            pattern = extract_crash_pattern_from_output(
+                None,
+                harness_path="harness.cpp",
+            )
+
+            self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
+            self.assertEqual(
+                get_reference_crash_pattern_symbolize_0(),
+                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+            )
+            self.assertEqual(
+                get_reference_crash_pattern_symbolize_1(),
+                r"/root/src/opencv/modules/imgproc/src/drawing\.cpp:1142:13:\ runtime\ error:\ left\ shift\ of\ negative\ value\ \-1",
+            )
+
 
 class TestStackTraceStateManagement(unittest.TestCase):
     def test_reset_stack_trace_state_removes_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
+            Path(get_crash_pattern_file(symbolized=False)).write_text(
+                "fast-pattern", encoding="utf-8"
+            )
+            Path(get_crash_pattern_file(symbolized=True)).write_text(
+                "symbolized-pattern", encoding="utf-8"
+            )
             Path(get_dynamic_crash_site_file()).write_text("{}", encoding="utf-8")
             set_dynamic_reference_crash_site(
                 DynamicCrashSite(
@@ -500,7 +551,11 @@ class TestStackTraceStateManagement(unittest.TestCase):
             reset_stack_trace_state()
 
             self.assertFalse(os.path.exists(get_stack_trace_file()))
+            self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=False)))
+            self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=True)))
             self.assertFalse(os.path.exists(get_dynamic_crash_site_file()))
+            self.assertIsNone(get_reference_crash_pattern_symbolize_0())
+            self.assertIsNone(get_reference_crash_pattern_symbolize_1())
             self.assertIsNone(get_dynamic_reference_crash_site())
 
     @patch("harnessreducer.reducer_runner.run_command")
@@ -521,6 +576,8 @@ class TestStackTraceStateManagement(unittest.TestCase):
             self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
             self.assertFalse(os.path.exists(trace_file))
             self.assertFalse(os.path.exists(dynamic_file))
+            self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=False)))
+            self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=True)))
 
 
 class TestValidateStackTraceInvocation(unittest.TestCase):
@@ -611,6 +668,60 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("returncode: 1", log_text)
             self.assertIn("oops stdout", log_text)
             self.assertIn("oops stderr", log_text)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_stack_trace_can_skip_symbolized_crash_pattern(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            set_symbolized_reference_stack_depth(6)
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+
+            ok = validate_stack_trace(
+                "candidate.cpp",
+                None,
+                "seed.bin",
+                "-O2",
+                "-lm",
+                require_crash_pattern=False,
+            )
+
+            self.assertTrue(ok)
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--symbolize", cmd)
+            self.assertIn("--skip-crash-pattern", cmd)
+            self.assertIn(".*", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_and_stack_trace_decouples_patterns(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            set_normal_reference_stack_depth(3)
+            set_symbolized_reference_stack_depth(6)
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+
+            ok = validate_crash_pattern_and_stack_trace(
+                "candidate.cpp",
+                "FastPattern",
+                None,
+                "seed.bin",
+                "-O2",
+                "-lm",
+                fdp_trace_file="/tmp/fdp.log",
+            )
+
+            self.assertTrue(ok)
+            self.assertEqual(mock_run.call_count, 2)
+            fast_cmd = mock_run.call_args_list[0].args[0]
+            symbolized_cmd = mock_run.call_args_list[1].args[0]
+            self.assertIn("FastPattern", fast_cmd)
+            self.assertNotIn("--symbolize", fast_cmd)
+            self.assertIn("--symbolize", symbolized_cmd)
+            self.assertIn("--skip-crash-pattern", symbolized_cmd)
+            self.assertIn(".*", symbolized_cmd)
 
 
 if __name__ == "__main__":
