@@ -753,16 +753,48 @@ def measure_runner_requests(
     return samples, statuses, representative_output
 
 
+def output_text(output: bytes | None) -> str | None:
+    if output is None:
+        return None
+    return output.decode("utf-8", errors="replace")
+
+
+def crash_pattern_from_output(output: bytes | None) -> str | None:
+    text = output_text(output)
+    if text is None:
+        return None
+    return rr._extract_crash_signature_from_output(text)
+
+
+def stack_trace_pattern_from_output(
+    output: bytes | None,
+    *,
+    harness_path: str,
+) -> str | None:
+    text = output_text(output)
+    if text is None:
+        return None
+    trace = rr.extract_stack_trace(text, harness_path=harness_path)
+    if not trace:
+        return None
+    return rr.normalize_crash_signature(trace, escape=True)
+
+
 def measure_oracle_checks(
     output: bytes | None,
     iterations: int,
     link_flags: str | None,
     *,
+    crash_pattern: str | None,
+    stack_trace_pattern: str | None,
+    stack_trace_harness_path: str,
     check_dynamic_site: bool,
 ) -> tuple[dict[str, list[int]], rr.DynamicCrashSite | None, int]:
     samples: dict[str, list[int]] = {
+        "crash_pattern_ns": [],
         "stack_depth_ns": [],
         "dynamic_crash_site_ns": [],
+        "stack_trace_pattern_ns": [],
         "combined_ns": [],
     }
     if output is None:
@@ -777,6 +809,11 @@ def measure_oracle_checks(
     )
 
     for _ in range(iterations):
+        if crash_pattern is not None:
+            start_ns = time.perf_counter_ns()
+            _ = re.search(crash_pattern, text) is not None
+            samples["crash_pattern_ns"].append(time.perf_counter_ns() - start_ns)
+
         start_ns = time.perf_counter_ns()
         rr.count_first_stack_trace_frames(text)
         samples["stack_depth_ns"].append(time.perf_counter_ns() - start_ns)
@@ -790,7 +827,15 @@ def measure_oracle_checks(
             _ = site is not None and site.offset == expected_site.offset
             samples["dynamic_crash_site_ns"].append(time.perf_counter_ns() - start_ns)
 
+        if stack_trace_pattern is not None:
+            start_ns = time.perf_counter_ns()
+            trace = rr.extract_stack_trace(text, harness_path=stack_trace_harness_path)
+            _ = trace is not None and re.search(stack_trace_pattern, trace) is not None
+            samples["stack_trace_pattern_ns"].append(time.perf_counter_ns() - start_ns)
+
         start_ns = time.perf_counter_ns()
+        if crash_pattern is not None:
+            _ = re.search(crash_pattern, text) is not None
         rr.count_first_stack_trace_frames(text)
         if expected_site is not None:
             site = rr.extract_first_dynamic_library_crash_site(
@@ -798,9 +843,78 @@ def measure_oracle_checks(
                 expected_library=expected_site.library_path,
             )
             _ = site is not None and site.offset == expected_site.offset
+        if stack_trace_pattern is not None:
+            trace = rr.extract_stack_trace(text, harness_path=stack_trace_harness_path)
+            _ = trace is not None and re.search(stack_trace_pattern, trace) is not None
         samples["combined_ns"].append(time.perf_counter_ns() - start_ns)
 
     return samples, expected_site, expected_depth
+
+
+def measure_two_stage_validation_checks(
+    fast_output: bytes | None,
+    symbolized_output: bytes | None,
+    iterations: int,
+    link_flags: str | None,
+    *,
+    crash_pattern_symbolize_0: str | None,
+    crash_pattern_symbolize_1: str | None,
+    stack_trace_pattern: str | None,
+    stack_trace_harness_path: str,
+) -> tuple[dict[str, list[int]], dict[str, object]]:
+    samples: dict[str, list[int]] = {"combined_ns": []}
+    fast_text = output_text(fast_output)
+    symbolized_text = output_text(symbolized_output)
+    if fast_text is None or symbolized_text is None or crash_pattern_symbolize_0 is None:
+        return samples, {
+            "active": False,
+            "reason": "missing representative output or symbolize=0 crash pattern",
+        }
+
+    expected_site = rr.extract_first_dynamic_library_crash_site(fast_text, link_flags)
+    fast_depth = rr.count_first_stack_trace_frames(fast_text)
+    symbolized_depth = rr.count_first_stack_trace_frames(symbolized_text)
+
+    for _ in range(iterations):
+        start_ns = time.perf_counter_ns()
+        _ = re.search(crash_pattern_symbolize_0, fast_text) is not None
+        rr.count_first_stack_trace_frames(fast_text)
+        if expected_site is not None:
+            site = rr.extract_first_dynamic_library_crash_site(
+                fast_text,
+                expected_library=expected_site.library_path,
+            )
+            _ = site is not None and site.offset == expected_site.offset
+        if crash_pattern_symbolize_1 is not None:
+            _ = re.search(crash_pattern_symbolize_1, symbolized_text) is not None
+        rr.count_first_stack_trace_frames(symbolized_text)
+        if stack_trace_pattern is not None:
+            trace = rr.extract_stack_trace(
+                symbolized_text,
+                harness_path=stack_trace_harness_path,
+            )
+            _ = trace is not None and re.search(stack_trace_pattern, trace) is not None
+        samples["combined_ns"].append(time.perf_counter_ns() - start_ns)
+
+    return samples, {
+        "active": True,
+        "expected_fast_stack_depth": fast_depth,
+        "expected_symbolized_stack_depth": symbolized_depth,
+        "dynamic_crash_site": (
+            {
+                "library_path": expected_site.library_path,
+                "library_name": expected_site.library_name,
+                "offset": expected_site.offset,
+            }
+            if expected_site is not None
+            else None
+        ),
+        "crash_pattern_symbolize_0": crash_pattern_symbolize_0,
+        "crash_pattern_symbolize_1": crash_pattern_symbolize_1,
+        "symbolized_crash_pattern_required": crash_pattern_symbolize_1 is not None,
+        "stack_trace_pattern": stack_trace_pattern,
+        "stack_trace_pattern_active": stack_trace_pattern is not None,
+    }
 
 
 class Report:
@@ -1194,17 +1308,39 @@ def main() -> int:
                 one_time["runner_startup_wall_ns"] = startup_wall_ns
                 startup_metrics = current_startup
 
+        oracle_crash_patterns = {
+            label: crash_pattern_from_output(runner_representative_outputs.get(label))
+            for label in ("symbolize_0", "symbolize_1")
+        }
+        oracle_stack_trace_pattern = stack_trace_pattern_from_output(
+            runner_representative_outputs.get("symbolize_1"),
+            harness_path=str(body_source),
+        )
+
         for symbolize in (False, True):
             label = f"symbolize_{int(symbolize)}"
             current_samples, expected_site, expected_depth = measure_oracle_checks(
                 runner_representative_outputs.get(label),
                 args.iterations,
                 args.link_flags,
+                crash_pattern=oracle_crash_patterns.get(label),
+                stack_trace_pattern=(
+                    oracle_stack_trace_pattern if symbolize else None
+                ),
+                stack_trace_harness_path=str(body_source),
                 check_dynamic_site=not symbolize,
             )
             oracle_check_samples[label] = current_samples
             oracle_references[label] = {
+                "crash_pattern": oracle_crash_patterns.get(label),
+                "crash_pattern_active": oracle_crash_patterns.get(label) is not None,
                 "expected_stack_depth": expected_depth,
+                "stack_trace_pattern": (
+                    oracle_stack_trace_pattern if symbolize else None
+                ),
+                "stack_trace_pattern_active": (
+                    symbolize and oracle_stack_trace_pattern is not None
+                ),
                 "dynamic_crash_site": (
                     {
                         "library_path": expected_site.library_path,
@@ -1215,6 +1351,18 @@ def main() -> int:
                     else None
                 ),
             }
+        two_stage_samples, two_stage_reference = measure_two_stage_validation_checks(
+            runner_representative_outputs.get("symbolize_0"),
+            runner_representative_outputs.get("symbolize_1"),
+            args.iterations,
+            args.link_flags,
+            crash_pattern_symbolize_0=oracle_crash_patterns.get("symbolize_0"),
+            crash_pattern_symbolize_1=oracle_crash_patterns.get("symbolize_1"),
+            stack_trace_pattern=oracle_stack_trace_pattern,
+            stack_trace_harness_path=str(body_source),
+        )
+        oracle_check_samples["two_stage_slice_inline"] = two_stage_samples
+        oracle_references["two_stage_slice_inline"] = two_stage_reference
 
         for symbolize in (False, True):
             label = f"symbolize_{int(symbolize)}"
@@ -1475,7 +1623,28 @@ def main() -> int:
                 if isinstance(reference, dict)
                 else None
             )
+            crash_pattern_active = bool(
+                reference.get("crash_pattern_active")
+                if isinstance(reference, dict)
+                else False
+            )
+            stack_trace_pattern_active = bool(
+                reference.get("stack_trace_pattern_active")
+                if isinstance(reference, dict)
+                else False
+            )
             current = oracle_check_samples[label]
+            oracle_rows.append(
+                [
+                    label,
+                    (
+                        "crash regex match"
+                        if crash_pattern_active
+                        else "crash regex match (not active)"
+                    ),
+                    *stats_row("", current["crash_pattern_ns"], "us")[1:],
+                ]
+            )
             oracle_rows.append(
                 [
                     label,
@@ -1497,10 +1666,42 @@ def main() -> int:
             oracle_rows.append(
                 [
                     label,
+                    (
+                        "pre-harness stack-trace regex"
+                        if stack_trace_pattern_active
+                        else "pre-harness stack-trace regex (not active)"
+                    ),
+                    *stats_row("", current["stack_trace_pattern_ns"], "us")[1:],
+                ]
+            )
+            oracle_rows.append(
+                [
+                    label,
                     "combined active checks",
                     *stats_row("", current["combined_ns"], "us")[1:],
                 ]
             )
+        two_stage_reference = oracle_references.get("two_stage_slice_inline", {})
+        two_stage_symbolized_required = (
+            two_stage_reference.get("symbolized_crash_pattern_required", False)
+            if isinstance(two_stage_reference, dict)
+            else False
+        )
+        oracle_rows.append(
+            [
+                "two_stage_slice_inline",
+                (
+                    "symbolize=0 crash + symbolize=1 crash/depth/stack"
+                    if two_stage_symbolized_required
+                    else "symbolize=0 crash + symbolize=1 depth/stack"
+                ),
+                *stats_row(
+                    "",
+                    oracle_check_samples["two_stage_slice_inline"]["combined_ns"],
+                    "us",
+                )[1:],
+            ]
+        )
         report.table(
             ["Output", "Check", "N", "Mean us", "Median", "Stddev", "Min", "Max"],
             oracle_rows,
@@ -1519,6 +1720,12 @@ def main() -> int:
         report.add(
             "These rows measure Python parsing of already captured output. They are "
             "not extra harness executions."
+        )
+        report.add(
+            "The two-stage row mirrors slicing/inline validation: first the "
+            "symbolize=0 crash-pattern check, then the symbolize=1 stack/depth "
+            "check; a symbolize=1 crash regex is included only when one was "
+            "extracted."
         )
 
         report.section("F", f"AMORTIZED REQUEST BREAKDOWN — {args.iterations} ITERATIONS")
