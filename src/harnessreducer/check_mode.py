@@ -329,7 +329,7 @@ def emit_check_statistics_summary(path: str | None = None) -> CheckStatistics:
 def run_treereducer_with_check(
     harness_path: str,
     fdp_trace_file: str | None,
-    crash_pattern: str,
+    crash_pattern: str | None,
     compile_flags: str | None,
     link_flags: str | None,
     crash_input: str | None,
@@ -337,6 +337,8 @@ def run_treereducer_with_check(
     phase3_mode: str = PHASE3_SPLIT,
     snapshot: bool = False,
     amortize_link: bool = False,
+    crash_pattern_symbolize_0: str | None = None,
+    require_crash_pattern: bool = True,
 ) -> str:
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
@@ -380,7 +382,7 @@ def run_treereducer_with_check(
             "--",
             *get_check_tester_command(),
             "@@.cpp",
-            crash_pattern,
+            crash_pattern or ".*",
             "--crash-input",
             crash_input or "",
             f"--compile-flags={compile_flags or ''}",
@@ -399,6 +401,8 @@ def run_treereducer_with_check(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
+    if not require_crash_pattern:
+        cmd.append("--skip-crash-pattern")
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(dynamic_crash_site_tester_args())
 
@@ -443,7 +447,7 @@ def run_treereducer_with_check(
             reference_output = run_amortized_reference_candidate(
                 harness_path,
                 fdp_trace_file,
-                crash_pattern,
+                crash_pattern or ".*",
                 compile_flags,
                 link_flags,
                 crash_input,
@@ -452,6 +456,7 @@ def run_treereducer_with_check(
                 pch_artifacts,
                 plugin_link_flags,
                 symbolize=True,
+                require_crash_pattern=require_crash_pattern,
             )
             full_stack_trace = extract_first_entire_stack_trace(reference_output)
             if not full_stack_trace:
@@ -464,7 +469,7 @@ def run_treereducer_with_check(
                     reference_output_symbolize_0 = run_amortized_reference_candidate(
                         harness_path,
                         fdp_trace_file,
-                        crash_pattern,
+                        crash_pattern_symbolize_0 or crash_pattern or ".*",
                         compile_flags,
                         link_flags,
                         crash_input,
@@ -490,7 +495,7 @@ def run_treereducer_with_check(
                     )
             write_check_reference(
                 CheckReference(
-                    crash_pattern=crash_pattern,
+                    crash_pattern=crash_pattern or ".*",
                     full_stack_trace=full_stack_trace,
                     full_stack_trace_pattern=normalize_crash_signature(
                         full_stack_trace, escape=True

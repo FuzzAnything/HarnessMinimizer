@@ -147,6 +147,22 @@ examples below use the unambiguous equals form.
 
 ## What the Main Options Do
 
+### Crash-pattern references
+
+HarnessReducer records separate crash-pattern regexes when sanitizer output
+differs between fast and symbolized execution:
+
+- `symbolize=0` pattern: used by normal tree-reduction candidates, amortized-link
+  candidate checks, `--statistics`, LLM validation, and crash-identity checks
+  for slicing/inline validation
+- `symbolize=1` pattern: used by symbolized validation paths when the
+  symbolized run produces an extractable crash signature
+
+If the symbolized reference run cannot produce a separate pattern, symbolized
+stack validations still require exit code `77`, symbolized stack depth, and the
+stored stack trace when available, but they do not require a symbolized crash
+regex. The matching stack-depth reference is also kept separately for each mode.
+
 ### `--slice`
 
 Enables the optional dynamic-slicing pre-pass:
@@ -175,6 +191,7 @@ The counts and probabilities are written to `statistics.txt` in the work directo
 When enabled, HarnessReducer:
 
 - still records the normal crash pattern and truncated reference stack trace used by the main tool
+- records the `symbolize=0` and `symbolize=1` crash-pattern regexes used by the main tool
 - records **two** reference stack depths for the main reducer:
   - a fast-path depth from a `symbolize=0` run, used by normal candidate checks
   - a symbolized depth from a `symbolize=1` run, used by slicing and inline crash-preservation validation
@@ -445,6 +462,8 @@ During reduction, the work directory may also contain artifacts such as:
 - `poc.out` — original crash-check binary
 - `poc_cov.out` — source-coverage binary used for dynamic slicing
 - `coverage.profraw`, `coverage.profdata`, `coverage_show.txt`, `coverage_export.json` — dynamic slicing coverage artifacts
+- `crash_pattern.symbolize0` — crash-pattern regex from the fast reference run
+- `crash_pattern.symbolize1` — crash-pattern regex from the symbolized reference run, when available
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
 - `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
@@ -456,5 +475,5 @@ During reduction, the work directory may also contain artifacts such as:
 ## Notes
 
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. Inline validation uses the same `validate_stack_trace(...)` path as slicing acceptance: crash pattern + stack depth always, plus pre-harness stack-trace matching when a stored reference trace exists.
+- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. Inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. A `symbolize=1` crash regex is required only when one was recorded.
 - If LLM validation fails, the tool falls back to the non-LLM harness.

@@ -43,11 +43,15 @@ STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
+CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
+CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
 HARNESS_RUNNER_BINARY_NAME = "harness_runner"
 AMORTIZED_FALLBACK_STATE_SUFFIX = ".fallback-state"
+CRASH_PATTERN_SYMBOLIZE_0: str | None = None
+CRASH_PATTERN_SYMBOLIZE_1: str | None = None
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 DYNAMIC_REFERENCE_CRASH_SITE = None
@@ -1125,6 +1129,7 @@ def run_amortized_reference_candidate(
     plugin_link_flags: tuple[str, ...] = (),
     *,
     symbolize: bool,
+    require_crash_pattern: bool = True,
 ) -> str:
     cmd = [
         get_crash_tester_path(),
@@ -1147,6 +1152,8 @@ def run_amortized_reference_candidate(
         cmd.append("--symbolize")
     else:
         cmd.extend(dynamic_crash_site_tester_args())
+    if not require_crash_pattern:
+        cmd.append("--skip-crash-pattern")
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     proc = run_command(
         cmd,
@@ -1542,6 +1549,24 @@ def count_first_stack_trace_frames(output: str) -> int:
     return sum(1 for line in trace.splitlines() if STACK_FRAME_COUNT_PATTERN.match(line))
 
 
+def set_reference_crash_patterns(
+    *,
+    symbolize_0: str | None = None,
+    symbolize_1: str | None = None,
+) -> None:
+    global CRASH_PATTERN_SYMBOLIZE_0, CRASH_PATTERN_SYMBOLIZE_1
+    CRASH_PATTERN_SYMBOLIZE_0 = symbolize_0
+    CRASH_PATTERN_SYMBOLIZE_1 = symbolize_1
+
+
+def get_reference_crash_pattern_symbolize_0() -> str | None:
+    return CRASH_PATTERN_SYMBOLIZE_0
+
+
+def get_reference_crash_pattern_symbolize_1() -> str | None:
+    return CRASH_PATTERN_SYMBOLIZE_1
+
+
 def set_normal_reference_stack_depth(depth: int | None) -> None:
     global NORMAL_REFERENCE_STACK_DEPTH
     NORMAL_REFERENCE_STACK_DEPTH = depth
@@ -1573,6 +1598,15 @@ def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
 
+def get_crash_pattern_file(*, symbolized: bool) -> str:
+    file_name = (
+        CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME
+        if symbolized
+        else CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME
+    )
+    return os.path.join(get_work_dir(), file_name)
+
+
 def get_dynamic_crash_site_file() -> str:
     return os.path.join(get_work_dir(), DYNAMIC_CRASH_SITE_FILE_NAME)
 
@@ -1586,10 +1620,16 @@ def get_statistics_file() -> str:
 
 def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
+    set_reference_crash_patterns()
     set_normal_reference_stack_depth(None)
     set_symbolized_reference_stack_depth(None)
     set_dynamic_reference_crash_site(None)
-    for path in (get_stack_trace_file(), get_dynamic_crash_site_file()):
+    for path in (
+        get_stack_trace_file(),
+        get_crash_pattern_file(symbolized=False),
+        get_crash_pattern_file(symbolized=True),
+        get_dynamic_crash_site_file(),
+    ):
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -1790,17 +1830,23 @@ def collect_harness_coverage(
 
 def apply_coverage_guided_slice(
     harness_path: str,
-    crash_pattern: str,
+    crash_pattern: str | None,
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
     phase3_mode: str = PHASE3_DIRECT,
+    crash_pattern_symbolize_0: str | None = None,
 ) -> str:
     """Conservatively prune uncovered harness code before tree reduction.
 
     If coverage collection, slicing, or validation fails, the original harness
     path is returned unchanged.
     """
+    fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern
+    if not fast_crash_pattern:
+        print("[!] Coverage-guided slicing skipped: no fast crash pattern is available.")
+        return harness_path
+
     try:
         coverage_bin = compile_coverage_harness(harness_path, compile_flags, link_flags)
         coverage = collect_harness_coverage(
@@ -1823,8 +1869,9 @@ def apply_coverage_guided_slice(
         sliced_path = Path(get_work_dir()) / f"{source_path.stem}{SLICED_HARNESS_SUFFIX}{source_path.suffix or '.cpp'}"
         sliced_path.write_text(slice_result.source, encoding="utf-8")
 
-        if not validate_stack_trace(
+        if not validate_crash_pattern_and_stack_trace(
             str(sliced_path),
+            fast_crash_pattern,
             crash_pattern,
             crash_input,
             compile_flags,
@@ -1863,6 +1910,18 @@ def _run_harness_for_crash_reference(
         error_prefix="Failed to execute harness for crash pattern extraction",
         ignore_errors=True,
     )
+
+
+def _persist_reference_crash_pattern(pattern: str | None, *, symbolized: bool) -> None:
+    path = Path(get_crash_pattern_file(symbolized=symbolized))
+    if pattern is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    path.write_text(pattern + "\n", encoding="utf-8")
 
 
 def _persist_dynamic_reference_crash_site(site: DynamicCrashSite | None) -> None:
@@ -1955,9 +2014,12 @@ def extract_crash_pattern_from_output(
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
         print("[!] Warning: No crash detected when running the harness. Output:\n" + output)
+        set_reference_crash_patterns()
         set_normal_reference_stack_depth(None)
         set_symbolized_reference_stack_depth(None)
         set_dynamic_reference_crash_site(None)
+        _persist_reference_crash_pattern(None, symbolized=False)
+        _persist_reference_crash_pattern(None, symbolized=True)
         _persist_dynamic_reference_crash_site(None)
         return None
 
@@ -1973,6 +2035,8 @@ def extract_crash_pattern_from_output(
     crash_pattern = _extract_crash_signature_from_output(output)
     if not crash_pattern:
         raise ValueError("Failed to extract a valid crash pattern from the harness output. Output:\n" + output)
+    set_reference_crash_patterns(symbolize_0=crash_pattern)
+    _persist_reference_crash_pattern(crash_pattern, symbolized=False)
 
     symbolized_proc = _run_harness_for_crash_reference(
         output_bin,
@@ -1982,7 +2046,9 @@ def extract_crash_pattern_from_output(
     )
     symbolized_output = symbolized_proc.stdout + "\n" + symbolized_proc.stderr
     if symbolized_proc.returncode != 77:
+        set_reference_crash_patterns(symbolize_0=crash_pattern)
         set_symbolized_reference_stack_depth(None)
+        _persist_reference_crash_pattern(None, symbolized=True)
         try:
             os.remove(get_stack_trace_file())
         except FileNotFoundError:
@@ -1992,6 +2058,22 @@ def extract_crash_pattern_from_output(
             "skipping symbolized stack-trace reference capture."
         )
         return crash_pattern
+
+    symbolized_crash_pattern = _extract_crash_signature_from_output(symbolized_output)
+    if symbolized_crash_pattern:
+        set_reference_crash_patterns(
+            symbolize_0=crash_pattern,
+            symbolize_1=symbolized_crash_pattern,
+        )
+        _persist_reference_crash_pattern(symbolized_crash_pattern, symbolized=True)
+        print(f"[+] Extracted symbolized crash pattern: {symbolized_crash_pattern}")
+    else:
+        set_reference_crash_patterns(symbolize_0=crash_pattern)
+        _persist_reference_crash_pattern(None, symbolized=True)
+        print(
+            "[!] Warning: Could not extract a symbolized crash pattern; "
+            "symbolized stack validations will not require a symbolized crash regex."
+        )
 
     symbolized_reference_stack_depth = count_first_stack_trace_frames(symbolized_output)
     set_symbolized_reference_stack_depth(symbolized_reference_stack_depth or None)
@@ -2272,7 +2354,23 @@ def dynamic_crash_site_tester_args() -> list[str]:
     ]
 
 
-def validate_stack_trace(
+def _write_validation_failure_log(
+    validation_log_path: str | None,
+    proc: subprocess.CompletedProcess[str],
+) -> None:
+    if validation_log_path is None:
+        return
+    artifact = (
+        f"returncode: {proc.returncode}\n"
+        "===== stdout =====\n"
+        f"{proc.stdout}"
+        "\n===== stderr =====\n"
+        f"{proc.stderr}"
+    )
+    Path(validation_log_path).write_text(artifact, encoding="utf-8")
+
+
+def validate_crash_pattern(
     harness_path: str,
     crash_pattern: str,
     crash_input: str | None,
@@ -2282,12 +2380,62 @@ def validate_stack_trace(
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
 ) -> bool:
+    """Run a fast symbolize=0 crash-pattern/depth validation."""
+    validate_phase3_mode(phase3_mode)
+    pch_artifacts: PchArtifacts | None = None
+    tester_source = harness_path
+    if phase3_mode == PHASE3_PCH:
+        pch_artifacts = prepare_phase3_pch_harness(
+            harness_path,
+            compile_flags,
+            use_replay=fdp_trace_file is not None,
+        )
+        tester_source = pch_artifacts.body_source
+
+    cmd = [
+        get_crash_tester_path(),
+        tester_source,
+        crash_pattern,
+        "--crash-input", crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+    ]
+    cmd.extend(stack_depth_tester_args(symbolized=False))
+    cmd.extend(dynamic_crash_site_tester_args())
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+
+    proc = run_command(
+        cmd,
+        "Fast crash-pattern validation failed.",
+        ignore_errors=True,
+    )
+    if proc.returncode != 77:
+        _write_validation_failure_log(validation_log_path, proc)
+    return proc.returncode == 77
+
+
+def validate_stack_trace(
+    harness_path: str,
+    crash_pattern: str | None,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None = None,
+    phase3_mode: str = PHASE3_DIRECT,
+    validation_log_path: str | None = None,
+    require_crash_pattern: bool = True,
+) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
-    This always validates crash pattern preservation and first-stack-trace
-    depth. When a stored non-empty ``stack_trace.pattern`` exists, it also
-    validates the pre-harness stack trace against that pattern.
+    This always validates exit code 77 and first-stack-trace depth. It validates
+    the symbolized crash pattern when one is available. When a stored non-empty
+    ``stack_trace.pattern`` exists, it also validates the pre-harness stack trace
+    against that pattern.
     """
+    if require_crash_pattern and not crash_pattern:
+        raise ValueError("Symbolized crash pattern cannot be empty.")
     stack_trace_file = get_stack_trace_file()
     stack_trace_arg: list[str] = []
     if not os.path.exists(stack_trace_file):
@@ -2313,12 +2461,14 @@ def validate_stack_trace(
     cmd = [
         get_crash_tester_path(),
         tester_source,
-        crash_pattern,
+        crash_pattern or ".*",
         "--crash-input", crash_input or "",
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
         "--symbolize",  # force symbolize=1 for this check
     ]
+    if not require_crash_pattern:
+        cmd.append("--skip-crash-pattern")
     cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args(symbolized=True))
     if fdp_trace_file:
@@ -2327,12 +2477,77 @@ def validate_stack_trace(
 
     proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
     if validation_log_path is not None and proc.returncode != 77:
-        artifact = (
-            f"returncode: {proc.returncode}\n"
-            "===== stdout =====\n"
-            f"{proc.stdout}"
-            "\n===== stderr =====\n"
-            f"{proc.stderr}"
-        )
-        Path(validation_log_path).write_text(artifact, encoding="utf-8")
+        _write_validation_failure_log(validation_log_path, proc)
     return proc.returncode == 77
+
+
+def validate_crash_pattern_and_stack_trace(
+    harness_path: str,
+    crash_pattern_symbolize_0: str,
+    crash_pattern_symbolize_1: str | None,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None = None,
+    phase3_mode: str = PHASE3_DIRECT,
+    validation_log_path: str | None = None,
+) -> bool:
+    """Validate crash identity with symbolize=0, then stack identity with symbolize=1."""
+    if not validate_crash_pattern(
+        harness_path,
+        crash_pattern_symbolize_0,
+        crash_input,
+        compile_flags,
+        link_flags,
+        fdp_trace_file=fdp_trace_file,
+        phase3_mode=phase3_mode,
+        validation_log_path=validation_log_path,
+    ):
+        return False
+
+    if crash_pattern_symbolize_1 is None:
+        print(
+            "[*] No symbolize=1 crash pattern is available; "
+            "checking symbolized stack/depth without a symbolized crash regex."
+        )
+    return validate_stack_trace(
+        harness_path,
+        crash_pattern_symbolize_1,
+        crash_input,
+        compile_flags,
+        link_flags,
+        fdp_trace_file=fdp_trace_file,
+        phase3_mode=phase3_mode,
+        validation_log_path=validation_log_path,
+        require_crash_pattern=crash_pattern_symbolize_1 is not None,
+    )
+
+
+def check_reducer_symbolized_crash_pattern(
+    harness_path: str,
+    crash_pattern: str | None,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    phase3_mode: str = PHASE3_DIRECT,
+) -> None:
+    if crash_pattern:
+        print("[+] Checking symbolized crash pattern validity...")
+    else:
+        print("[+] Checking symbolized stack-trace validity without a symbolized crash pattern...")
+    if not validate_stack_trace(
+        harness_path,
+        crash_pattern,
+        crash_input,
+        compile_flags,
+        link_flags,
+        phase3_mode=phase3_mode,
+        require_crash_pattern=crash_pattern is not None,
+    ):
+        raise ValueError(
+            "Symbolized crash behavior did not match the original crash behavior."
+        )
+    if crash_pattern:
+        print("[+] Symbolized crash pattern is valid.")
+    else:
+        print("[+] Symbolized stack-trace validation is valid.")

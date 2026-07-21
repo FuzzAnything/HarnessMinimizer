@@ -217,6 +217,40 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("--split", cmd)
             self.assertNotIn("--last-interesting-file", cmd)
 
+    @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
+    @patch("harnessreducer.check_mode.subprocess.run")
+    def test_run_treereducer_with_check_can_skip_symbolized_crash_pattern(
+        self,
+        mock_run,
+        _mock_exists,
+    ):
+        mock_run.return_value = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            write_check_reference(
+                CheckReference(
+                    crash_pattern=".*",
+                    full_stack_trace="#0 ...",
+                    full_stack_trace_pattern="\\#0.*",
+                    frame_count=1,
+                )
+            )
+            initialize_check_statistics_file()
+
+            run_treereducer_with_check(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file="/tmp/trace.log",
+                crash_pattern=None,
+                compile_flags="-std=c++17",
+                link_flags="-lm",
+                crash_input="seed.bin",
+                require_crash_pattern=False,
+            )
+
+            cmd = mock_run.call_args.args[0]
+            self.assertIn(".*", cmd)
+            self.assertIn("--skip-crash-pattern", cmd)
+
     @patch("harnessreducer.check_mode.run_amortized_reference_candidate")
     @patch("harnessreducer.check_mode.start_amortized_runner")
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
@@ -264,11 +298,12 @@ class TestCheckModeHelpers(unittest.TestCase):
             run_treereducer_with_check(
                 harness_path="/tmp/in.cpp",
                 fdp_trace_file="/tmp/trace.log",
-                crash_pattern="AddressSanitizer",
+                crash_pattern="SymbolizedPattern",
                 compile_flags=None,
                 link_flags="/tmp/libtarget.so",
                 crash_input="seed.bin",
                 amortize_link=True,
+                crash_pattern_symbolize_0="FastPattern",
             )
 
             cmd = mock_run.call_args.args[0]
@@ -278,6 +313,8 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("/tmp/harness-check-symbolize0.sock", cmd)
             self.assertEqual(mock_start_runner.call_args_list[0].kwargs["symbolize"], True)
             self.assertEqual(mock_start_runner.call_args_list[1].kwargs["symbolize"], False)
+            self.assertEqual(mock_reference.call_args_list[0].args[2], "SymbolizedPattern")
+            self.assertEqual(mock_reference.call_args_list[1].args[2], "FastPattern")
             self.assertEqual(mock_reference.call_args_list[0].kwargs["symbolize"], True)
             self.assertEqual(mock_reference.call_args_list[1].kwargs["symbolize"], False)
             reference = load_check_reference()

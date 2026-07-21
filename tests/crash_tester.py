@@ -629,6 +629,7 @@ def main() -> int:
     parser.add_argument("--pch-path", type=str, default=None, help="Path to harness_prefix.pch when --pch is used")
     # Stack trace validation arguments
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
+    parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
@@ -708,8 +709,16 @@ def main() -> int:
             status = run_proc.returncode
             run_log = run_proc.stdout + run_proc.stderr
 
-        # First: crash pattern must match.
-        if status != 77 or re.search(args.crash_pattern, run_log) is None:
+        if status != 77:
+            print(
+                f"Crash did not reproduce. Exit status: {status}\n"
+                f"Execution log:\n{run_log}"
+            )
+            return _finalize_result(args, 1)
+
+        # First: crash pattern must match unless a caller intentionally uses
+        # this run only for symbolized stack/depth validation.
+        if not args.skip_crash_pattern and re.search(args.crash_pattern, run_log) is None:
             print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
             return _finalize_result(args, 1)
 
