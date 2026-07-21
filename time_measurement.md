@@ -148,11 +148,12 @@ The report also measures:
 
 For static targets, the report states whether the runner build used rooted
 static archive extraction or the whole-archive fallback, and it reports the
-number of inferred root symbols plus the number of temporary archive copies and
-symbols normalized for default visibility. The dynamic-target `dlopen()` row is
-shown as not applicable because a static archive is not loaded with `dlopen()`.
-In a mixed configuration, the build rows carry the static-target note and the
-`dlopen()` row measures the dynamic targets.
+number of inferred root symbols plus how many static archives were copied for
+the export fix and how many static symbols were made exportable. The
+dynamic-target `dlopen()` row is shown as not applicable because a static
+archive is not loaded with `dlopen()`. In a mixed configuration, the build rows
+carry the static-target note and the `dlopen()` row measures the dynamic
+targets.
 If a lightweight plugin load fails with `undefined symbol`, the timing runner
 request measurement retries that iteration with `candidate.fallback.so`. The
 output-linking section reports whether fallback was actually needed for
