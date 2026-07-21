@@ -723,11 +723,12 @@ def measure_runner_requests(
     plugin_path: Path,
     iterations: int,
     fallback_plugin_path: Path | None = None,
-) -> tuple[dict[str, list[int]], Counter[int], bytes | None]:
+) -> tuple[dict[str, list[int]], Counter[int], bytes | None, bool]:
     samples = {"end_to_end_ns": [], "fallback_trigger_request_ns": []}
     samples.update({name: [] for name in RUNNER_METRIC_NAMES})
     statuses: Counter[int] = Counter()
     representative_output: bytes | None = None
+    fallback_needed = False
 
     for _ in range(iterations):
         total_start_ns = time.perf_counter_ns()
@@ -739,6 +740,7 @@ def measure_runner_requests(
             fallback_plugin_path is not None
             and should_retry_timing_plugin_with_fallback(status, output)
         ):
+            fallback_needed = True
             samples["fallback_trigger_request_ns"].append(initial_elapsed_ns)
             status, output, metric_values, _ = timing_runner_request(
                 socket_path,
@@ -750,7 +752,7 @@ def measure_runner_requests(
         statuses[status] += 1
         for name, value in zip(RUNNER_METRIC_NAMES, metric_values, strict=True):
             samples[name].append(value)
-    return samples, statuses, representative_output
+    return samples, statuses, representative_output, fallback_needed
 
 
 def output_text(output: bytes | None) -> str | None:
@@ -1067,6 +1069,7 @@ def main() -> int:
     startup_metrics: dict[str, object] = {}
     runner_request_samples: dict[str, dict[str, list[int]]] = {}
     runner_representative_outputs: dict[str, bytes | None] = {}
+    runner_fallback_needed: dict[str, bool] = {}
     oracle_check_samples: dict[str, dict[str, list[int]]] = {}
     oracle_references: dict[str, object] = {}
 
@@ -1289,7 +1292,12 @@ def main() -> int:
                 args.timeout,
             )
             try:
-                current_samples, statuses, representative_output = measure_runner_requests(
+                (
+                    current_samples,
+                    statuses,
+                    representative_output,
+                    fallback_needed,
+                ) = measure_runner_requests(
                     socket_path,
                     plugin,
                     args.iterations,
@@ -1303,6 +1311,7 @@ def main() -> int:
                 stop_runner(process, socket_path)
             runner_request_samples[label] = current_samples
             runner_representative_outputs[label] = representative_output
+            runner_fallback_needed[label] = fallback_needed
             execution_statuses[f"amortized_{label}"] = statuses
             if not symbolize:
                 one_time["runner_startup_wall_ns"] = startup_wall_ns
@@ -1550,10 +1559,29 @@ def main() -> int:
             + speedup(samples["normal_executable_link"], samples["candidate_plugin_link"])
         )
         if "candidate_plugin_fallback_link" in samples:
-            report.add(
-                "Fallback plugin linking is only used after a lightweight "
-                "candidate fails to load with an unresolved symbol."
+            report.subsection("Fallback use during candidate execution")
+            fallback_rows: list[list[str]] = []
+            for symbolize in (0, 1):
+                label = f"symbolize_{symbolize}"
+                fallback_rows.append(
+                    [
+                        f"symbolize={symbolize}",
+                        "yes" if runner_fallback_needed.get(label, False) else "no",
+                    ]
+                )
+            report.table(
+                [
+                    "Mode",
+                    "Fallback needed?",
+                ],
+                fallback_rows,
             )
+            report.add(
+                "Fallback is needed when the lightweight candidate plugin fails "
+                "to load with an unresolved symbol."
+            )
+        else:
+            report.add("No candidate plugin fallback link was configured.")
 
         report.section("E", f"END-TO-END EXECUTION — {args.iterations} ITERATIONS")
         execution_rows: list[list[str]] = []
@@ -1819,6 +1847,7 @@ def main() -> int:
             "startup_metrics": startup_metrics,
             "repeated_samples_ns": samples,
             "runner_request_samples_ns": runner_request_samples,
+            "runner_fallback_needed": runner_fallback_needed,
             "oracle_check_samples_ns": oracle_check_samples,
             "oracle_references": oracle_references,
             "execution_statuses": {
