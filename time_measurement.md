@@ -186,19 +186,19 @@ separately. Do not add it to the execution interval.
   measurements and exact command
   arrays used to produce the summary.
 
-python3 measure_time.py benchmark/library-bug/libaom-6/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/library-bug/libaom-6/build/sanitizer/lib -laom" \
-  --crash-input benchmark/library-bug/libaom-6/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-7/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-7/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-7/crash-input \
   --suffix dynamic \
-  -o benchmark/library-bug/libaom-6/harness.out
+  -o benchmark/library-bug/libaom-7/harness.out
 
-python3 measure_time.py benchmark/library-bug/libaom-6/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-6/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-6/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-7/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-7/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-7/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-7/crash-input \
   --suffix static \
-  -o benchmark/library-bug/libaom-6/harness.out
+  -o benchmark/library-bug/libaom-7/harness.out
 
 python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
