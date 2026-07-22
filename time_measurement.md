@@ -217,6 +217,11 @@ python3 crash_triage.py benchmark/library-bug/libpcap-2/harness.cpp \
   --link-flags="-Lbenchmark/library-bug/libpcap-2/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
   --crash-input benchmark/library-bug/libpcap-2/crash-input
 
+python3 crash_triage.py benchmark/harness-bug/sqlite-2/harness.cpp \
+  --compile-flags="-Ibenchmark/harness-bug/sqlite-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/harness-bug/sqlite-2/build/sanitizer/lib -lsqlite3" \
+  --crash-input benchmark/harness-bug/sqlite-2/crash-input
+
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
   | grep -oEm1 '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]{7,40}' \
