@@ -24,6 +24,7 @@ statistics-split
 check-level-stack
 check-level-stack-new
 check-level-stack-final
+scripts
 reduced.cpp
 harness_values.h
 benchmark.tar.gz
