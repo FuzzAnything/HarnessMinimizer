@@ -229,9 +229,13 @@ strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
 
 docker run -d \
   --name harnessminimizer-eval \
+  --init \
+  --pids-limit 4096 \
   --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark,dst=/root/benchmark \
   harnessminimizer:latest \
   tail -f /dev/null
+
+docker start harnessminimizer-eval
 
 git config --global user.email "lihy2022@connect.hku.hk"
 git config --global user.name "FalconLi"
