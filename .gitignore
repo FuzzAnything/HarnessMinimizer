@@ -29,5 +29,6 @@ reduced.cpp
 harness_values.h
 benchmark.tar.gz
 time/
-time-*/
+benchmark/*/*/time-*/*
+!benchmark/*/*/time-*/time.txt
 *crash_triage_report.md
