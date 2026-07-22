@@ -186,19 +186,19 @@ separately. Do not add it to the execution interval.
   measurements and exact command
   arrays used to produce the summary.
 
-python3 measure_time.py benchmark/library-bug/libaom-1/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-1/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/library-bug/libaom-1/build/sanitizer/lib -laom" \
-  --crash-input benchmark/library-bug/libaom-1/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-6/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-6/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-6/crash-input \
   --suffix dynamic \
-  -o benchmark/library-bug/libaom-1/harness.out
+  -o benchmark/library-bug/libaom-6/harness.out
 
-python3 measure_time.py benchmark/library-bug/libaom-5/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-5/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libaom-5/build/sanitizer/lib/libaom.a" \
-  --crash-input benchmark/library-bug/libaom-5/crash-input \
+python3 measure_time.py benchmark/library-bug/libaom-6/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-6/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libaom-6/build/sanitizer/lib/libaom.a" \
+  --crash-input benchmark/library-bug/libaom-6/crash-input \
   --suffix static \
-  -o benchmark/library-bug/libaom-5/harness.out
+  -o benchmark/library-bug/libaom-6/harness.out
 
 python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
@@ -207,20 +207,15 @@ python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libpcap-2/harness.out
 
-python3 crash_triage.py benchmark/library-bug/libpcap-3/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libpcap-3/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a" \
-  --crash-input benchmark/library-bug/libpcap-3/crash-input
+python3 crash_triage.py benchmark/library-bug/libpcap-2/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libpcap-2/build/sanitizer/lib -lpcap" \
+  --crash-input benchmark/library-bug/libpcap-2/crash-input
 
-python3 crash_triage.py benchmark/library-bug/libpcap-3/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libpcap-3/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
-  --crash-input benchmark/library-bug/libpcap-3/crash-input
-
-python3 crash_triage.py benchmark/library-bug/libpcap-3/reduced.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libpcap-3/build/sanitizer/include" \
-  --link-flags="benchmark/library-bug/libpcap-3/build/sanitizer/lib/libpcap.a" \
-  --crash-input benchmark/library-bug/libpcap-3/crash-input
+python3 crash_triage.py benchmark/library-bug/libpcap-2/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libpcap-2/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --crash-input benchmark/library-bug/libpcap-2/crash-input
 
 
 strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
@@ -231,9 +226,9 @@ docker run -d \
   --name harnessminimizer-eval \
   --init \
   --pids-limit 4096 \
-  --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer/benchmark,dst=/root/benchmark \
+  --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer,dst=/root/HarnessMinimizer \
   harnessminimizer:latest \
-  tail -f /dev/null
+  sleep infinity
 
 docker start harnessminimizer-eval
 
@@ -254,8 +249,16 @@ echo "$DEBUGINFOD_URLS"
 echo "$ASAN_SYMBOLIZER_PATH"
 echo "$UBSAN_SYMBOLIZER_PATH"
 
+cat <<'EOF' >> ~/.bashrc
+
+export HKU_API_KEY=sk-wBxcGPTDAOihyZWR0jjMtRmXdcyChzqIsZIoM6H7Ktf65Brt
+EOF
+
+source ~/.bashrc
+
 export ASAN_OPTIONS=symbolize=0:handle_abort=1
 export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:symbolize=0
+export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:symbolize=1
 
 python3 measure_time.py benchmark/library-bug/opencv-1/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr" \

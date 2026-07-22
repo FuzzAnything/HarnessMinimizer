@@ -1,0 +1,278 @@
+===============================================================================
+HARNESSREDUCER TIMING BENCHMARK
+===============================================================================
+
+Benchmark configuration
+-----------------------
+
+Field                      Value                                                                               
+-------------------------  ------------------------------------------------------------------------------------
+Generated                  2026-07-23T00:09:43.496090+08:00                                                    
+Harness                    /root/HarnessMinimizer/benchmark/library-bug/libaom-3/harness.cpp                   
+Crash input                /root/HarnessMinimizer/benchmark/library-bug/libaom-3/crash-input                   
+Crash input bytes          69                                                                                  
+Iterations                 100                                                                                 
+Suffix                     static                                                                              
+Output directory           /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static                   
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.out       
+Compile flags              -Ibenchmark/library-bug/libaom-3/build/sanitizer/include                            
+Link flags                 benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a                         
+Library configuration      static                                                                              
+Platform                   Linux-7.0.0-15-generic-x86_64-with-glibc2.39                                        
+Python                     3.12.13                                                                             
+Compiler                   Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)
+Clock                      time.perf_counter_ns / C++ steady_clock                                             
+
+
+===============================================================================
+A. LIBRARY CLASSIFICATION
+===============================================================================
+
+Resolved target inputs
+----------------------
+
+Kind           Resolved path                                                                     
+-------------  ----------------------------------------------------------------------------------
+Static target  /root/HarnessMinimizer/benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a
+
+Normal one-time runner dependencies
+-----------------------------------
+
+(none)
+Static archive runner extraction
+--------------------------------
+
+Field                                  Value                                                                                                                                                                             
+-------------------------------------  ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Mode                                   rooted undefined-symbol closure                                                                                                                                                   
+Root symbol count                      9                                                                                                                                                                                 
+Static archives copied for export fix  1                                                                                                                                                                                 
+Static symbols made exportable         9                                                                                                                                                                                 
+Root symbols                           aom_codec_av1_cx, aom_codec_control, aom_codec_destroy, aom_codec_enc_config_default, aom_codec_enc_init_ver, aom_codec_encode, aom_codec_get_cx_data, aom_img_alloc, aom_img_free
+
+
+===============================================================================
+B. ONE-TIME PREPARATION
+===============================================================================
+
+Operation                                                            Time (ms)
+-------------------------------------------------------------------  ---------
+Classify link flags                                                  1.024    
+Split source and write PCH inputs                                    0.603    
+Build normal PCH                                                     464.760  
+Build amortized PCH                                                  382.322  
+Plan static archive runner link                                      920.733  
+Build production harness_runner (rooted static archive extraction)   2218.793 
+Build instrumented timing runner (rooted static archive extraction)  2494.024 
+Start timing runner until ready                                      7.108    
+
+Runner-internal startup breakdown (symbolize=0)
+-----------------------------------------------
+
+Operation                        Time (ms) or status                            
+-------------------------------  -----------------------------------------------
+All dynamic-target dlopen calls  N/A (static targets are linked into the runner)
+Read crash input                 0.398                                          
+Create/bind/listen socket        0.196                                          
+Internal startup total           0.602                                          
+
+
+===============================================================================
+C. OBJECT COMPILATION — 100 ITERATIONS
+===============================================================================
+
+Path       Headers  Output         N    Mean ms  Median   Stddev  Min      Max    
+---------  -------  -------------  ---  -------  -------  ------  -------  -------
+Normal     Split    Executable .o  100  382.535  403.734  38.220  331.633  471.259
+Normal     PCH      Executable .o  100  120.548  119.527  9.004   96.917   152.367
+Amortized  Split    Plugin .o      100  402.266  403.696  21.840  327.403  439.990
+Amortized  PCH      Plugin .o      100  108.397  107.709  6.329   88.948   129.657
+
+Compilation comparisons
+-----------------------
+
+Comparison                             Speedup
+-------------------------------------  -------
+PCH benefit for normal compilation     3.17x  
+PCH benefit for amortized compilation  3.71x  
+Plugin split versus normal split       0.95x  
+Plugin PCH versus normal PCH           1.11x  
+
+
+===============================================================================
+D. OUTPUT LINKING — 100 ITERATIONS
+===============================================================================
+
+Output                        N    Mean ms  Median   Stddev  Min      Max     
+----------------------------  ---  -------  -------  ------  -------  --------
+Normal executable             100  952.969  973.663  84.346  821.019  1490.614
+Candidate plugin.so           100  84.553   85.218   4.285   69.615   96.220  
+Candidate plugin fallback.so  100  801.582  813.941  42.148  688.578  877.181 
+
+Plugin-link speedup over normal executable link: 11.27x
+Fallback use during candidate execution
+---------------------------------------
+
+Mode         Fallback needed?
+-----------  ----------------
+symbolize=0  no              
+symbolize=1  no              
+
+Fallback is needed when the lightweight candidate plugin fails to load with an unresolved symbol.
+
+===============================================================================
+E. END-TO-END EXECUTION — 100 ITERATIONS
+===============================================================================
+
+Path        Symbolize  N    Mean ms  Median   Stddev  Min      Max      Statuses code:count
+----------  ---------  ---  -------  -------  ------  -------  -------  -------------------
+Standalone  0          100  41.474   41.270   1.793   38.522   52.107   77:100             
+Standalone  1          100  209.408  204.135  19.336  174.677  262.085  77:100             
+Amortized   0          100  16.449   15.370   7.458   14.014   89.573   77:100             
+Amortized   1          100  176.770  176.915  6.057   150.677  205.117  77:100             
+
+Execution comparisons
+---------------------
+
+Comparison                        Speedup
+--------------------------------  -------
+Amortization, symbolize=0         2.52x  
+Amortization, symbolize=1         1.18x  
+symbolize=0 versus 1, standalone  5.05x  
+symbolize=0 versus 1, amortized   10.75x 
+
+Python-side candidate oracle parsing
+------------------------------------
+
+Output                  Check                                              N    Mean us   Median    Stddev   Min       Max     
+----------------------  -------------------------------------------------  ---  --------  --------  -------  --------  --------
+symbolize_0             crash regex match                                  100  2.729     1.085     15.931   0.952     161.226 
+symbolize_0             stack-depth check (expected 17)                    100  24.350    23.065    4.035    22.307    45.356  
+symbolize_0             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000   
+symbolize_0             pre-harness stack-trace regex (not active)         0    0.000     0.000     0.000    0.000     0.000   
+symbolize_0             combined active checks                             100  25.563    23.977    4.685    23.376    48.073  
+symbolize_1             crash regex match                                  100  1.617     1.344     0.531    1.055     3.238   
+symbolize_1             stack-depth check (expected 20)                    100  28.708    23.821    9.723    22.790    60.635  
+symbolize_1             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000   
+symbolize_1             pre-harness stack-trace regex                      100  1988.205  1755.319  477.763  1719.018  5126.530
+symbolize_1             combined active checks                             100  1969.336  1779.614  331.470  1745.925  2850.165
+two_stage_slice_inline  symbolize=0 crash + symbolize=1 crash/depth/stack  100  1781.218  1778.605  23.324   1754.225  1967.549
+
+These rows measure Python parsing of already captured output. They are not extra harness executions.
+The two-stage row mirrors slicing/inline validation: first the symbolize=0 crash-pattern check, then the symbolize=1 stack/depth check; a symbolize=1 crash regex is included only when one was extracted.
+
+===============================================================================
+F. AMORTIZED REQUEST BREAKDOWN — 100 ITERATIONS
+===============================================================================
+
+symbolize=0
+-----------
+
+Stage                                 N    Mean us    Median     Stddev    Min        Max      
+------------------------------------  ---  ---------  ---------  --------  ---------  ---------
+Socket + complete request             100  16448.534  15369.811  7458.183  14013.756  89572.884
+Monitor fork                          100  2716.702   2382.383   1145.719  1894.101   12502.520
+Executor fork                         100  651.365    623.044    107.250   509.037    1116.771 
+dlopen(candidate.so)                  100  525.019    490.452    132.080   403.451    1104.282 
+dlsym(callback)                       100  6.579      6.136      1.174     5.175      13.848   
+Call to child termination             100  10227.907  10148.389  1006.638  9182.461   19319.663
+Output-pipe interval (overlaps call)  100  10180.425  10107.013  1002.659  9101.883   19272.716
+waitpid after pipe EOF                100  16.488     15.318     4.428     11.557     44.719   
+Monitor internal total                100  13546.477  12680.433  6433.472  11453.926  76871.631
+
+symbolize=1
+-----------
+
+Stage                                 N    Mean us     Median      Stddev    Min         Max       
+------------------------------------  ---  ----------  ----------  --------  ----------  ----------
+Socket + complete request             100  176770.173  176915.389  6057.495  150677.347  205117.356
+Monitor fork                          100  3348.260    3465.626    785.220   2007.392    5267.326  
+Executor fork                         100  707.137     677.790     97.480    542.831     1060.237  
+dlopen(candidate.so)                  100  608.464     551.420     160.476   455.225     1117.218  
+dlsym(callback)                       100  7.648       7.058       1.654     5.868       15.560    
+Call to child termination             100  169721.299  170106.490  5785.277  144730.972  196218.898
+Output-pipe interval (overlaps call)  100  169657.634  170044.289  5782.164  144675.757  196075.898
+waitpid after pipe EOF                100  28.728      26.186      8.764     16.942      53.334    
+Monitor internal total                100  173102.843  173278.677  5862.960  148097.501  199857.966
+
+Note: 'Call to child termination' includes target execution and sanitizer crash reporting. The output-pipe interval overlaps that time and must not be added to it.
+If fallback is triggered, the request end-to-end row includes the failed fast-path load request plus the successful fallback load request. The fallback plugin link itself is measured in section D.
+
+===============================================================================
+G. COMMANDS USED
+===============================================================================
+
+Normal Pch Build
+----------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -x c++-header -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.normal.pch
+
+Amortized Pch Build
+-------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -x c++-header -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.amortized.pch
+
+Normal Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/normal_split.o
+
+Normal Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.normal.pch -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/normal_pch.o
+
+Plugin Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/plugin_split.o
+
+Plugin Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.amortized.pch -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/libaom-3/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/plugin_pch.o
+
+Normal Executable Link
+----------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/normal_split.o -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.out benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a
+
+Candidate Plugin Link
+---------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/plugin_pch.o -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/candidate.so
+
+Candidate Plugin Fallback Link
+------------------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/plugin_pch.o benchmark/library-bug/libaom-3/build/sanitizer/lib/libaom.a -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/candidate.fallback.so
+
+Production Runner Build
+-----------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/src/harnessreducer/harness_runner.cpp -no-pie -Wl,--export-dynamic -Wl,-u,aom_codec_av1_cx -Wl,-u,aom_codec_control -Wl,-u,aom_codec_destroy -Wl,-u,aom_codec_enc_config_default -Wl,-u,aom_codec_enc_init_ver -Wl,-u,aom_codec_encode -Wl,-u,aom_codec_get_cx_data -Wl,-u,aom_img_alloc -Wl,-u,aom_img_free /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/amortized_static_exports_1784736533100144345/0_libaom.a -ldl -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_runner
+
+Timing Runner Build
+-------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/timing_runner.cpp -no-pie -Wl,--export-dynamic -Wl,-u,aom_codec_av1_cx -Wl,-u,aom_codec_control -Wl,-u,aom_codec_destroy -Wl,-u,aom_codec_enc_config_default -Wl,-u,aom_codec_enc_init_ver -Wl,-u,aom_codec_encode -Wl,-u,aom_codec_get_cx_data -Wl,-u,aom_img_alloc -Wl,-u,aom_img_free /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/amortized_static_exports_1784736533100144345/0_libaom.a -ldl -o /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/timing_runner
+
+
+===============================================================================
+H. ARTIFACTS
+===============================================================================
+
+Artifact                          Path                                                                                                                     
+--------------------------------  -------------------------------------------------------------------------------------------------------------------------
+Human-readable report             /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/time.txt                                               
+Raw timing samples                /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/raw_samples.json                                       
+PCH prefix header                 /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.h                                       
+Normal PCH                        /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.normal.pch                              
+Amortized PCH                     /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_prefix.amortized.pch                           
+Include-free harness body         /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.harness_body.cpp                               
+Representative executable         /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness.out                                            
+Candidate plugin                  /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/candidate.so                                           
+Fallback candidate plugin         /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/candidate.fallback.so                                  
+Temporary fixed static archive 1  /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/amortized_static_exports_1784736533100144345/0_libaom.a
+Production runner                 /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/harness_runner                                         
+Instrumented runner               /root/HarnessMinimizer/benchmark/library-bug/libaom-3/time-static/timing_runner

@@ -1,0 +1,259 @@
+===============================================================================
+HARNESSREDUCER TIMING BENCHMARK
+===============================================================================
+
+Benchmark configuration
+-----------------------
+
+Field                      Value                                                                               
+-------------------------  ------------------------------------------------------------------------------------
+Generated                  2026-07-23T00:20:30.421638+08:00                                                    
+Harness                    /root/HarnessMinimizer/benchmark/library-bug/libaom-4/harness.cpp                   
+Crash input                /root/HarnessMinimizer/benchmark/library-bug/libaom-4/crash-input                   
+Crash input bytes          69                                                                                  
+Iterations                 100                                                                                 
+Suffix                     dynamic                                                                             
+Output directory           /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic                  
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.out      
+Compile flags              -Ibenchmark/library-bug/libaom-4/build/sanitizer/include                            
+Link flags                 -Lbenchmark/library-bug/libaom-4/build/sanitizer/lib -laom                          
+Library configuration      dynamic                                                                             
+Platform                   Linux-7.0.0-15-generic-x86_64-with-glibc2.39                                        
+Python                     3.12.13                                                                             
+Compiler                   Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)
+Clock                      time.perf_counter_ns / C++ steady_clock                                             
+
+
+===============================================================================
+A. LIBRARY CLASSIFICATION
+===============================================================================
+
+Resolved target inputs
+----------------------
+
+Kind            Resolved path                                                                      
+--------------  -----------------------------------------------------------------------------------
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.so
+
+Normal one-time runner dependencies
+-----------------------------------
+
+-L/root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib
+
+===============================================================================
+B. ONE-TIME PREPARATION
+===============================================================================
+
+Operation                          Time (ms)
+---------------------------------  ---------
+Classify link flags                1.280    
+Split source and write PCH inputs  0.741    
+Build normal PCH                   498.155  
+Build amortized PCH                474.908  
+Plan static archive runner link    0.028    
+Build production harness_runner    1600.362 
+Build instrumented timing runner   1963.413 
+Start timing runner until ready    32.880   
+
+Runner-internal startup breakdown (symbolize=0)
+-----------------------------------------------
+
+Operation                        Time (ms) or status
+-------------------------------  -------------------
+All dynamic-target dlopen calls  0.316              
+Read crash input                 0.229              
+Create/bind/listen socket        0.106              
+Internal startup total           0.916              
+
+Individual dynamic-target dlopen calls
+--------------------------------------
+
+Target                                                                               Time (ms)
+-----------------------------------------------------------------------------------  ---------
+/root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.so  0.316    
+
+
+===============================================================================
+C. OBJECT COMPILATION — 100 ITERATIONS
+===============================================================================
+
+Path       Headers  Output         N    Mean ms  Median   Stddev  Min      Max    
+---------  -------  -------------  ---  -------  -------  ------  -------  -------
+Normal     Split    Executable .o  100  506.128  505.807  31.780  412.665  602.483
+Normal     PCH      Executable .o  100  223.495  224.488  9.549   185.743  245.883
+Amortized  Split    Plugin .o      100  453.703  468.313  39.593  384.198  553.897
+Amortized  PCH      Plugin .o      100  181.106  186.502  16.726  149.007  229.851
+
+Compilation comparisons
+-----------------------
+
+Comparison                             Speedup
+-------------------------------------  -------
+PCH benefit for normal compilation     2.26x  
+PCH benefit for amortized compilation  2.51x  
+Plugin split versus normal split       1.12x  
+Plugin PCH versus normal PCH           1.23x  
+
+
+===============================================================================
+D. OUTPUT LINKING — 100 ITERATIONS
+===============================================================================
+
+Output               N    Mean ms  Median   Stddev  Min      Max    
+-------------------  ---  -------  -------  ------  -------  -------
+Normal executable    100  256.331  261.869  13.694  219.921  276.322
+Candidate plugin.so  100  85.964   86.970   4.694   70.226   94.432 
+
+Plugin-link speedup over normal executable link: 2.98x
+No candidate plugin fallback link was configured.
+
+===============================================================================
+E. END-TO-END EXECUTION — 100 ITERATIONS
+===============================================================================
+
+Path        Symbolize  N    Mean ms  Median   Stddev  Min      Max      Statuses code:count
+----------  ---------  ---  -------  -------  ------  -------  -------  -------------------
+Standalone  0          100  47.756   47.689   2.461   43.530   54.042   77:100             
+Standalone  1          100  211.606  210.212  11.732  183.650  289.309  77:100             
+Amortized   0          100  19.660   19.179   2.531   14.768   35.359   77:100             
+Amortized   1          100  182.528  184.629  8.312   153.800  197.156  77:100             
+
+Execution comparisons
+---------------------
+
+Comparison                        Speedup
+--------------------------------  -------
+Amortization, symbolize=0         2.43x  
+Amortization, symbolize=1         1.16x  
+symbolize=0 versus 1, standalone  4.43x  
+symbolize=0 versus 1, amortized   9.28x  
+
+Python-side candidate oracle parsing
+------------------------------------
+
+Output                  Check                                              N    Mean us   Median    Stddev   Min       Max     
+----------------------  -------------------------------------------------  ---  --------  --------  -------  --------  --------
+symbolize_0             crash regex match                                  100  4.858     1.960     25.220   0.967     255.364 
+symbolize_0             stack-depth check (expected 19)                    100  43.791    39.593    15.029   24.405    80.407  
+symbolize_0             dynamic .so offset check                           100  317.311   295.024   112.617  173.385   673.186 
+symbolize_0             pre-harness stack-trace regex (not active)         0    0.000     0.000     0.000    0.000     0.000   
+symbolize_0             combined active checks                             100  364.314   327.146   160.459  198.126   1406.342
+symbolize_1             crash regex match                                  100  1.904     1.593     0.874    1.170     7.313   
+symbolize_1             stack-depth check (expected 22)                    100  33.873    26.272    12.695   23.974    84.135  
+symbolize_1             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000   
+symbolize_1             pre-harness stack-trace regex                      100  2325.421  2062.188  492.430  1980.458  4412.575
+symbolize_1             combined active checks                             100  2363.473  2107.095  473.607  1998.205  4407.245
+two_stage_slice_inline  symbolize=0 crash + symbolize=1 crash/depth/stack  100  2499.423  2326.488  402.114  2216.158  3611.068
+
+Recorded dynamic crash-site used for timing: /root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.so+0x1b92980
+These rows measure Python parsing of already captured output. They are not extra harness executions.
+The two-stage row mirrors slicing/inline validation: first the symbolize=0 crash-pattern check, then the symbolize=1 stack/depth check; a symbolize=1 crash regex is included only when one was extracted.
+
+===============================================================================
+F. AMORTIZED REQUEST BREAKDOWN — 100 ITERATIONS
+===============================================================================
+
+symbolize=0
+-----------
+
+Stage                                 N    Mean us    Median     Stddev    Min        Max      
+------------------------------------  ---  ---------  ---------  --------  ---------  ---------
+Socket + complete request             100  19660.409  19179.479  2531.379  14767.860  35358.842
+Monitor fork                          100  2856.235   2687.893   648.514   1904.342   4711.141 
+Executor fork                         100  905.010    831.928    198.939   644.140    1680.613 
+dlopen(candidate.so)                  100  614.264    555.682    187.381   391.257    1249.550 
+dlsym(callback)                       100  6.670      6.026      1.622     4.467      14.132   
+Call to child termination             100  13544.185  13653.153  1687.642  10248.101  26486.808
+Output-pipe interval (overlaps call)  100  13496.693  13613.544  1676.275  10221.299  26387.974
+waitpid after pipe EOF                100  16.799     16.151     3.911     10.600     35.768   
+Monitor internal total                100  16591.157  16425.314  2187.042  12289.969  30721.611
+
+symbolize=1
+-----------
+
+Stage                                 N    Mean us     Median      Stddev    Min         Max       
+------------------------------------  ---  ----------  ----------  --------  ----------  ----------
+Socket + complete request             100  182527.700  184629.253  8312.187  153800.031  197156.392
+Monitor fork                          100  3462.011    3318.909    688.963   1984.143    5094.283  
+Executor fork                         100  1017.066    938.846     163.236   773.389     1331.450  
+dlopen(candidate.so)                  100  687.902     644.365     174.619   490.285     1273.871  
+dlsym(callback)                       100  7.901       7.693       2.067     5.561       16.498    
+Call to child termination             100  175168.706  177247.253  8246.896  147798.273  189017.124
+Output-pipe interval (overlaps call)  100  175104.310  177186.555  8239.409  147736.750  188963.609
+waitpid after pipe EOF                100  24.796      21.316      9.585     11.571      60.163    
+Monitor internal total                100  178741.446  180900.432  8271.067  150446.590  193161.344
+
+Note: 'Call to child termination' includes target execution and sanitizer crash reporting. The output-pipe interval overlaps that time and must not be added to it.
+If fallback is triggered, the request end-to-end row includes the failed fast-path load request plus the successful fallback load request. The fallback plugin link itself is measured in section D.
+
+===============================================================================
+G. COMMANDS USED
+===============================================================================
+
+Normal Pch Build
+----------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -x c++-header -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.normal.pch
+
+Amortized Pch Build
+-------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -x c++-header -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.amortized.pch
+
+Normal Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/normal_split.o
+
+Normal Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.normal.pch -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/normal_pch.o
+
+Plugin Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/plugin_split.o
+
+Plugin Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.amortized.pch -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/libaom-4/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/plugin_pch.o
+
+Normal Executable Link
+----------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/normal_split.o -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.out -Lbenchmark/library-bug/libaom-4/build/sanitizer/lib -laom
+
+Candidate Plugin Link
+---------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/plugin_pch.o -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/candidate.so
+
+Production Runner Build
+-----------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/src/harnessreducer/harness_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.so -L/root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_runner
+
+Timing Runner Build
+-------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/timing_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib/libaom.so -L/root/HarnessMinimizer/benchmark/library-bug/libaom-4/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/timing_runner
+
+
+===============================================================================
+H. ARTIFACTS
+===============================================================================
+
+Artifact                   Path                                                                                           
+-------------------------  -----------------------------------------------------------------------------------------------
+Human-readable report      /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/time.txt                    
+Raw timing samples         /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/raw_samples.json            
+PCH prefix header          /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.h            
+Normal PCH                 /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.normal.pch   
+Amortized PCH              /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_prefix.amortized.pch
+Include-free harness body  /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.harness_body.cpp    
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness.out                 
+Candidate plugin           /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/candidate.so                
+Production runner          /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/harness_runner              
+Instrumented runner        /root/HarnessMinimizer/benchmark/library-bug/libaom-4/time-dynamic/timing_runner
