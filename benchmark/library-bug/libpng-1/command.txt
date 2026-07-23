@@ -1,0 +1,25 @@
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libpng.a -lz" \
+  --work-dir ./statistics-pch-link-static \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lpng -lz" \
+  --work-dir ./statistics-pch-link \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  --statistics \
+  -o reduced.cpp
+
+clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/include harness.cpp -o harness -L$(pwd)/build/sanitizer/lib -lpng -lz -Wl,-rpath,$(pwd)/build/sanitizer/lib
+
+clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/include harness.cpp -o harness $(pwd)/build/sanitizer/lib/libpng.a -lz

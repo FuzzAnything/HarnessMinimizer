@@ -736,16 +736,14 @@ def measure_runner_requests(
             socket_path,
             plugin_path,
         )
-        if (
-            fallback_plugin_path is not None
-            and should_retry_timing_plugin_with_fallback(status, output)
-        ):
+        if should_retry_timing_plugin_with_fallback(status, output):
             fallback_needed = True
             samples["fallback_trigger_request_ns"].append(initial_elapsed_ns)
-            status, output, metric_values, _ = timing_runner_request(
-                socket_path,
-                fallback_plugin_path,
-            )
+            if fallback_plugin_path is not None:
+                status, output, metric_values, _ = timing_runner_request(
+                    socket_path,
+                    fallback_plugin_path,
+                )
         if representative_output is None:
             representative_output = output
         samples["end_to_end_ns"].append(time.perf_counter_ns() - total_start_ns)
@@ -1206,8 +1204,9 @@ def main() -> int:
             "-o",
             str(plugin),
         ]
+        candidate_plugin_fallback_link_command: list[str] | None = None
         if link_inputs.plugin_link_flags:
-            commands["candidate_plugin_fallback_link"] = [
+            candidate_plugin_fallback_link_command = [
                 "clang++",
                 "-Qunused-arguments",
                 "-shared",
@@ -1223,10 +1222,6 @@ def main() -> int:
         samples["candidate_plugin_link"] = measure_checked_command(
             commands["candidate_plugin_link"], args.iterations
         )
-        if "candidate_plugin_fallback_link" in commands:
-            samples["candidate_plugin_fallback_link"] = measure_checked_command(
-                commands["candidate_plugin_fallback_link"], args.iterations
-            )
 
         runner_source = PROJECT_ROOT / "src" / "harnessreducer" / "harness_runner.cpp"
         production_runner = output_dir / "harness_runner"
@@ -1278,6 +1273,31 @@ def main() -> int:
             commands["timing_runner_build"]
         )
 
+        def ensure_fallback_plugin_linked() -> Path:
+            if candidate_plugin_fallback_link_command is None:
+                raise RuntimeError(
+                    "The lightweight candidate plugin needed fallback, but no "
+                    "fallback link flags were available."
+                )
+            if "candidate_plugin_fallback_link" not in samples:
+                try:
+                    samples["candidate_plugin_fallback_link"] = measure_checked_command(
+                        candidate_plugin_fallback_link_command,
+                        args.iterations,
+                    )
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "The lightweight candidate plugin needed fallback, but "
+                        "candidate.fallback.so could not be linked. This usually "
+                        "means a static archive in --link-flags is not usable in "
+                        "a shared object, e.g. it was not built with -fPIC.\n"
+                        f"{exc}"
+                    ) from exc
+                commands["candidate_plugin_fallback_link"] = (
+                    candidate_plugin_fallback_link_command
+                )
+            return fallback_plugin
+
         for symbolize in (False, True):
             label = f"symbolize_{int(symbolize)}"
             socket_path = output_dir / f"timing_runner_{int(symbolize)}.sock"
@@ -1293,6 +1313,23 @@ def main() -> int:
                 args.timeout,
             )
             try:
+                fallback_plugin_path: Path | None = None
+                if (
+                    candidate_plugin_fallback_link_command is not None
+                    and "candidate_plugin_fallback_link" not in samples
+                ):
+                    probe_status, probe_output, _, _ = timing_runner_request(
+                        socket_path,
+                        plugin,
+                    )
+                    if should_retry_timing_plugin_with_fallback(
+                        probe_status,
+                        probe_output,
+                    ):
+                        runner_fallback_needed[label] = True
+                        fallback_plugin_path = ensure_fallback_plugin_linked()
+                else:
+                    fallback_plugin_path = fallback_plugin
                 (
                     current_samples,
                     statuses,
@@ -1302,17 +1339,15 @@ def main() -> int:
                     socket_path,
                     plugin,
                     args.iterations,
-                    (
-                        fallback_plugin
-                        if "candidate_plugin_fallback_link" in commands
-                        else None
-                    ),
+                    fallback_plugin_path,
                 )
             finally:
                 stop_runner(process, socket_path)
             runner_request_samples[label] = current_samples
             runner_representative_outputs[label] = representative_output
-            runner_fallback_needed[label] = fallback_needed
+            runner_fallback_needed[label] = (
+                runner_fallback_needed.get(label, False) or fallback_needed
+            )
             execution_statuses[f"amortized_{label}"] = statuses
             if not symbolize:
                 one_time["runner_startup_wall_ns"] = startup_wall_ns
@@ -1567,7 +1602,7 @@ def main() -> int:
             "Plugin-link speedup over normal executable link: "
             + speedup(samples["normal_executable_link"], samples["candidate_plugin_link"])
         )
-        if "candidate_plugin_fallback_link" in samples:
+        if candidate_plugin_fallback_link_command is not None:
             report.subsection("Fallback use during candidate execution")
             fallback_rows: list[list[str]] = []
             for symbolize in (0, 1):
@@ -1589,6 +1624,11 @@ def main() -> int:
                 "Fallback is needed when the lightweight candidate plugin fails "
                 "to load with an unresolved symbol."
             )
+            if "candidate_plugin_fallback_link" not in samples:
+                report.add(
+                    "candidate.fallback.so was not built or timed because "
+                    "fallback was not needed."
+                )
         else:
             report.add("No candidate plugin fallback link was configured.")
 
@@ -1802,7 +1842,7 @@ def main() -> int:
         report.add(
             "If fallback is triggered, the request end-to-end row includes the failed "
             "fast-path load request plus the successful fallback load request. The fallback "
-            "plugin link itself is measured in section D."
+            "plugin link itself is measured in section D when fallback is needed."
         )
 
         report.section("G", "COMMANDS USED")

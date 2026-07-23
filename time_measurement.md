@@ -106,7 +106,7 @@ The main files are:
 <timing-directory>/harness_prefix.amortized.pch
 <timing-directory>/candidate.so             representative candidate plugin
 <timing-directory>/candidate.fallback.so    plugin linked with --link-flags
-                                            when static fallback is measurable
+                                            when fallback is needed and buildable
 <timing-directory>/harness_runner           normal production runner build
 <timing-directory>/timing_runner            instrumented measurement runner
 ```
@@ -134,7 +134,7 @@ The report also measures:
 - source splitting and PCH creation;
 - normal executable linking;
 - candidate plugin linking;
-- fallback candidate plugin linking, when static archives are present;
+- fallback candidate plugin linking, only when fallback is actually needed;
 - static/dynamic/mixed library classification;
 - production runner build time;
 - dynamic-target `dlopen()` and crash-input loading;
@@ -157,8 +157,11 @@ targets.
 If a lightweight plugin load fails with `undefined symbol`, the timing runner
 request measurement retries that iteration with `candidate.fallback.so`. The
 output-linking section reports whether fallback was actually needed for
-`symbolize=0` and `symbolize=1`. This distinguishes a fallback plugin that was
-merely link-timed from one that was required by the measured candidate.
+`symbolize=0` and `symbolize=1`, so the report shows whether the lightweight
+plugin path was sufficient for the measured candidate.
+If fallback is not needed, `candidate.fallback.so` is not built or timed. If
+fallback is needed but the static archive cannot be linked into a shared object,
+the report fails at that point with the fallback linker error.
 
 `dlsym()` only finds the harness function address. The following function-pointer
 call performs the actual candidate execution. If the candidate crashes, its
@@ -200,11 +203,32 @@ python3 measure_time.py benchmark/library-bug/libaom-7/harness.cpp \
   --suffix static \
   -o benchmark/library-bug/libaom-7/harness.out
 
+python3 measure_time.py benchmark/library-bug/libpcap-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-1/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libpcap-1/build/sanitizer/lib/libpcap.a" \
+  --crash-input benchmark/library-bug/libpcap-1/crash-input \
+  --suffix static \
+  -o benchmark/library-bug/libpcap-1/harness.out
+
+python3 measure_time.py benchmark/library-bug/libpcap-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-1/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libpcap-1/build/sanitizer/lib -lpcap" \
+  --crash-input benchmark/library-bug/libpcap-1/crash-input \
+  --suffix dynamic \
+  -o benchmark/library-bug/libpcap-1/harness.out
+
 python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
   --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
   --link-flags="benchmark/library-bug/libpcap-2/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
   --crash-input benchmark/library-bug/libpcap-2/crash-input \
   --suffix static \
+  -o benchmark/library-bug/libpcap-2/harness.out
+
+python3 measure_time.py benchmark/library-bug/libpcap-2/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpcap-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libpcap-2/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --crash-input benchmark/library-bug/libpcap-2/crash-input \
+  --suffix dynamic \
   -o benchmark/library-bug/libpcap-2/harness.out
 
 python3 crash_triage.py benchmark/library-bug/libpcap-2/harness.cpp \
