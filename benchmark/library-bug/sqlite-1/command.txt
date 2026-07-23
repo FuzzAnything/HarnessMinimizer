@@ -1,0 +1,31 @@
+clang++ -fsanitize=fuzzer,address,undefined -g -O0 harness.cpp -o harness \
+  -I$(pwd)/build/sanitizer/include \
+  -L$(pwd)/build/sanitizer/lib \
+  -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+  -lsqlite3
+
+clang++ -fsanitize=fuzzer,address,undefined -g -O0 harness.cpp -o harness \
+  -I$(pwd)/build/sanitizer/include \
+  $(pwd)/build/sanitizer/lib/libsqlite3.a
+
+harnessreducer harness.cpp \
+ --compile-flags="-I$(pwd)/build/sanitizer/include" \
+ --link-flags="-L$(pwd)/build/sanitizer/lib -lsqlite3" \
+ --work-dir ./statistics-pch-link \
+ --crash-input crash-input \
+ --pch \
+ --amortize-link \
+ --stable \
+ --statistics \
+ -o reduced.cpp
+
+harnessreducer harness.cpp \
+ --compile-flags="-I$(pwd)/build/sanitizer/include" \
+ --link-flags="$(pwd)/build/sanitizer/lib/libsqlite3.a" \
+ --work-dir ./statistics-pch-link \
+ --crash-input crash-input \
+ --pch \
+ --amortize-link \
+ --stable \
+ --statistics \
+ -o reduced.cpp
