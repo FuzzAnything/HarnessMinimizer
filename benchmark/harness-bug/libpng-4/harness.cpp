@@ -1,319 +1,280 @@
-/* Fuzzing harness for libpng metadata retrieval operations (pngget.c module)
- * Targets PNG metadata getter functions with extremely low coverage (8.07% lines, 14.29% functions):
- * 1. Color calibration getters:
- *    - png_get_cHRM (Target: 22 undiscovered branches)
- *    - png_get_cHRM_XYZ (Target: 120 undiscovered branches)
- * 2. ICC profile getter:
- *    - png_get_iCCP (Target: 14 undiscovered branches)
- * 3. Coding-independent code points getter:
- *    - png_get_cICP (Target: 14 undiscovered branches)
- * 4. Pixel calibration getter:
- *    - png_get_pCAL (Target: 20 undiscovered branches)
- * 5. Transparency getter:
- *    - png_get_tRNS (Target: 18 undiscovered branches)
- * 6. Background color getter:
- *    - png_get_bKGD (Target: 8 undiscovered branches)
- *
- * Required setup APIs (to populate metadata for retrieval):
- * - png_create_read_struct / png_create_read_struct_2 (Initialization)
- * - png_create_info_struct (Initialization)
- * - png_set_cHRM / png_set_cHRM_fixed (Prerequisite for get_cHRM)
- * - png_set_iCCP (Prerequisite for get_iCCP)
- * - png_set_cICP (Prerequisite for get_cICP)
- * - png_set_pCAL (Prerequisite for get_pCAL)
- * - png_set_tRNS (Prerequisite for get_tRNS)
- * - png_set_bKGD (Prerequisite for get_bKGD)
- *
- * Invocation sequence:
- * 1. Initialize PNG read structures
- * 2. Set metadata values using png_set_* functions with fuzzer-provided data
- * 3. Retrieve metadata using corresponding png_get_* functions
- * 4. Verify retrieved values match set values where applicable
- * 5. Clean up resources
- *
- * Uses FuzzedDataProvider to generate diverse metadata values:
- * - Color calibration coordinates (white point, RGB primaries)
- * - ICC profile data
- * - Coding-independent code points
- * - Pixel calibration parameters
- * - Transparency data
- * - Background color values
- *
- * Differentiates from existing harnesses by:
- * - Focusing exclusively on metadata retrieval operations (pngget.c)
- * - Testing getter functions that require prior metadata setup
- * - Exploring the largely untested metadata handling code paths
- * - Providing semantic diversity beyond image read/write operations
- */
-
-#include <cstdint>
+#include <fuzzer/FuzzedDataProvider.h>
+#include <png.h>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 #include <vector>
-#include <memory>
-#include <string>
-#include <fuzzer/FuzzedDataProvider.h>
-#include "png.h"
+#include <algorithm>
 
-// Error handling callback functions
-static void pngtest_error(png_structp png_ptr, png_const_charp error_msg) {
-    // Suppress error messages during fuzzing
-    (void)error_msg;
-    // Use longjmp as required by libpng
-    longjmp(png_jmpbuf(png_ptr), 1);
-}
-
-static void pngtest_warning(png_structp png_ptr, png_const_charp warning_msg) {
-    // Suppress warning messages during fuzzing
-    (void)png_ptr;
-    (void)warning_msg;
-}
-
-// Custom read function (minimal implementation for metadata testing)
-static void dummy_read_fn(png_structp png_ptr, png_bytep data, png_size_t length) {
-    // For metadata testing, we don't need actual PNG data
-    // Just fill with zeros to prevent errors
-    memset(data, 0, length);
-}
+// Check if simplified write API is supported at compile time
+#ifndef PNG_SIMPLIFIED_WRITE_SUPPORTED
+#error This harness requires PNG_SIMPLIFIED_WRITE_SUPPORTED
+#endif
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-    // Need sufficient data for metadata configuration
-    // We'll split input into multiple parts for different metadata types
-    if (size < 256) {
-        return 0;  // Need enough data for comprehensive metadata testing
+    // Need sufficient input for image parameters and pixel data
+    if (size < 100) {
+        return 0;
     }
-    
+
     FuzzedDataProvider fdp(data, size);
+
+    // Step 1: Choose operation mode from fuzzer input
+    // 0: Write to file (using temporary file)
+    // 1: Write to memory buffer
+    // 2: Write to stdio (using temporary file)
+    // 3: Test memory size calculation
+    uint8_t operation_mode = fdp.ConsumeIntegral<uint8_t>() % 4;
+
+    // Step 2: Initialize png_image structure for writing
+    png_image image;
+    memset(&image, 0, sizeof(image));
+    image.version = PNG_IMAGE_VERSION;
+    image.opaque = NULL;
+
+    // Step 3: Consume image dimensions (limit to reasonable size for fuzzing)
+    image.width = fdp.ConsumeIntegralInRange<png_uint_32>(1, 256);
+    image.height = fdp.ConsumeIntegralInRange<png_uint_32>(1, 256);
+
+    // Step 4: Choose image format from fuzzer input
+    uint8_t format_choice = fdp.ConsumeIntegral<uint8_t>() % 12;
+    png_uint_32 format = PNG_FORMAT_GRAY;
     
-    // ============================================
-    // PHASE 1: Initialize PNG structures
-    // ============================================
+    switch (format_choice) {
+        case 0: format = PNG_FORMAT_GRAY; break;
+        case 1: format = PNG_FORMAT_GA; break;
+        case 2: format = PNG_FORMAT_RGB; break;
+        case 3: format = PNG_FORMAT_RGBA; break;
+        case 4: format = PNG_FORMAT_BGR; break;
+        case 5: format = PNG_FORMAT_BGRA; break;
+        case 6: format = PNG_FORMAT_ABGR; break;
+        case 7: format = PNG_FORMAT_ARGB; break;
+        case 8: format = PNG_FORMAT_LINEAR_RGB; break;
+        case 9: format = PNG_FORMAT_LINEAR_RGB_ALPHA; break;
+        case 10: format = PNG_FORMAT_LINEAR_Y; break;
+        case 11: format = PNG_FORMAT_LINEAR_Y_ALPHA; break;
+    }
     
-    // Create read structure
-    png_structp read_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL,
-                                                 pngtest_error, pngtest_warning);
-    if (read_ptr == NULL) {
+    image.format = format;
+
+    // Step 5: Set flags based on fuzzer input
+    uint8_t flag_choice = fdp.ConsumeIntegral<uint8_t>() % 4;
+    switch (flag_choice) {
+        case 0:
+            // No additional flags
+            break;
+        case 1:
+            // Set fast flag
+            image.flags |= PNG_IMAGE_FLAG_FAST;
+            break;
+        case 2:
+            // Set 16-bit sRGB flag if format is linear
+            if (format & PNG_FORMAT_FLAG_LINEAR) {
+                image.flags |= PNG_IMAGE_FLAG_16BIT_sRGB;
+            }
+            break;
+        case 3:
+            // Set non-sRGB colorspace flag for color formats
+            if (format & PNG_FORMAT_FLAG_COLOR) {
+                image.flags |= PNG_IMAGE_FLAG_COLORSPACE_NOT_sRGB;
+            }
+            break;
+    }
+
+    // Step 6: Handle colormap for colormapped formats
+    void* colormap = NULL;
+    image.colormap_entries = 0;
+    
+    if (format & PNG_FORMAT_FLAG_COLORMAP) {
+        // For colormapped format, set up a simple colormap
+        image.colormap_entries = fdp.ConsumeIntegralInRange<png_uint_32>(1, 256);
+        
+        // Allocate colormap (size depends on format)
+        png_uint_32 colormap_size = PNG_IMAGE_COLORMAP_SIZE(image);
+        if (colormap_size > 0 && colormap_size < 1024 * 1024) {
+            colormap = malloc(colormap_size);
+            if (colormap) {
+                // Fill colormap with random data from fuzzer input
+                size_t bytes_to_fill = std::min((size_t)colormap_size, fdp.remaining_bytes());
+                if (bytes_to_fill > 0) {
+                    auto colormap_data = fdp.ConsumeBytes<uint8_t>(bytes_to_fill);
+                    memcpy(colormap, colormap_data.data(), bytes_to_fill);
+                }
+            }
+        }
+    }
+
+    // Step 7: Calculate buffer size for image data
+    png_uint_32 buffer_size = PNG_IMAGE_SIZE(image);
+    if (buffer_size == 0 || buffer_size > 10 * 1024 * 1024) {
+        // Avoid excessive memory allocation
+        if (colormap) free(colormap);
+        png_image_free(&image);
         return 0;
     }
-    
-    // Create info structure
-    png_infop info_ptr = png_create_info_struct(read_ptr);
-    if (info_ptr == NULL) {
-        png_destroy_read_struct(&read_ptr, NULL, NULL);
+
+    // Step 8: Allocate and fill image buffer with test patterns
+    void* buffer = malloc(buffer_size);
+    if (buffer == NULL) {
+        if (colormap) free(colormap);
+        png_image_free(&image);
         return 0;
     }
+
+    // Fill buffer with various test patterns based on fuzzer input
+    // This creates diverse image data to exercise different code paths
+    size_t bytes_to_fill = std::min((size_t)buffer_size, fdp.remaining_bytes());
+    if (bytes_to_fill > 0) {
+        auto buffer_data = fdp.ConsumeBytes<uint8_t>(bytes_to_fill);
+        memcpy(buffer, buffer_data.data(), bytes_to_fill);
+        
+        // Fill remaining bytes with pattern if we didn't consume all
+        if (bytes_to_fill < buffer_size) {
+            uint8_t* buf_ptr = static_cast<uint8_t*>(buffer);
+            for (size_t i = bytes_to_fill; i < buffer_size; i++) {
+                buf_ptr[i] = static_cast<uint8_t>(i % 256);
+            }
+        }
+    } else {
+        // No fuzzer data left, fill with simple pattern
+        uint8_t* buf_ptr = static_cast<uint8_t*>(buffer);
+        for (size_t i = 0; i < buffer_size; i++) {
+            buf_ptr[i] = static_cast<uint8_t>(i % 256);
+        }
+    }
+
+    // Step 9: Determine row stride (can be 0, positive, or negative for bottom-up)
+    png_int_32 row_stride = 0;
+    uint8_t stride_choice = fdp.ConsumeIntegral<uint8_t>() % 3;
     
-    // Set up minimal I/O for metadata testing
-    png_set_read_fn(read_ptr, NULL, dummy_read_fn);
+    if (stride_choice == 1) {
+        // Calculate proper stride
+        png_uint_32 pixel_channels = 0;
+        if (format & PNG_FORMAT_FLAG_COLOR) {
+            pixel_channels = 3; // RGB
+            if (format & PNG_FORMAT_FLAG_ALPHA) {
+                pixel_channels = 4; // RGBA
+            }
+        } else {
+            pixel_channels = 1; // Grayscale
+            if (format & PNG_FORMAT_FLAG_ALPHA) {
+                pixel_channels = 2; // GA
+            }
+        }
+        
+        if (format & PNG_FORMAT_FLAG_LINEAR) {
+            pixel_channels *= 2; // 16-bit per component
+        }
+        
+        row_stride = image.width * pixel_channels;
+    } else if (stride_choice == 2) {
+        // Negative stride for bottom-up layout
+        png_uint_32 pixel_channels = 0;
+        if (format & PNG_FORMAT_FLAG_COLOR) {
+            pixel_channels = 3; // RGB
+            if (format & PNG_FORMAT_FLAG_ALPHA) {
+                pixel_channels = 4; // RGBA
+            }
+        } else {
+            pixel_channels = 1; // Grayscale
+            if (format & PNG_FORMAT_FLAG_ALPHA) {
+                pixel_channels = 2; // GA
+            }
+        }
+        
+        if (format & PNG_FORMAT_FLAG_LINEAR) {
+            pixel_channels *= 2; // 16-bit per component
+        }
+        
+        row_stride = -(static_cast<png_int_32>(image.width * pixel_channels));
+    }
+
+    // Step 10: Determine convert_to_8bit flag
+    int convert_to_8bit = fdp.ConsumeBool() ? 1 : 0;
+
+    // Step 11: Execute the chosen write operation
+    int write_result = 0;
     
-    // Set error handling
-    if (setjmp(png_jmpbuf(read_ptr))) {
-        // Error occurred during metadata operations
-        png_destroy_read_struct(&read_ptr, &info_ptr, NULL);
-        return 0;
+    switch (operation_mode) {
+        case 0: {
+            // Write to file using png_image_write_to_file
+            // Create a temporary file for writing
+            char temp_filename[] = "/tmp/libpng_fuzz_XXXXXX";
+            int fd = mkstemp(temp_filename);
+            if (fd >= 0) {
+                close(fd);
+                write_result = png_image_write_to_file(&image, temp_filename, 
+                                                      convert_to_8bit, buffer,
+                                                      row_stride, colormap);
+                // Clean up temporary file
+                unlink(temp_filename);
+            }
+            break;
+        }
+        
+        case 1: {
+            // Write to memory using png_image_write_to_memory
+            // First get required memory size
+            png_alloc_size_t memory_bytes = 0;
+            int size_result = png_image_write_get_memory_size(image, memory_bytes,
+                                                            convert_to_8bit, buffer,
+                                                            row_stride, colormap);
+            
+            if (size_result && memory_bytes > 0 && memory_bytes < 10 * 1024 * 1024) {
+                // Allocate memory buffer and write
+                void* memory_buffer = malloc(memory_bytes);
+                if (memory_buffer) {
+                    write_result = png_image_write_to_memory(&image, memory_buffer,
+                                                           &memory_bytes, convert_to_8bit,
+                                                           buffer, row_stride, colormap);
+                    free(memory_buffer);
+                }
+            }
+            break;
+        }
+        
+        case 2: {
+            // Write to stdio using png_image_write_to_stdio
+            // Create a temporary file for writing
+            char temp_filename[] = "/tmp/libpng_fuzz_XXXXXX";
+            FILE* temp_file = NULL;
+            int fd = mkstemp(temp_filename);
+            if (fd >= 0) {
+                temp_file = fdopen(fd, "wb");
+                if (temp_file) {
+                    write_result = png_image_write_to_stdio(&image, temp_file,
+                                                          convert_to_8bit, buffer,
+                                                          row_stride, colormap);
+                    fclose(temp_file);
+                } else {
+                    close(fd);
+                }
+                // Clean up temporary file
+                unlink(temp_filename);
+            }
+            break;
+        }
+        
+        case 3: {
+            // Test memory size calculation without actual write
+            png_alloc_size_t memory_bytes = 0;
+            write_result = png_image_write_get_memory_size(image, memory_bytes,
+                                                         convert_to_8bit, buffer,
+                                                         row_stride, colormap);
+            // Result indicates if calculation succeeded
+            break;
+        }
+    }
+
+    // Step 12: Clean up resources
+    free(buffer);
+    if (colormap) {
+        free(colormap);
     }
     
-    // ============================================
-    // PHASE 2: Set and test cHRM (color calibration) metadata
-    // ============================================
-    
-    // Consume cHRM parameters from fuzzer input
-    double white_x = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double white_y = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double red_x = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double red_y = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double green_x = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double green_y = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double blue_x = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    double blue_y = fdp.ConsumeFloatingPointInRange<double>(0.0, 1.0);
-    
-    // Set cHRM metadata
-    png_set_cHRM(read_ptr, info_ptr, white_x, white_y, red_x, red_y,
-                green_x, green_y, blue_x, blue_y);
-    
-    // Retrieve cHRM metadata (floating point version)
-    double retrieved_white_x, retrieved_white_y;
-    double retrieved_red_x, retrieved_red_y;
-    double retrieved_green_x, retrieved_green_y;
-    double retrieved_blue_x, retrieved_blue_y;
-    
-    png_uint_32 cHRM_result = png_get_cHRM(read_ptr, info_ptr,
-                                          &retrieved_white_x, &retrieved_white_y,
-                                          &retrieved_red_x, &retrieved_red_y,
-                                          &retrieved_green_x, &retrieved_green_y,
-                                          &retrieved_blue_x, &retrieved_blue_y);
-    
-    // Also test cHRM_XYZ retrieval
-    double red_X, red_Y, red_Z, green_X, green_Y, green_Z, blue_X, blue_Y, blue_Z;
-    png_uint_32 cHRM_XYZ_result = png_get_cHRM_XYZ(read_ptr, info_ptr,
-                                                  &red_X, &red_Y, &red_Z,
-                                                  &green_X, &green_Y, &green_Z,
-                                                  &blue_X, &blue_Y, &blue_Z);
-    
-    // ============================================
-    // PHASE 3: Set and test iCCP (ICC profile) metadata
-    // ============================================
-    
-    // Consume ICC profile data from fuzzer input
-    std::string icc_name = fdp.ConsumeRandomLengthString(80);
-    int icc_compression_type = fdp.ConsumeIntegralInRange<int>(0, 2); // PNG_COMPRESSION_TYPE_BASE values
-    std::vector<png_byte> icc_profile = fdp.ConsumeBytes<png_byte>(fdp.ConsumeIntegralInRange<size_t>(0, 1024));
-    
-    // Set iCCP metadata
-    png_set_iCCP(read_ptr, info_ptr,
-                icc_name.c_str(), icc_compression_type,
-                icc_profile.data(), (png_uint_32)icc_profile.size());
-    
-    // Retrieve iCCP metadata
-    char* retrieved_name = NULL;
-    int retrieved_compression_type = 0;
-    png_byte* retrieved_profile = NULL;
-    png_uint_32 retrieved_profile_len = 0;
-    
-    png_uint_32 iCCP_result = png_get_iCCP(read_ptr, info_ptr,
-                                          &retrieved_name, &retrieved_compression_type,
-                                          &retrieved_profile, &retrieved_profile_len);
-    
-    // ============================================
-    // PHASE 4: Set and test cICP (coding-independent code points) metadata
-    // ============================================
-    // Consume cICP parameters
-    png_byte colour_primaries = fdp.ConsumeIntegral<png_byte>();
-    png_byte transfer_function = fdp.ConsumeIntegral<png_byte>();
-    png_byte matrix_coefficients = fdp.ConsumeIntegral<png_byte>();
-    png_byte video_full_range_flag = fdp.ConsumeIntegralInRange<png_byte>(0, 1);
-    
-    // Set cICP metadata
-    png_set_cICP(read_ptr, info_ptr, colour_primaries, transfer_function,
-                matrix_coefficients, video_full_range_flag);
-    
-    // Retrieve cICP metadata
-    png_byte retrieved_colour_primaries, retrieved_transfer_function;
-    png_byte retrieved_matrix_coefficients, retrieved_video_full_range_flag;
-    
-    png_uint_32 cICP_result = png_get_cICP(read_ptr, info_ptr,
-                                          &retrieved_colour_primaries, &retrieved_transfer_function,
-                                          &retrieved_matrix_coefficients, &retrieved_video_full_range_flag);
-    // ============================================
-    
-    // Consume pCAL parameters
-    std::string pcal_purpose = fdp.ConsumeRandomLengthString(80);
-    png_int_32 pcal_X0 = fdp.ConsumeIntegral<png_int_32>();
-    png_int_32 pcal_X1 = fdp.ConsumeIntegral<png_int_32>();
-    int pcal_type = fdp.ConsumeIntegralInRange<int>(0, 3); // PNG_EQUATION_* values
-    int pcal_nparams = fdp.ConsumeIntegralInRange<int>(0, 5); // Reduced from 10 to avoid excessive memory
-    
-    std::string pcal_units_str = fdp.ConsumeRandomLengthString(20);
-    std::vector<std::string> pcal_param_strings(pcal_nparams);
-    std::vector<char*> pcal_params(pcal_nparams);
-    
-    for (int i = 0; i < pcal_nparams; i++) {
-        // Generate parameter as string representation of a floating point number
-        double param_val = fdp.ConsumeFloatingPointInRange<double>(-1000.0, 1000.0);
-        pcal_param_strings[i] = std::to_string(param_val);
-        pcal_params[i] = (char*)pcal_param_strings[i].c_str();
-    }
-    
-    // Set pCAL metadata
-    png_set_pCAL(read_ptr, info_ptr,
-                pcal_purpose.c_str(),
-                pcal_X0, pcal_X1, pcal_type,
-                pcal_nparams,
-                pcal_units_str.c_str(),
-                pcal_params.data());
-    
-    // Retrieve pCAL metadata
-    char* retrieved_purpose = NULL;
-    png_int_32 retrieved_X0, retrieved_X1;
-    int retrieved_type, retrieved_nparams;
-    char* retrieved_units = NULL;
-    char** retrieved_params = NULL;
-    
-    png_uint_32 pCAL_result = png_get_pCAL(read_ptr, info_ptr,
-                                          &retrieved_purpose,
-                                          &retrieved_X0, &retrieved_X1,
-                                          &retrieved_type, &retrieved_nparams,
-                                          &retrieved_units, &retrieved_params);
-    // PHASE 6: Set and test tRNS (transparency) metadata
-    // ============================================
-    
-    // Consume tRNS parameters based on color type
-    int color_type = PNG_COLOR_TYPE_RGB; // Default for testing
-    png_color_16 trans_color;
-    trans_color.red = fdp.ConsumeIntegral<png_uint_16>();
-    trans_color.green = fdp.ConsumeIntegral<png_uint_16>();
-    trans_color.blue = fdp.ConsumeIntegral<png_uint_16>();
-    trans_color.gray = fdp.ConsumeIntegral<png_uint_16>();
-    trans_color.index = fdp.ConsumeIntegral<png_byte>();
-    
-    // Set tRNS metadata
-    png_set_tRNS(read_ptr, info_ptr, NULL, 0, &trans_color);
-    
-    // Retrieve tRNS metadata
-    png_bytep trans_alpha = NULL;
-    int num_trans = 0;
-    png_color_16p retrieved_trans_color = NULL;
-    
-    png_uint_32 tRNS_result = png_get_tRNS(read_ptr, info_ptr,
-                                          &trans_alpha, &num_trans,
-                                          &retrieved_trans_color);
-    
-    // ============================================
-    // PHASE 7: Set and test bKGD (background color) metadata
-    // ============================================
-    
-    // Consume bKGD parameters
-    png_color_16 background;
-    background.red = fdp.ConsumeIntegral<png_uint_16>();
-    background.green = fdp.ConsumeIntegral<png_uint_16>();
-    background.blue = fdp.ConsumeIntegral<png_uint_16>();
-    background.gray = fdp.ConsumeIntegral<png_uint_16>();
-    background.index = fdp.ConsumeIntegral<png_byte>();
-    
-    // Set bKGD metadata
-    png_set_bKGD(read_ptr, info_ptr, &background);
-    
-    // Retrieve bKGD metadata
-    png_color_16p retrieved_background = NULL;
-    
-    png_uint_32 bKGD_result = png_get_bKGD(read_ptr, info_ptr,
-                                          &retrieved_background);
-    
-    // ============================================
-    // PHASE 8: Test additional metadata getters
-    // ============================================
-    
-    // Test basic image info getters (should return 0 since no image data)
-    png_get_image_width(read_ptr, info_ptr);
-    png_get_image_height(read_ptr, info_ptr);
-    png_get_bit_depth(read_ptr, info_ptr);
-    png_get_color_type(read_ptr, info_ptr);
-    png_get_filter_type(read_ptr, info_ptr);
-    png_get_interlace_type(read_ptr, info_ptr);
-    png_get_compression_type(read_ptr, info_ptr);
-    png_get_rowbytes(read_ptr, info_ptr);
-    png_get_channels(read_ptr, info_ptr);
-    png_get_pixel_aspect_ratio(read_ptr, info_ptr);
-    png_get_x_pixels_per_meter(read_ptr, info_ptr);
-    png_get_y_pixels_per_meter(read_ptr, info_ptr);
-    
-    // Test valid flag checking
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_cHRM);
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_iCCP);
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_cICP);
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_pCAL);
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_tRNS);
-    png_get_valid(read_ptr, info_ptr, PNG_INFO_bKGD);
-    
-    // ============================================
-    // PHASE 9: Cleanup
-    // ============================================
-    
-    // Note: pCAL strings are managed by std::string, no manual freeing needed
-    // pcal_param_strings are std::string objects
-    // pcal_params points to c_str() of those strings
-    // Destroy PNG structures
-    png_destroy_read_struct(&read_ptr, &info_ptr, NULL);
-    
+    // Always call png_image_free to clean up any resources allocated by libpng
+    png_image_free(&image);
+
     return 0;
 }
