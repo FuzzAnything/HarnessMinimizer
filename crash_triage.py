@@ -40,6 +40,78 @@ LLM_TOP_P = 0.95
 LLM_RETRIES = 5
 MAX_AGENT_EPOCHS = 50
 MAX_TOOL_OUTPUT_CHARACTERS = 100_000
+MAX_CONTRACT_SEARCH_FILES = 2500
+MAX_CONTRACT_DOC_FILES = 80
+MAX_CONTRACT_MATCHES = 200
+
+CONTRACT_DOC_SUFFIXES = {
+    ".adoc",
+    ".html",
+    ".htm",
+    ".md",
+    ".rst",
+    ".tex",
+    ".txt",
+    ".1",
+    ".2",
+    ".3",
+    ".man",
+    ".pdf",
+}
+CONTRACT_CODE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+}
+CONTRACT_DOC_NAME_PREFIXES = (
+    "api",
+    "changelog",
+    "contract",
+    "guide",
+    "install",
+    "manual",
+    "news",
+    "readme",
+    "reference",
+    "spec",
+    "standard",
+    "usage",
+)
+CONTRACT_SEARCH_PRUNE_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+}
+CONTRACT_GENERIC_TERMS = (
+    "api",
+    "contract",
+    "documentation",
+    "invalid",
+    "length",
+    "manual",
+    "must",
+    "non-zero",
+    "nonzero",
+    "null",
+    "precondition",
+    "range",
+    "required",
+    "shall",
+    "size",
+    "specification",
+    "standard",
+    "valid",
+    "zero",
+)
 
 
 def log_found_file(path: Path, reason: str) -> None:
@@ -70,7 +142,8 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 1.  **Forensics**: Use `crash_initial_analysis` to get stack traces and ASAN reports.
 2.  **Investigation**: Use `read_file` to inspect the source code of the harness and the library frames in the stack trace.
 3.  **Debugging**: Use `crash_context_inspection` extract runtime information to debug the crash.
-4.  **Reporting**: Use `generate_crash_report` to submit your final verdict.
+4.  **Contract Discovery**: Use `discover_contract_evidence` to search local manuals, specifications, API references, README files, examples, tests, headers, and source comments for API/input validity rules.
+5.  **Reporting**: Use `generate_crash_report` to submit your final verdict.
 
 ### PROHIBITED ACTIONS
 1.  **No Guessing**: Do not guess API behavior. You MUST read the header file/documentation for the crashing function to verify preconditions (e.g., "Must not be NULL").
@@ -79,6 +152,8 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 4.  **No Code Changes**: You are an analyst, not a developer. Do not edit files.
 5.  **No Vague Reports**: A report without a specific "Root Cause" and "Blame" is a failed task.
 6.  **No Slow-unit Detection**: Do not try to triage slow-unit artifacts. They are not crashes.
+7.  **No Contract-by-Omission**: The absence of a precondition in one header comment is NOT evidence that arbitrary input is valid. You MUST search broader local documentation/specifications/examples/tests where available.
+8.  **No Defensive-Programming Liability Shortcut**: A library crash on invalid API input is **Harness Misuse** for this triage task, even if the library could have returned an error more gracefully.
 
 ## Mandatory Workflow
 
@@ -91,7 +166,22 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 1.  Call `crash_context_inspection` on the suspect API or function to inspect the runtime context frames of this invocation.
 2.  Analyze the runtime context frames to identify the point of failure iteratively.
 3.  Read the file/documentation of the suspect API or function to verify the preconditions and postconditions.
-4.  Repeat the process until the point of failure is identified.
+4.  Call `discover_contract_evidence` with:
+    - the suspect public API names,
+    - the relevant data structure or file format names,
+    - the crash-relevant fields/arguments (for example: size, length, width, height, count, offset, pointer, flags).
+    - any source directories from stack-trace frames if they are outside the harness directory.
+5.  Inspect any decisive documentation/header/source matches with `read_file`.
+6.  Repeat the process until the point of failure and the input-validity status are identified.
+
+### Phase 2.5: Validity Proof Gate
+Before selecting **Genuine Library Bug**, you MUST prove that the harness supplied valid input under the applicable API contract, local manual, local specification, examples/tests, or clearly enforced library preconditions.
+
+- Identify each externally controlled argument/field that reaches the crashing API.
+- Identify applicable preconditions: non-NULL, initialized object state, ranges, non-zero constraints, size/length relationships, ownership/lifetime rules, file-format validity, enum/flag validity, call ordering, and required setup/cleanup.
+- Prove the harness satisfies those preconditions using concrete code lines and runtime values.
+- If a crash-relevant value is uninitialized, unconstrained, out of range, violates a file-format/API contract, or cannot be proven valid, classify the crash as **Harness Misuse**.
+- If local contract evidence is inconclusive, default to **Harness Misuse**, not **Genuine Library Bug**.
 
 ### Phase 3: The "Blame" Decision Tree (Triage Logic)
 Apply these rules IN ORDER. The first match determines the verdict.
@@ -121,14 +211,20 @@ Apply these rules IN ORDER. The first match determines the verdict.
     -   If assert is checking internal state (e.g., `assert(state == VALID)`) -> **LIBRARY BUG**.
 
 **Rule 5: OOM and Timeout**
--   **Condition**: Did the OOM/Timout is controlled by the harness?
+-   **Condition**: Is the OOM/Timeout controlled by the harness?
 -   **Verdict**:
     -   If allocation size or loop count is passed by the harness -> **HARNESS BUG**.
-    -   If casued by internal states -> **LIBRARY BUG**.
+    -   If caused by internal states -> **LIBRARY BUG**.
 
-**Rule 5: Default Liability**
--   **Condition**: If the crash is inside the library, and the harness inputs appear to follow the API documentation.
+**Rule 6: Contract / Specification Validity Check**
+-   **Condition**: Did the harness pass an invalid, uninitialized, out-of-range, or not-provably-valid API argument, struct field, file/data format value, enum, flag, size, length, pointer, or object state?
+-   **Verdict**: **HARNESS BUG**.
+-   **Important**: If the library crashes before it reaches its normal validation path, that is still **Harness Misuse** when the triggering input violates the API/specification contract.
+
+**Rule 7: Default Liability**
+-   **Condition**: If the crash is inside the library, and the harness inputs are proven to follow the applicable API/manual/specification contracts.
 -   **Verdict**: **LIBRARY BUG**.
+-   **Otherwise**: **HARNESS BUG**.
 
 ### Phase 4: Reporting
 1.  Construct the report content.
@@ -154,6 +250,16 @@ When calling `generate_crash_report`, format the `content` string strictly as fo
 **Evidence**:
 - **Stack Frame #0**: `src/parser.c:105`
 - **Variable State**: `input_len = -1`
+
+## Contract and Validity Analysis
+**Contract Sources Checked**:
+- [Exact local file/manual/spec/header/example/test path and lines, or "No decisive local contract found after searching ..."]
+
+**Applicable Preconditions**:
+- [List the API/spec preconditions relevant to the crash]
+
+**Validity Proof**:
+- [For Genuine Library Bug: prove the harness satisfies every applicable precondition using concrete harness lines and runtime values. For Harness Misuse: identify the violated or unproven precondition.]
 
 ## Code Snippet (Harness)
 ```cpp
@@ -226,6 +332,7 @@ class TriageContext:
     crash_input: Path
     binary: Path
     compile_command: list[str]
+    compile_flags: str | None
     link_flags: str | None
     timeout_seconds: int
     output_path: Path
@@ -606,6 +713,274 @@ def search_dir(root: str, pattern: str) -> str:
         return f"Command timed out: {format_command(command)}"
 
 
+def coerce_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def resolve_existing_path(path_text: str) -> Path | None:
+    if not path_text:
+        return None
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        path = path.resolve()
+    except OSError:
+        return None
+    return path if path.exists() else None
+
+
+def compile_include_roots(compile_flags: str | None) -> list[Path]:
+    tokens = rr._split_flags(compile_flags)
+    roots: list[Path] = []
+    include_switches = {"-I", "-isystem", "-iquote", "-idirafter"}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        candidate: str | None = None
+        if token in include_switches and index + 1 < len(tokens):
+            candidate = tokens[index + 1]
+            index += 2
+        elif token.startswith("-I") and len(token) > 2:
+            candidate = token[2:]
+            index += 1
+        elif token.startswith("-isystem") and len(token) > len("-isystem"):
+            candidate = token[len("-isystem") :]
+            index += 1
+        elif token.startswith("-iquote") and len(token) > len("-iquote"):
+            candidate = token[len("-iquote") :]
+            index += 1
+        else:
+            index += 1
+
+        if candidate:
+            path = resolve_existing_path(candidate)
+            if path is not None and path.is_dir():
+                roots.append(path)
+    return roots
+
+
+def add_contract_root(roots: list[Path], candidate: Path | None) -> None:
+    if candidate is None:
+        return
+    root = candidate.parent if candidate.is_file() else candidate
+    try:
+        root = root.resolve()
+    except OSError:
+        return
+    if root.exists() and root not in roots:
+        roots.append(root)
+
+
+def contract_search_roots(ctx: TriageContext, extra_roots: list[str]) -> list[Path]:
+    roots: list[Path] = []
+    add_contract_root(roots, ctx.harness.parent)
+    add_contract_root(roots, PROJECT_ROOT)
+
+    for include_root in compile_include_roots(ctx.compile_flags):
+        add_contract_root(roots, include_root)
+        add_contract_root(roots, include_root.parent)
+
+    for library_root in rr.runtime_library_directories(ctx.link_flags):
+        path = resolve_existing_path(library_root)
+        add_contract_root(roots, path)
+        if path is not None:
+            add_contract_root(roots, path.parent)
+            add_contract_root(roots, path.parent.parent)
+
+    for root_text in extra_roots:
+        add_contract_root(roots, resolve_existing_path(root_text))
+
+    return roots
+
+
+def is_doc_like_file(path: Path) -> bool:
+    lower_name = path.name.lower()
+    suffix = path.suffix.lower()
+    return (
+        suffix in CONTRACT_DOC_SUFFIXES
+        or lower_name.startswith(CONTRACT_DOC_NAME_PREFIXES)
+        or "manual" in lower_name
+        or "spec" in lower_name
+        or "standard" in lower_name
+    )
+
+
+def is_contract_candidate_file(path: Path) -> bool:
+    return is_doc_like_file(path) or path.suffix.lower() in CONTRACT_CODE_SUFFIXES
+
+
+def iter_contract_candidate_files(root: Path) -> tuple[list[Path], bool]:
+    files: list[Path] = []
+    truncated = False
+    try:
+        root = root.resolve()
+    except OSError:
+        return files, truncated
+
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname not in CONTRACT_SEARCH_PRUNE_DIRS
+        ]
+        for filename in filenames:
+            path = Path(current_root) / filename
+            if not is_contract_candidate_file(path):
+                continue
+            files.append(path)
+            if len(files) >= MAX_CONTRACT_SEARCH_FILES:
+                truncated = True
+                return files, truncated
+    return files, truncated
+
+
+def readable_contract_file(path: Path) -> bool:
+    if path.suffix.lower() in {".pdf"}:
+        return False
+    try:
+        return path.stat().st_size <= 2_000_000
+    except OSError:
+        return False
+
+
+def contract_line_matches(
+    line: str,
+    primary_terms: list[str],
+    keywords: list[str],
+) -> bool:
+    lower_line = line.lower()
+    if any(term in lower_line for term in primary_terms):
+        return True
+    if keywords and any(term in lower_line for term in keywords):
+        return any(term in lower_line for term in CONTRACT_GENERIC_TERMS)
+    if not primary_terms and not keywords:
+        return any(term in lower_line for term in CONTRACT_GENERIC_TERMS)
+    return False
+
+
+def discover_contract_evidence(
+    ctx: TriageContext,
+    api_names: list[str],
+    keywords: list[str],
+    roots: list[str],
+) -> str:
+    api_terms = [term.lower() for term in api_names if term.strip()]
+    keyword_terms = [term.lower() for term in keywords if term.strip()]
+    search_roots = contract_search_roots(ctx, roots)
+
+    all_candidates: list[Path] = []
+    truncated_roots: list[Path] = []
+    for root in search_roots:
+        candidates, truncated = iter_contract_candidate_files(root)
+        all_candidates.extend(candidates)
+        if truncated:
+            truncated_roots.append(root)
+
+    unique_candidates = list(dict.fromkeys(all_candidates))
+    doc_candidates = [path for path in unique_candidates if is_doc_like_file(path)]
+
+    matches: list[str] = []
+    for path in unique_candidates:
+        if len(matches) >= MAX_CONTRACT_MATCHES:
+            break
+        if not readable_contract_file(path):
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_number, line in enumerate(lines, 1):
+            if contract_line_matches(line, api_terms, keyword_terms):
+                matches.append(f"{path}:{line_number}: {line.strip()}")
+                if len(matches) >= MAX_CONTRACT_MATCHES:
+                    break
+
+    sections = [
+        "Contract Evidence Search",
+        "------------------------",
+        "Searched roots:",
+    ]
+    sections.extend(f"- {root}" for root in search_roots)
+    if truncated_roots:
+        sections.append("Search was truncated in these roots:")
+        sections.extend(f"- {root}" for root in truncated_roots)
+
+    sections.append("")
+    sections.append("Search terms:")
+    sections.append(f"- API names: {', '.join(api_names) if api_names else '(none supplied)'}")
+    sections.append(f"- Keywords: {', '.join(keywords) if keywords else '(none supplied)'}")
+
+    sections.append("")
+    sections.append("Candidate manuals/specs/docs:")
+    if doc_candidates:
+        for path in doc_candidates[:MAX_CONTRACT_DOC_FILES]:
+            sections.append(f"- {path}")
+        if len(doc_candidates) > MAX_CONTRACT_DOC_FILES:
+            sections.append(f"- [... {len(doc_candidates) - MAX_CONTRACT_DOC_FILES} more omitted ...]")
+    else:
+        sections.append("- No doc-like files found in searched roots.")
+
+    sections.append("")
+    sections.append("Relevant matches:")
+    if matches:
+        sections.extend(matches)
+        if len(matches) >= MAX_CONTRACT_MATCHES:
+            sections.append("[... more matches omitted ...]")
+    else:
+        sections.append("- No relevant local contract matches found.")
+
+    sections.append("")
+    sections.append(
+        "Important: absence of a match is not proof that arbitrary input is valid. "
+        "Inspect decisive files with read_file/search_file before reporting."
+    )
+    return limit_text("\n".join(sections))
+
+
+LIBRARY_BUG_CONTRACT_SECTION_PATTERN = re.compile(
+    r"^##\s+(?:Contract and Validity Analysis|Input Validity Analysis|API Contract Analysis)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+VALIDITY_PROOF_PATTERN = re.compile(
+    r"^\*\*Validity Proof\*\*:\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
+INSUFFICIENT_VALIDITY_PATTERN = re.compile(
+    r"\*\*Validity Proof\*\*:\s*(?:unknown|none|n/a|not found|not proven|unclear|cannot prove)",
+    re.IGNORECASE,
+)
+
+
+def library_bug_report_contract_error(content: str) -> str | None:
+    if not LIBRARY_BUG_CONTRACT_SECTION_PATTERN.search(content):
+        return (
+            "library-bug reports must include a '## Contract and Validity Analysis' "
+            "section. Use discover_contract_evidence, list contract sources checked, "
+            "and provide a positive validity proof. If validity cannot be proven, "
+            "classify the crash as harness-bug."
+        )
+    if not VALIDITY_PROOF_PATTERN.search(content):
+        return (
+            "library-bug reports must include a '**Validity Proof**:' subsection "
+            "that proves the harness satisfies the applicable API/specification "
+            "preconditions."
+        )
+    if INSUFFICIENT_VALIDITY_PATTERN.search(content):
+        return (
+            "the validity proof says validity is unknown or not proven. Under the "
+            "triage policy, classify this as harness-bug unless you can provide a "
+            "positive proof from contract evidence and harness/runtime values."
+        )
+    return None
+
+
 def write_report(
     output_path: Path,
     harness: Path,
@@ -818,6 +1193,39 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "discover_contract_evidence",
+                "description": (
+                    "Search local manuals, specifications, API references, README files, "
+                    "examples, tests, headers, and source comments for API/input validity "
+                    "contracts. Call this before final triage after identifying the suspect "
+                    "public API and crash-relevant arguments or fields. Pass source directories "
+                    "from stack-trace frames in roots when they are outside the harness tree."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "api_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Suspect public API/function/type names.",
+                        },
+                        "keywords": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Crash-relevant fields, arguments, formats, or constraints.",
+                        },
+                        "roots": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional extra directories or files to search.",
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "find_file",
                 "description": "Find files by exact basename.",
                 "parameters": {
@@ -914,6 +1322,15 @@ def run_tool(ctx: TriageContext, name: str, arguments: dict[str, Any]) -> str:
     if name == "search_dir":
         return search_dir(str(arguments.get("root", ctx.harness.parent)), str(arguments.get("pattern", "")))
 
+    if name == "discover_contract_evidence":
+        print("[+] Tool call: discover_contract_evidence")
+        return discover_contract_evidence(
+            ctx,
+            coerce_string_list(arguments.get("api_names")),
+            coerce_string_list(arguments.get("keywords")),
+            coerce_string_list(arguments.get("roots")),
+        )
+
     if name == "find_file":
         return find_file(str(arguments.get("name", "")), arguments.get("root"))
 
@@ -923,6 +1340,10 @@ def run_tool(ctx: TriageContext, name: str, arguments: dict[str, Any]) -> str:
         content = str(arguments.get("content", "")).strip()
         if not content:
             return "[!] Error: generate_crash_report requires non-empty content."
+        if triage == "library-bug":
+            contract_error = library_bug_report_contract_error(content)
+            if contract_error is not None:
+                return f"[!] Error: {contract_error}"
         ctx.triage = triage
         ctx.report_content = content
         ctx.report_written = True
@@ -948,6 +1369,14 @@ because FuzzAgent normally receives an already-built fuzzer binary.
 
 Exact HarnessMinimizer compilation command:
 {format_command(ctx.compile_command)}
+
+Additional HarnessMinimizer triage policy:
+- After identifying the suspect public API, call `discover_contract_evidence`
+  with API names and crash-relevant arguments/fields before final reporting.
+- A `library-bug` report must include `## Contract and Validity Analysis`
+  and a positive `**Validity Proof**:` showing that the harness satisfies the
+  applicable API/manual/specification preconditions. If validity cannot be
+  proven, classify as `harness-bug`.
 
 Please triage this crash using the pre-harness-minimization FuzzAgent workflow.
 Call `crash_initial_analysis` first, inspect relevant source files, use
@@ -989,8 +1418,23 @@ def run_agent_loop(ctx: TriageContext) -> str:
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
             if last_text_response:
+                triage = triage_slug(last_text_response)
+                if triage == "library-bug":
+                    contract_error = library_bug_report_contract_error(last_text_response)
+                    if contract_error is not None:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Your report cannot be accepted as library-bug: "
+                                    f"{contract_error} Revise the report after contract "
+                                    "discovery, or classify as harness-bug."
+                                ),
+                            }
+                        )
+                        continue
                 ctx.report_content = last_text_response
-                ctx.triage = triage_slug(last_text_response)
+                ctx.triage = triage
                 ctx.report_written = True
                 write_report(ctx.output_path, ctx.harness, ctx.crash_input, ctx.triage, last_text_response)
                 return last_text_response
@@ -1087,6 +1531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 crash_input=crash_input,
                 binary=binary,
                 compile_command=compile_command,
+                compile_flags=args.compile_flags,
                 link_flags=args.link_flags,
                 timeout_seconds=args.timeout,
                 output_path=output_path,
