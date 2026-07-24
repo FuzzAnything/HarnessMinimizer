@@ -23,3 +23,13 @@ harnessreducer harness.cpp \
 clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/include harness.cpp -o harness -L$(pwd)/build/sanitizer/lib -lpng -lz -Wl,-rpath,$(pwd)/build/sanitizer/lib
 
 clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/include harness.cpp -o harness $(pwd)/build/sanitizer/lib/libpng.a -lz
+
+python3 crash_triage.py benchmark/bug/libpng-3/harness.cpp \
+  --compile-flags="-Ibenchmark/bug/libpng-3/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/bug/libpng-3/build/sanitizer/lib -lpng -lz" \
+  --crash-input benchmark/bug/libpng-3/crash-input
+
+python3 crash_triage.py benchmark/bug/libpng-2/reduced.cpp \
+  --compile-flags="-Ibenchmark/bug/libpng-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/bug/libpng-2/build/sanitizer/lib -lpng -lz" \
+  --crash-input benchmark/bug/libpng-2/crash-input
