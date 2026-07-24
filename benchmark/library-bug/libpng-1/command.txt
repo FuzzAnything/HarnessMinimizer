@@ -24,12 +24,26 @@ clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/incl
 
 clang++ -fsanitize=fuzzer,address,undefined -g -O0 -I$(pwd)/build/sanitizer/include harness.cpp -o harness $(pwd)/build/sanitizer/lib/libpng.a -lz
 
-python3 crash_triage.py benchmark/bug/libpng-3/harness.cpp \
-  --compile-flags="-Ibenchmark/bug/libpng-3/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/bug/libpng-3/build/sanitizer/lib -lpng -lz" \
-  --crash-input benchmark/bug/libpng-3/crash-input
+python3 crash_triage.py benchmark/bug/libpng-2/harness.cpp \
+  --compile-flags="-Ibenchmark/bug/libpng-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/bug/libpng-2/build/sanitizer/lib -lpng -lz" \
+  --crash-input benchmark/bug/libpng-2/crash-input
 
 python3 crash_triage.py benchmark/bug/libpng-2/reduced.cpp \
   --compile-flags="-Ibenchmark/bug/libpng-2/build/sanitizer/include" \
   --link-flags="-Lbenchmark/bug/libpng-2/build/sanitizer/lib -lpng -lz" \
   --crash-input benchmark/bug/libpng-2/crash-input
+
+python3 measure_time.py benchmark/library-bug/libpng-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpng-1/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/libpng-1/build/sanitizer/lib/libpng.a -lz" \
+  --crash-input benchmark/library-bug/libpng-1/crash-input \
+  --suffix static \
+  -o benchmark/library-bug/libpng-1/harness.out
+
+python3 measure_time.py benchmark/library-bug/libpng-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libpng-1/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libpng-1/build/sanitizer/lib -lpng" \
+  --crash-input benchmark/library-bug/libpng-1/crash-input \
+  --suffix dynamic \
+  -o benchmark/library-bug/libpng-1/harness.out
