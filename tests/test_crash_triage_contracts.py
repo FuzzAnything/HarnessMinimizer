@@ -90,6 +90,8 @@ class CrashTriageContractTests(unittest.TestCase):
 ## Triage Verdict
 **Classification**: Genuine Library Bug
 **Confidence**: High
+**Decision Rule Applied**: Rule 7: Default Liability
+**Decision Rule Rationale**: The harness satisfies the documented preconditions.
 
 ## Contract and Validity Analysis
 **Contract Sources Checked**:
@@ -128,12 +130,39 @@ class CrashTriageContractTests(unittest.TestCase):
 ## Triage Verdict
 **Classification**: Harness Misuse
 **Confidence**: High
+**Decision Rule Applied**: Rule 6: Contract / Specification Validity Check
+**Decision Rule Rationale**: The harness violates a required input precondition.
 """,
                 },
             )
 
             self.assertTrue(result.startswith("[!] Error:"))
             self.assertIn("Judgement Citations", result)
+
+    def test_reports_require_decision_rule(self) -> None:
+        with TemporaryDirectory() as directory:
+            ctx = self.make_ctx(Path(directory))
+
+            result = crash_triage.run_tool(
+                ctx,
+                "generate_crash_report",
+                {
+                    "triage": "harness-bug",
+                    "content": """# Crash Report
+
+## Triage Verdict
+**Classification**: Harness Misuse
+**Confidence**: High
+
+## Judgement Citations
+- **Claim**: The harness violates an input precondition.
+  **Source**: harness.cpp:12.
+""",
+                },
+            )
+
+            self.assertTrue(result.startswith("[!] Error:"))
+            self.assertIn("Decision Rule Applied", result)
 
 
 if __name__ == "__main__":

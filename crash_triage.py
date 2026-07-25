@@ -155,6 +155,7 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 7.  **No Contract-by-Omission**: The absence of a precondition in one header comment is NOT evidence that arbitrary input is valid. You MUST search broader local documentation/specifications/examples/tests where available.
 8.  **No Defensive-Programming Liability Shortcut**: A library crash on invalid API input is **Harness Misuse** for this triage task, even if the library could have returned an error more gracefully.
 9.  **No Uncited Judgements**: Every substantive judgement in the report MUST cite its basis: a tool observation, a local file path with line numbers, runtime debugger/sanitizer evidence, or `LLM prior knowledge (not verified in local repository)`. Do not present prior knowledge as if it came from a checked source.
+10. **Explicit Rule Selection**: The final report MUST state exactly which Phase 3 decision-tree rule determined the classification, including the rule number and title.
 
 ## Mandatory Workflow
 
@@ -229,9 +230,10 @@ Apply these rules IN ORDER. The first match determines the verdict.
 
 ### Phase 4: Reporting
 1.  Construct the report content.
-2.  Add a `## Judgement Citations` section. For every judgement that affects root cause, contract validity, or final classification, list the claim and its source.
-3.  If a claim comes from your general knowledge rather than a checked local file/tool observation, cite it exactly as `LLM prior knowledge (not verified in local repository)`. Such prior knowledge may provide context, but it is not a substitute for local contract evidence in a **Genuine Library Bug** validity proof.
-4.  Call `generate_crash_report` with the results and content.
+2.  In `## Triage Verdict`, include `**Decision Rule Applied**: Rule N: [exact Phase 3 rule title]` and `**Decision Rule Rationale**: [why that first matching rule applies]`.
+3.  Add a `## Judgement Citations` section. For every judgement that affects root cause, contract validity, decision-rule selection, or final classification, list the claim and its source.
+4.  If a claim comes from your general knowledge rather than a checked local file/tool observation, cite it exactly as `LLM prior knowledge (not verified in local repository)`. Such prior knowledge may provide context, but it is not a substitute for local contract evidence in a **Genuine Library Bug** validity proof.
+5.  Call `generate_crash_report` with the results and content.
 
 ## Report Content Template
 When calling `generate_crash_report`, format the `content` string strictly as follows:
@@ -242,6 +244,8 @@ When calling `generate_crash_report`, format the `content` string strictly as fo
 ## Triage Verdict
 **Classification**: [Genuine Library Bug | Harness Misuse]
 **Confidence**: [High/Medium/Low]
+**Decision Rule Applied**: [Rule N: exact Phase 3 rule title, e.g. "Rule 6: Contract / Specification Validity Check"]
+**Decision Rule Rationale**: [One sentence explaining why this is the first matching rule]
 
 ## Crash Summary
 [Brief description: e.g., "Heap-buffer-overflow in parse_json function"]
@@ -271,6 +275,8 @@ When calling `generate_crash_report`, format the `content` string strictly as fo
   **Source**: [Tool observation or `/absolute/path/file.h:line`; if no local source was found, say so explicitly]
 - **Claim**: [Final classification judgement]
   **Source**: [Harness line(s), runtime value(s), and contract/precondition source(s)]
+- **Claim**: [Decision rule selection]
+  **Source**: [The Phase 3 rule number/title and the evidence that satisfies that rule's condition]
 
 ## Code Snippet (Harness)
 ```cpp
@@ -973,6 +979,20 @@ JUDGEMENT_CITATIONS_SECTION_PATTERN = re.compile(
 )
 JUDGEMENT_CLAIM_PATTERN = re.compile(r"\*\*Claim\*\*:", re.IGNORECASE)
 JUDGEMENT_SOURCE_PATTERN = re.compile(r"\*\*Source\*\*:", re.IGNORECASE)
+DECISION_RULE_PATTERN = re.compile(
+    r"^\*\*Decision Rule Applied\*\*:\s*Rule\s+[1-7]\s*:",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def report_decision_rule_error(content: str) -> str | None:
+    if not DECISION_RULE_PATTERN.search(content):
+        return (
+            "reports must include '**Decision Rule Applied**: Rule N: ...' in "
+            "the '## Triage Verdict' section, naming the exact Phase 3 decision "
+            "rule number and title that determined the classification."
+        )
+    return None
 
 
 def report_citation_error(content: str) -> str | None:
@@ -1278,8 +1298,10 @@ def tool_definitions() -> list[dict[str, Any]]:
                 "name": "generate_crash_report",
                 "description": (
                     "Write the final normalized crash triage report. The content must "
-                    "include a '## Judgement Citations' section with Claim/Source entries "
-                    "for root-cause, contract-validity, and classification judgements. "
+                    "include '**Decision Rule Applied**: Rule N: ...' in the triage "
+                    "verdict and a '## Judgement Citations' section with Claim/Source "
+                    "entries for root-cause, contract-validity, decision-rule selection, "
+                    "and classification judgements. "
                     "Claims from model knowledge must be cited as 'LLM prior knowledge "
                     "(not verified in local repository)'."
                 ),
@@ -1380,6 +1402,9 @@ def run_tool(ctx: TriageContext, name: str, arguments: dict[str, Any]) -> str:
         content = str(arguments.get("content", "")).strip()
         if not content:
             return "[!] Error: generate_crash_report requires non-empty content."
+        decision_rule_error = report_decision_rule_error(content)
+        if decision_rule_error is not None:
+            return f"[!] Error: {decision_rule_error}"
         citation_error = report_citation_error(content)
         if citation_error is not None:
             return f"[!] Error: {citation_error}"
@@ -1466,6 +1491,19 @@ def run_agent_loop(ctx: TriageContext) -> str:
         if not tool_calls:
             if last_text_response:
                 triage = triage_slug(last_text_response)
+                decision_rule_error = report_decision_rule_error(last_text_response)
+                if decision_rule_error is not None:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your report cannot be accepted: "
+                                f"{decision_rule_error} Revise the report with "
+                                "the exact Phase 3 decision rule used."
+                            ),
+                        }
+                    )
+                    continue
                 citation_error = report_citation_error(last_text_response)
                 if citation_error is not None:
                     messages.append(
