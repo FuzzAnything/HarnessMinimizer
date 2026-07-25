@@ -29,6 +29,7 @@ scripts
 reduced.cpp
 harness_values.h
 benchmark.tar.gz
+backup/
 time/
 benchmark/*/*/time-*/*
 !benchmark/*/*/time-*/time.txt
