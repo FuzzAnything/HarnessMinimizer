@@ -154,6 +154,7 @@ Your goal is to rule out the Harness first. If the Harness is correct, the Libra
 6.  **No Slow-unit Detection**: Do not try to triage slow-unit artifacts. They are not crashes.
 7.  **No Contract-by-Omission**: The absence of a precondition in one header comment is NOT evidence that arbitrary input is valid. You MUST search broader local documentation/specifications/examples/tests where available.
 8.  **No Defensive-Programming Liability Shortcut**: A library crash on invalid API input is **Harness Misuse** for this triage task, even if the library could have returned an error more gracefully.
+9.  **No Uncited Judgements**: Every substantive judgement in the report MUST cite its basis: a tool observation, a local file path with line numbers, runtime debugger/sanitizer evidence, or `LLM prior knowledge (not verified in local repository)`. Do not present prior knowledge as if it came from a checked source.
 
 ## Mandatory Workflow
 
@@ -228,7 +229,9 @@ Apply these rules IN ORDER. The first match determines the verdict.
 
 ### Phase 4: Reporting
 1.  Construct the report content.
-2.  Call `generate_crash_report` with the results and content.
+2.  Add a `## Judgement Citations` section. For every judgement that affects root cause, contract validity, or final classification, list the claim and its source.
+3.  If a claim comes from your general knowledge rather than a checked local file/tool observation, cite it exactly as `LLM prior knowledge (not verified in local repository)`. Such prior knowledge may provide context, but it is not a substitute for local contract evidence in a **Genuine Library Bug** validity proof.
+4.  Call `generate_crash_report` with the results and content.
 
 ## Report Content Template
 When calling `generate_crash_report`, format the `content` string strictly as follows:
@@ -260,6 +263,14 @@ When calling `generate_crash_report`, format the `content` string strictly as fo
 
 **Validity Proof**:
 - [For Genuine Library Bug: prove the harness satisfies every applicable precondition using concrete harness lines and runtime values. For Harness Misuse: identify the violated or unproven precondition.]
+
+## Judgement Citations
+- **Claim**: [Crash root cause judgement]
+  **Source**: [Tool observation or `/absolute/path/file.c:line`; use `LLM prior knowledge (not verified in local repository)` only for uncited model knowledge]
+- **Claim**: [Contract/precondition judgement]
+  **Source**: [Tool observation or `/absolute/path/file.h:line`; if no local source was found, say so explicitly]
+- **Claim**: [Final classification judgement]
+  **Source**: [Harness line(s), runtime value(s), and contract/precondition source(s)]
 
 ## Code Snippet (Harness)
 ```cpp
@@ -956,6 +967,29 @@ INSUFFICIENT_VALIDITY_PATTERN = re.compile(
     r"\*\*Validity Proof\*\*:\s*(?:unknown|none|n/a|not found|not proven|unclear|cannot prove)",
     re.IGNORECASE,
 )
+JUDGEMENT_CITATIONS_SECTION_PATTERN = re.compile(
+    r"^##\s+Judgement Citations\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+JUDGEMENT_CLAIM_PATTERN = re.compile(r"\*\*Claim\*\*:", re.IGNORECASE)
+JUDGEMENT_SOURCE_PATTERN = re.compile(r"\*\*Source\*\*:", re.IGNORECASE)
+
+
+def report_citation_error(content: str) -> str | None:
+    if not JUDGEMENT_CITATIONS_SECTION_PATTERN.search(content):
+        return (
+            "reports must include a '## Judgement Citations' section. List each "
+            "root-cause, contract-validity, and classification judgement with a "
+            "source. Use local file paths with line numbers, tool observations, or "
+            "'LLM prior knowledge (not verified in local repository)' for claims "
+            "that come from model knowledge rather than checked evidence."
+        )
+    if not JUDGEMENT_CLAIM_PATTERN.search(content) or not JUDGEMENT_SOURCE_PATTERN.search(content):
+        return (
+            "the '## Judgement Citations' section must contain '**Claim**:' and "
+            "'**Source**:' entries tying each substantive judgement to evidence."
+        )
+    return None
 
 
 def library_bug_report_contract_error(content: str) -> str | None:
@@ -1242,7 +1276,13 @@ def tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "generate_crash_report",
-                "description": "Write the final normalized crash triage report.",
+                "description": (
+                    "Write the final normalized crash triage report. The content must "
+                    "include a '## Judgement Citations' section with Claim/Source entries "
+                    "for root-cause, contract-validity, and classification judgements. "
+                    "Claims from model knowledge must be cited as 'LLM prior knowledge "
+                    "(not verified in local repository)'."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1340,6 +1380,9 @@ def run_tool(ctx: TriageContext, name: str, arguments: dict[str, Any]) -> str:
         content = str(arguments.get("content", "")).strip()
         if not content:
             return "[!] Error: generate_crash_report requires non-empty content."
+        citation_error = report_citation_error(content)
+        if citation_error is not None:
+            return f"[!] Error: {citation_error}"
         if triage == "library-bug":
             contract_error = library_bug_report_contract_error(content)
             if contract_error is not None:
@@ -1377,6 +1420,10 @@ Additional HarnessMinimizer triage policy:
   and a positive `**Validity Proof**:` showing that the harness satisfies the
   applicable API/manual/specification preconditions. If validity cannot be
   proven, classify as `harness-bug`.
+- Every report must include `## Judgement Citations` with `**Claim**:` and
+  `**Source**:` entries for root-cause, contract-validity, and classification
+  judgements. If a claim comes from model knowledge rather than checked local
+  evidence, cite it as `LLM prior knowledge (not verified in local repository)`.
 
 Please triage this crash using the pre-harness-minimization FuzzAgent workflow.
 Call `crash_initial_analysis` first, inspect relevant source files, use
@@ -1419,6 +1466,19 @@ def run_agent_loop(ctx: TriageContext) -> str:
         if not tool_calls:
             if last_text_response:
                 triage = triage_slug(last_text_response)
+                citation_error = report_citation_error(last_text_response)
+                if citation_error is not None:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your report cannot be accepted: "
+                                f"{citation_error} Revise the report with explicit "
+                                "claim-source citations."
+                            ),
+                        }
+                    )
+                    continue
                 if triage == "library-bug":
                     contract_error = library_bug_report_contract_error(last_text_response)
                     if contract_error is not None:

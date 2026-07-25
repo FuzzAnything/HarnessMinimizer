@@ -100,6 +100,12 @@ class CrashTriageContractTests(unittest.TestCase):
 
 **Validity Proof**:
 - The harness constrains `len` to 1..16 before calling the API.
+
+## Judgement Citations
+- **Claim**: The harness input satisfies the documented length range.
+  **Source**: /tmp/api.md:1 and harness.cpp:12.
+- **Claim**: The crash is therefore attributable to the library.
+  **Source**: Sanitizer stack trace and validated harness preconditions.
 """,
                 },
             )
@@ -107,6 +113,27 @@ class CrashTriageContractTests(unittest.TestCase):
             self.assertTrue(result.startswith("[*] Crash report generated successfully:"))
             self.assertTrue(ctx.report_written)
             self.assertIn("Validity Proof", ctx.output_path.read_text())
+
+    def test_reports_require_judgement_citations(self) -> None:
+        with TemporaryDirectory() as directory:
+            ctx = self.make_ctx(Path(directory))
+
+            result = crash_triage.run_tool(
+                ctx,
+                "generate_crash_report",
+                {
+                    "triage": "harness-bug",
+                    "content": """# Crash Report
+
+## Triage Verdict
+**Classification**: Harness Misuse
+**Confidence**: High
+""",
+                },
+            )
+
+            self.assertTrue(result.startswith("[!] Error:"))
+            self.assertIn("Judgement Citations", result)
 
 
 if __name__ == "__main__":
