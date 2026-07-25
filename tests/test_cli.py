@@ -29,6 +29,12 @@ class TestCliPhase3Mode(unittest.TestCase):
         self.assertTrue(args.amortize_link)
         self.assertEqual(args.phase3_mode, "split")
 
+    def test_symbolize_argument_is_available(self):
+        args = build_parser().parse_args(
+            ["harness.cpp", "-o", "reduced.cpp", "--symbolize"]
+        )
+        self.assertTrue(args.symbolize)
+
     def test_amortize_link_rejects_direct(self):
         with self.assertRaisesRegex(SystemExit, "2"):
             main(

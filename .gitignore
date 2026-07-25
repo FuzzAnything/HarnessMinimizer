@@ -3,6 +3,7 @@
 .vscode/
 output/
 .env
+.venv-host/
 benchmark/*/*/build/sanitizer/lib
 benchmark/*/*/build/sanitizer/include
 !benchmark/library-bug/libpcap-2/build/sanitizer/lib

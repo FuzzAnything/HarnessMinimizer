@@ -108,6 +108,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
+| `--symbolize` | No | Ablation mode. Runs reduction candidates with sanitizer `symbolize=1` and validates the symbolized crash pattern, symbolized first-stack-trace depth, and symbolized crash location instead of the default fast `symbolize=0` oracle. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--snapshot` | No | Enable `last_interesting.cpp` snapshotting during tree reduction and allow snapshot-based retry/fallback after reduction if inline validation fails. Disabled by default. |
 | `--direct`, `--single-step` | No | Use the single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
@@ -156,13 +157,16 @@ differs between fast and symbolized execution:
 - `symbolize=0` pattern: used by normal tree-reduction candidates, amortized-link
   candidate checks, `--statistics`, LLM validation, and crash-identity checks
   for slicing/inline validation
-- `symbolize=1` pattern: used by symbolized validation paths when the
+- `symbolize=1` pattern: used by symbolized validation paths and public
+  `--symbolize` reduction when the
   symbolized run produces an extractable crash signature
 
 If the symbolized reference run cannot produce a separate pattern, symbolized
 stack validations still require exit code `77`, symbolized stack depth, and the
 stored stack trace when available, but they do not require a symbolized crash
-regex. The matching stack-depth reference is also kept separately for each mode.
+regex. Public `--symbolize` reduction is stricter and fails early in this case,
+because its candidate oracle requires the `symbolize=1` crash-pattern regex. The
+matching stack-depth reference is also kept separately for each mode.
 
 ### `--slice`
 
@@ -171,7 +175,9 @@ Enables the optional dynamic-slicing pre-pass:
 - builds a separate source-coverage binary
 - identifies uncovered executable regions
 - tries a conservative syntax-preserving pre-slice
-- validates the sliced result with the same symbolize=1 crash-preservation check used for deeper stack-trace validation before continuing
+- validates the sliced result before continuing; by default this uses the deeper
+  symbolize=1 stack-trace validation, while public `--symbolize` uses the
+  symbolized crash-location oracle
 
 If `--slice` is omitted, this pre-pass is skipped entirely.
 
@@ -184,6 +190,25 @@ When enabled, HarnessReducer records how many tree-reducer candidate checks ende
 - `-1` — candidate could not be compiled or linked, including `-Werror=uninitialized` failures
 
 The counts and probabilities are written to `statistics.txt` in the work directory.
+
+### `--symbolize`
+
+`--symbolize` is an ablation mode for measuring the cost of the default
+`symbolize=0` reduction path.
+
+When enabled, HarnessReducer records a symbolized crash location from the first
+source location in the original symbolized pre-harness stack trace and writes it
+to `symbolized_crash_location.pattern` for inspection. The same normalized
+pattern is passed directly to `crash_tester.py` as an argument for candidate
+checks, so the tree-reduction hot path does not read that file. Tree-reduction
+candidates then run with `symbolize=1` and must preserve:
+
+- the `symbolize=1` crash-pattern regex
+- the symbolized first-stack-trace depth
+- the recorded symbolized crash location
+
+The dynamic shared-library offset check is not used in this mode, because
+symbolized sanitizer output may no longer include the raw `.so+offset` frame.
 
 ### `--check`
 
@@ -199,7 +224,7 @@ When enabled, HarnessReducer:
 - additionally records the **first entire** stack trace from the original symbolized crash
 - counts its frame lines directly
 - runs every tree-reduction candidate with `symbolize=1`
-- uses the same interestingness rule as the normal reducer, except under `symbolize=1`:
+- uses a diagnostic interestingness rule:
   - crash pattern must match
   - the first entire stack trace must have the same frame count
 - for diagnostics, if a candidate preserves the crash pattern, also checks whether:
@@ -208,7 +233,7 @@ When enabled, HarnessReducer:
 - prints `level_same`, `stack_same`, and `stack_same / level_same`
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection; when a candidate returns `77`, its source code is also pasted into that log entry
 
-This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. Its tree-reduction oracle is now aligned with the normal tool except that candidate execution uses `symbolize=1`. During `--check`, each candidate log entry also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic.
+This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. It is separate from public `--symbolize` ablation mode, which uses crash-location matching rather than full-stack drift statistics. During `--check`, each candidate log entry also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic.
 
 ### `--snapshot`
 
@@ -469,6 +494,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `crash_pattern.symbolize0` — crash-pattern regex from the fast reference run
 - `crash_pattern.symbolize1` — crash-pattern regex from the symbolized reference run, when available
 - `stack_trace.pattern` — stored normalized reference stack trace
+- `symbolized_crash_location.pattern` — stored normalized source location recorded for `--symbolize` reduction; candidate checks receive the same pattern directly as an argument
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
 - `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
 - `reduced_harness.cpp` — tree-reducer output before final copy
@@ -479,5 +505,5 @@ During reduction, the work directory may also contain artifacts such as:
 ## Notes
 
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. Inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. A `symbolize=1` crash regex is required only when one was recorded.
+- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. By default, inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, inline validation uses the symbolized crash pattern, symbolized stack depth, and recorded crash location.
 - If LLM validation fails, the tool falls back to the non-LLM harness.

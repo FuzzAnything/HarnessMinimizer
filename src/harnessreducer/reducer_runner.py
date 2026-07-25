@@ -46,6 +46,7 @@ STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
 CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
+SYMBOLIZED_CRASH_LOCATION_FILE_NAME = "symbolized_crash_location.pattern"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
 HARNESS_RUNNER_BINARY_NAME = "harness_runner"
@@ -55,6 +56,7 @@ CRASH_PATTERN_SYMBOLIZE_1: str | None = None
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 DYNAMIC_REFERENCE_CRASH_SITE = None
+SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
@@ -1258,6 +1260,7 @@ def run_amortized_reference_candidate(
         )
     if symbolize:
         cmd.append("--symbolize")
+        cmd.extend(symbolized_crash_location_tester_args())
     else:
         cmd.extend(dynamic_crash_site_tester_args())
     if not require_crash_pattern:
@@ -1650,6 +1653,21 @@ def extract_first_sanitizer_stack_trace(output: str) -> str | None:
     return "\n".join(frames)
 
 
+def extract_symbolized_crash_location(
+    output: str,
+    harness_path: str | None = None,
+) -> str | None:
+    """Return the first source location from the symbolized pre-harness trace."""
+    trace = extract_stack_trace(output, harness_path=harness_path)
+    if not trace:
+        return None
+    for line in trace.splitlines():
+        match = SOURCE_LOCATION_PATTERN.search(line)
+        if match:
+            return match.group(0)
+    return None
+
+
 def count_first_stack_trace_frames(output: str) -> int:
     trace = extract_first_sanitizer_stack_trace(output)
     if not trace:
@@ -1702,6 +1720,15 @@ def get_dynamic_reference_crash_site() -> DynamicCrashSite | None:
     return DYNAMIC_REFERENCE_CRASH_SITE
 
 
+def set_symbolized_reference_crash_location_pattern(pattern: str | None) -> None:
+    global SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN
+    SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN = pattern
+
+
+def get_symbolized_reference_crash_location_pattern() -> str | None:
+    return SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN
+
+
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
 
@@ -1719,6 +1746,10 @@ def get_dynamic_crash_site_file() -> str:
     return os.path.join(get_work_dir(), DYNAMIC_CRASH_SITE_FILE_NAME)
 
 
+def get_symbolized_crash_location_file() -> str:
+    return os.path.join(get_work_dir(), SYMBOLIZED_CRASH_LOCATION_FILE_NAME)
+
+
 def get_last_interesting_file() -> str:
     return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
 
@@ -1732,11 +1763,13 @@ def reset_stack_trace_state() -> None:
     set_normal_reference_stack_depth(None)
     set_symbolized_reference_stack_depth(None)
     set_dynamic_reference_crash_site(None)
+    set_symbolized_reference_crash_location_pattern(None)
     for path in (
         get_stack_trace_file(),
         get_crash_pattern_file(symbolized=False),
         get_crash_pattern_file(symbolized=True),
         get_dynamic_crash_site_file(),
+        get_symbolized_crash_location_file(),
     ):
         try:
             os.remove(path)
@@ -1944,6 +1977,7 @@ def apply_coverage_guided_slice(
     link_flags: str | None,
     phase3_mode: str = PHASE3_DIRECT,
     crash_pattern_symbolize_0: str | None = None,
+    symbolize: bool = False,
 ) -> str:
     """Conservatively prune uncovered harness code before tree reduction.
 
@@ -1977,15 +2011,32 @@ def apply_coverage_guided_slice(
         sliced_path = Path(get_work_dir()) / f"{source_path.stem}{SLICED_HARNESS_SUFFIX}{source_path.suffix or '.cpp'}"
         sliced_path.write_text(slice_result.source, encoding="utf-8")
 
-        if not validate_crash_pattern_and_stack_trace(
-            str(sliced_path),
-            fast_crash_pattern,
-            crash_pattern,
-            crash_input,
-            compile_flags,
-            link_flags,
-            phase3_mode=phase3_mode,
-        ):
+        if symbolize:
+            if not crash_pattern:
+                print(
+                    "[!] Coverage-guided slicing failed: no symbolized crash pattern "
+                    "is available for --symbolize validation."
+                )
+                return harness_path
+            preserved = validate_symbolized_crash_pattern_depth_location(
+                str(sliced_path),
+                crash_pattern,
+                crash_input,
+                compile_flags,
+                link_flags,
+                phase3_mode=phase3_mode,
+            )
+        else:
+            preserved = validate_crash_pattern_and_stack_trace(
+                str(sliced_path),
+                fast_crash_pattern,
+                crash_pattern,
+                crash_input,
+                compile_flags,
+                link_flags,
+                phase3_mode=phase3_mode,
+            )
+        if not preserved:
             print("[!] Coverage-guided slicing failed crash-preservation validation. Falling back to the original harness.")
             return harness_path
 
@@ -2055,6 +2106,18 @@ def _persist_dynamic_reference_crash_site(site: DynamicCrashSite | None) -> None
     )
 
 
+def _persist_symbolized_reference_crash_location(pattern: str | None) -> None:
+    path = Path(get_symbolized_crash_location_file())
+    if pattern is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+
+    path.write_text(pattern + "\n", encoding="utf-8")
+
+
 def _record_dynamic_reference_crash_site(
     output: str,
     link_flags: str | None,
@@ -2066,6 +2129,29 @@ def _record_dynamic_reference_crash_site(
         print(f"[+] Recorded dynamic crash-site library: {site.library_path}")
         print(f"[+] Recorded dynamic crash-site offset: {site.offset}")
     return site
+
+
+def _record_symbolized_reference_crash_location(
+    output: str,
+    harness_path: str | None,
+    *,
+    required: bool,
+) -> str | None:
+    location = extract_symbolized_crash_location(output, harness_path=harness_path)
+    if location is None:
+        set_symbolized_reference_crash_location_pattern(None)
+        _persist_symbolized_reference_crash_location(None)
+        message = "No symbolized crash location found in the first pre-harness stack trace."
+        if required:
+            raise ValueError(message)
+        print(f"[!] {message}")
+        return None
+
+    pattern = normalize_crash_signature(location, escape=True)
+    set_symbolized_reference_crash_location_pattern(pattern)
+    _persist_symbolized_reference_crash_location(pattern)
+    print(f"[+] Recorded symbolized crash location: {location}")
+    return pattern
 
 
 def _extract_crash_signature_from_output(output: str) -> str | None:
@@ -2110,8 +2196,12 @@ def extract_crash_pattern_from_output(
     crash_input: str | None,
     harness_path: str | None = None,
     link_flags: str | None = None,
+    record_symbolized_crash_location: bool = False,
 ) -> str | None:
     work_dir = get_work_dir()
+    if not record_symbolized_crash_location:
+        set_symbolized_reference_crash_location_pattern(None)
+        _persist_symbolized_reference_crash_location(None)
     output_bin = os.path.join(work_dir, "poc.out")
     proc = _run_harness_for_crash_reference(
         output_bin,
@@ -2126,9 +2216,11 @@ def extract_crash_pattern_from_output(
         set_normal_reference_stack_depth(None)
         set_symbolized_reference_stack_depth(None)
         set_dynamic_reference_crash_site(None)
+        set_symbolized_reference_crash_location_pattern(None)
         _persist_reference_crash_pattern(None, symbolized=False)
         _persist_reference_crash_pattern(None, symbolized=True)
         _persist_dynamic_reference_crash_site(None)
+        _persist_symbolized_reference_crash_location(None)
         return None
 
     normal_reference_stack_depth = count_first_stack_trace_frames(output)
@@ -2156,7 +2248,9 @@ def extract_crash_pattern_from_output(
     if symbolized_proc.returncode != 77:
         set_reference_crash_patterns(symbolize_0=crash_pattern)
         set_symbolized_reference_stack_depth(None)
+        set_symbolized_reference_crash_location_pattern(None)
         _persist_reference_crash_pattern(None, symbolized=True)
+        _persist_symbolized_reference_crash_location(None)
         try:
             os.remove(get_stack_trace_file())
         except FileNotFoundError:
@@ -2203,6 +2297,12 @@ def extract_crash_pattern_from_output(
         except FileNotFoundError:
             pass
         print("[!] No symbolized stack trace found in crash output.")
+    if record_symbolized_crash_location:
+        _record_symbolized_reference_crash_location(
+            symbolized_output,
+            harness_path,
+            required=True,
+        )
     return crash_pattern
 
 
@@ -2306,6 +2406,7 @@ def run_treereducer(
     statistics: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
+    symbolize: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -2362,14 +2463,20 @@ def run_treereducer(
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
-    cmd.extend(dynamic_crash_site_tester_args())
+    if symbolize:
+        cmd.append("--symbolize")
+        if not amortize_link:
+            cmd.extend(required_stack_depth_tester_args(symbolized=True))
+        cmd.extend(required_symbolized_crash_location_tester_args())
+    else:
+        cmd.extend(dynamic_crash_site_tester_args())
 
     runner_context = (
         start_amortized_runner(
             link_flags,
             crash_input,
             fdp_trace_file,
-            symbolize=False,
+            symbolize=symbolize,
             static_root_config=StaticArchiveRootConfig(
                 source=reducer_source,
                 compile_flags=compile_flags,
@@ -2394,11 +2501,15 @@ def run_treereducer(
                 amortized_runner.socket_path,
                 pch_artifacts,
                 plugin_link_flags,
-                symbolize=False,
+                symbolize=symbolize,
             )
             reference_depth = count_first_stack_trace_frames(reference_output)
             if reference_depth:
                 cmd.extend(["--stack-depth", str(reference_depth)])
+            elif symbolize:
+                raise RuntimeError(
+                    "Could not extract a symbolized amortized-link reference stack depth."
+                )
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
@@ -2408,7 +2519,8 @@ def run_treereducer(
                     + " ".join(plugin_link_flags)
                 )
         else:
-            cmd.extend(stack_depth_tester_args(symbolized=False))
+            if not symbolize:
+                cmd.extend(stack_depth_tester_args(symbolized=False))
 
         proc = subprocess.run(
             cmd,
@@ -2450,6 +2562,14 @@ def stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:
     return ["--stack-depth", str(depth)]
 
 
+def required_stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:
+    args = stack_depth_tester_args(symbolized=symbolized)
+    if args:
+        return args
+    mode = "symbolized" if symbolized else "fast-path"
+    raise ValueError(f"A {mode} reference stack depth is required for this oracle.")
+
+
 def dynamic_crash_site_tester_args() -> list[str]:
     site = get_dynamic_reference_crash_site()
     if site is None:
@@ -2460,6 +2580,22 @@ def dynamic_crash_site_tester_args() -> list[str]:
         "--dynamic-crash-site-offset",
         site.offset,
     ]
+
+
+def symbolized_crash_location_tester_args() -> list[str]:
+    pattern = get_symbolized_reference_crash_location_pattern()
+    if not pattern or not pattern.strip():
+        return []
+    return ["--crash-location-pattern", pattern]
+
+
+def required_symbolized_crash_location_tester_args() -> list[str]:
+    args = symbolized_crash_location_tester_args()
+    if args:
+        return args
+    raise ValueError(
+        "A symbolized crash-location reference is required for --symbolize reduction."
+    )
 
 
 def _write_validation_failure_log(
@@ -2589,6 +2725,55 @@ def validate_stack_trace(
     return proc.returncode == 77
 
 
+def validate_symbolized_crash_pattern_depth_location(
+    harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None = None,
+    phase3_mode: str = PHASE3_DIRECT,
+    validation_log_path: str | None = None,
+) -> bool:
+    """Run a symbolize=1 crash-pattern/depth/location validation."""
+    if not crash_pattern:
+        raise ValueError("Symbolized crash pattern cannot be empty.")
+    validate_phase3_mode(phase3_mode)
+    pch_artifacts: PchArtifacts | None = None
+    tester_source = harness_path
+    if phase3_mode == PHASE3_PCH:
+        pch_artifacts = prepare_phase3_pch_harness(
+            harness_path,
+            compile_flags,
+            use_replay=fdp_trace_file is not None,
+        )
+        tester_source = pch_artifacts.body_source
+
+    cmd = [
+        get_crash_tester_path(),
+        tester_source,
+        crash_pattern,
+        "--crash-input", crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+        "--symbolize",
+    ]
+    cmd.extend(required_stack_depth_tester_args(symbolized=True))
+    cmd.extend(required_symbolized_crash_location_tester_args())
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+
+    proc = run_command(
+        cmd,
+        "Symbolized crash-location validation failed.",
+        ignore_errors=True,
+    )
+    if validation_log_path is not None and proc.returncode != 77:
+        _write_validation_failure_log(validation_log_path, proc)
+    return proc.returncode == 77
+
+
 def validate_crash_pattern_and_stack_trace(
     harness_path: str,
     crash_pattern_symbolize_0: str,
@@ -2629,6 +2814,29 @@ def validate_crash_pattern_and_stack_trace(
         validation_log_path=validation_log_path,
         require_crash_pattern=crash_pattern_symbolize_1 is not None,
     )
+
+
+def check_reducer_symbolized_reduction_oracle(
+    harness_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    phase3_mode: str = PHASE3_DIRECT,
+) -> None:
+    print("[+] Checking symbolized reduction crash-location oracle validity...")
+    if not validate_symbolized_crash_pattern_depth_location(
+        harness_path,
+        crash_pattern,
+        crash_input,
+        compile_flags,
+        link_flags,
+        phase3_mode=phase3_mode,
+    ):
+        raise ValueError(
+            "Symbolized reduction crash-location oracle did not match the original crash behavior."
+        )
+    print("[+] Symbolized reduction crash-location oracle is valid.")
 
 
 def check_reducer_symbolized_crash_pattern(

@@ -21,12 +21,15 @@ from harnessreducer.reducer_runner import (
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
     extract_stack_trace,
+    extract_symbolized_crash_location,
     get_crash_pattern_file,
     get_dynamic_crash_site_file,
     get_dynamic_reference_crash_site,
     get_normal_reference_stack_depth,
     get_reference_crash_pattern_symbolize_0,
     get_reference_crash_pattern_symbolize_1,
+    get_symbolized_crash_location_file,
+    get_symbolized_reference_crash_location_pattern,
     get_symbolized_reference_stack_depth,
     has_static_target_libraries,
     infer_target_dynamic_library_hints,
@@ -34,9 +37,12 @@ from harnessreducer.reducer_runner import (
     get_stack_trace_file,
     reset_stack_trace_state,
     set_dynamic_reference_crash_site,
+    set_symbolized_reference_crash_location_pattern,
     set_normal_reference_stack_depth,
     set_symbolized_reference_stack_depth,
     stack_depth_tester_args,
+    symbolized_crash_location_tester_args,
+    validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
     validate_stack_trace,
     configure_work_dir,
@@ -61,6 +67,8 @@ _spec.loader.exec_module(_ct_module)
 
 ct_extract_stack_trace = _ct_module.extract_stack_trace
 ct_check_stack_trace = _ct_module._check_stack_trace
+ct_check_crash_location_pattern = _ct_module._check_crash_location_pattern
+ct_check_crash_location = _ct_module._check_crash_location
 ct_check_dynamic_crash_site = _ct_module._check_dynamic_crash_site
 ct_compile_error_mentions_uninitialized = _ct_module.compile_error_mentions_uninitialized
 
@@ -249,6 +257,20 @@ class TestExtractStackTrace(unittest.TestCase):
             3,
         )
 
+    def test_extract_symbolized_crash_location_uses_first_pre_harness_source_location(self):
+        self.assertEqual(
+            extract_symbolized_crash_location(
+                SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+                harness_path="/tmp/case/custom_harness.cpp",
+            ),
+            "/src/lib.c:10:3",
+        )
+
+    def test_extract_symbolized_crash_location_returns_none_without_source_location(self):
+        self.assertIsNone(
+            extract_symbolized_crash_location(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED)
+        )
+
 
 class TestDynamicCrashSiteExtraction(unittest.TestCase):
     def setUp(self):
@@ -413,6 +435,38 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow
             )
         )
 
+    def test_crash_location_check_passes_and_fails(self):
+        pattern = normalize_crash_signature("/src/lib.c:10:3", escape=True)
+        self.assertTrue(
+            ct_check_crash_location_pattern(
+                SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+                pattern,
+                "/tmp/case/custom_harness.cpp",
+            )
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pattern", delete=False) as f:
+            f.write(pattern)
+            f.flush()
+            location_file = f.name
+
+        try:
+            self.assertTrue(
+                ct_check_crash_location(
+                    SAMPLE_ASAN_OUTPUT_WITH_HELPER,
+                    location_file,
+                    "/tmp/case/custom_harness.cpp",
+                )
+            )
+            self.assertFalse(
+                ct_check_crash_location(
+                    SAMPLE_ASAN_OUTPUT,
+                    location_file,
+                    "/tmp/case/custom_harness.cpp",
+                )
+            )
+        finally:
+            os.unlink(location_file)
+
 
 class TestCrashTesterCompileDiagnostics(unittest.TestCase):
     def test_compile_error_mentions_uninitialized_detects_warning_error(self):
@@ -527,6 +581,58 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 r"/root/src/opencv/modules/imgproc/src/drawing\.cpp:1142:13:\ runtime\ error:\ left\ shift\ of\ negative\ value\ \-1",
             )
 
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_records_symbolized_crash_location_when_requested(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_DYNAMIC_LIBRARY_OUTPUT, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT_WITH_HELPER, "stderr": ""})(),
+            ]
+
+            extract_crash_pattern_from_output(
+                None,
+                harness_path="/tmp/case/custom_harness.cpp",
+                link_flags="-ltarget -lpthread",
+                record_symbolized_crash_location=True,
+            )
+
+            expected_pattern = normalize_crash_signature("/src/lib.c:10:3", escape=True)
+            self.assertEqual(
+                get_symbolized_reference_crash_location_pattern(),
+                expected_pattern,
+            )
+            self.assertEqual(
+                Path(get_symbolized_crash_location_file()).read_text(encoding="utf-8").strip(),
+                expected_pattern,
+            )
+            self.assertEqual(
+                symbolized_crash_location_tester_args(),
+                ["--crash-location-pattern", expected_pattern],
+            )
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_does_not_record_crash_location_by_default(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            Path(get_symbolized_crash_location_file()).write_text(
+                "stale-location", encoding="utf-8"
+            )
+            set_symbolized_reference_crash_location_pattern("stale-location")
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_DYNAMIC_LIBRARY_OUTPUT, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": SAMPLE_ASAN_OUTPUT_WITH_HELPER, "stderr": ""})(),
+            ]
+
+            extract_crash_pattern_from_output(
+                None,
+                harness_path="/tmp/case/custom_harness.cpp",
+                link_flags="-ltarget -lpthread",
+            )
+
+            self.assertIsNone(get_symbolized_reference_crash_location_pattern())
+            self.assertFalse(os.path.exists(get_symbolized_crash_location_file()))
+
 
 class TestStackTraceStateManagement(unittest.TestCase):
     def test_reset_stack_trace_state_removes_artifacts(self):
@@ -540,6 +646,9 @@ class TestStackTraceStateManagement(unittest.TestCase):
                 "symbolized-pattern", encoding="utf-8"
             )
             Path(get_dynamic_crash_site_file()).write_text("{}", encoding="utf-8")
+            Path(get_symbolized_crash_location_file()).write_text(
+                "location-pattern", encoding="utf-8"
+            )
             set_dynamic_reference_crash_site(
                 DynamicCrashSite(
                     library_path="/tmp/libtarget.so",
@@ -547,6 +656,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
                     offset="0x123",
                 )
             )
+            set_symbolized_reference_crash_location_pattern("location-pattern")
 
             reset_stack_trace_state()
 
@@ -554,9 +664,11 @@ class TestStackTraceStateManagement(unittest.TestCase):
             self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=False)))
             self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=True)))
             self.assertFalse(os.path.exists(get_dynamic_crash_site_file()))
+            self.assertFalse(os.path.exists(get_symbolized_crash_location_file()))
             self.assertIsNone(get_reference_crash_pattern_symbolize_0())
             self.assertIsNone(get_reference_crash_pattern_symbolize_1())
             self.assertIsNone(get_dynamic_reference_crash_site())
+            self.assertIsNone(get_symbolized_reference_crash_location_pattern())
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
@@ -586,6 +698,8 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             set_symbolized_reference_stack_depth(6)
+            expected_pattern = normalize_crash_signature("/src/lib.c:10:3", escape=True)
+            set_symbolized_reference_crash_location_pattern(expected_pattern)
             set_dynamic_reference_crash_site(
                 DynamicCrashSite(
                     library_path="/tmp/build/lib/libtarget.so",
@@ -618,6 +732,46 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertNotIn("--dynamic-crash-site-offset", cmd)
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_symbolized_crash_location_oracle_passes_expected_args(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            set_symbolized_reference_stack_depth(6)
+            expected_pattern = normalize_crash_signature("/src/lib.c:10:3", escape=True)
+            set_symbolized_reference_crash_location_pattern(expected_pattern)
+            set_dynamic_reference_crash_site(
+                DynamicCrashSite(
+                    library_path="/tmp/build/lib/libtarget.so",
+                    library_name="libtarget.so",
+                    offset="0xbeaf0",
+                )
+            )
+            mock_run.return_value.returncode = 77
+            mock_run.return_value.stdout = ""
+            mock_run.return_value.stderr = ""
+
+            ok = validate_symbolized_crash_pattern_depth_location(
+                "candidate.cpp",
+                "AddressSanitizer",
+                "seed.bin",
+                "-O2",
+                "-lm",
+                fdp_trace_file="/tmp/fdp.log",
+            )
+
+            self.assertTrue(ok)
+            cmd = mock_run.call_args.args[0]
+            self.assertIn("--symbolize", cmd)
+            self.assertIn("--stack-depth", cmd)
+            self.assertIn("6", cmd)
+            self.assertIn("--crash-location-pattern", cmd)
+            self.assertIn(expected_pattern, cmd)
+            self.assertIn("--fdp-trace", cmd)
+            self.assertNotIn("--crash-location-file", cmd)
+            self.assertNotIn("--stack-trace-file", cmd)
+            self.assertNotIn("--dynamic-crash-site-library", cmd)
+            self.assertNotIn("--dynamic-crash-site-offset", cmd)
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_stack_trace_without_stored_pattern_still_runs(self, mock_run):

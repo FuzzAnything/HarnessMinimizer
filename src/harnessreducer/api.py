@@ -26,6 +26,7 @@ from harnessreducer.reducer_runner import (
     apply_coverage_guided_slice,
     candidate_files_match,
     check_reducer_crash_pattern,
+    check_reducer_symbolized_reduction_oracle,
     check_reducer_symbolized_crash_pattern,
     check_tree_reducer,
     extract_crash_pattern_from_output,
@@ -49,6 +50,7 @@ from harnessreducer.reducer_runner import (
     resolve_amortized_link_inputs,
     run_treereducer,
     run_command,
+    validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
     validate_phase3_mode,
 )
@@ -99,6 +101,7 @@ class ReductionConfig:
     check: bool = False
     snapshot: bool = False
     amortize_link: bool = False
+    symbolize: bool = False
 
 
 @dataclass(frozen=True)
@@ -384,6 +387,7 @@ def _inline_direct_input_in_reduced_harness(
     phase3_mode: str,
     snapshot: bool,
     crash_pattern_symbolize_0: str,
+    symbolize: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
@@ -437,17 +441,34 @@ def _inline_direct_input_in_reduced_harness(
             "Verifying crash preservation for direct-input inlined harness: "
             f"{inline_harness_path}"
         )
-        if validate_crash_pattern_and_stack_trace(
-            inline_harness_path,
-            crash_pattern_symbolize_0,
-            crash_pattern_symbolize_1,
-            crash_input,
-            compile_flags,
-            link_flags,
-            fdp_trace_file=None,
-            phase3_mode=phase3_mode,
-            validation_log_path=validation_log_path,
-        ):
+        if symbolize:
+            if crash_pattern_symbolize_1 is None:
+                raise ValueError(
+                    "--symbolize inline validation requires a symbolize=1 crash pattern."
+                )
+            crash_preserved = validate_symbolized_crash_pattern_depth_location(
+                inline_harness_path,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=None,
+                phase3_mode=phase3_mode,
+                validation_log_path=validation_log_path,
+            )
+        else:
+            crash_preserved = validate_crash_pattern_and_stack_trace(
+                inline_harness_path,
+                crash_pattern_symbolize_0,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=None,
+                phase3_mode=phase3_mode,
+                validation_log_path=validation_log_path,
+            )
+        if crash_preserved:
             print("[+] Direct-input inline reduction preserved crash behavior.")
             return inline_harness_path, (str(header_path),)
 
@@ -512,6 +533,7 @@ def inline_literals_in_reduced_harness(
     phase3_mode: str = PHASE3_DIRECT,
     snapshot: bool = False,
     crash_pattern_symbolize_0: str | None = None,
+    symbolize: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -527,6 +549,7 @@ def inline_literals_in_reduced_harness(
             phase3_mode,
             snapshot,
             fast_crash_pattern,
+            symbolize,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -577,17 +600,34 @@ def inline_literals_in_reduced_harness(
 
         print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
         validation_log_path = f"{inline_harness_path}.validation.log"
-        if validate_crash_pattern_and_stack_trace(
-            inline_harness_path,
-            fast_crash_pattern,
-            crash_pattern_symbolize_1,
-            crash_input,
-            compile_flags,
-            link_flags,
-            fdp_trace_file=fdp_trace_file,
-            phase3_mode=phase3_mode,
-            validation_log_path=validation_log_path,
-        ):
+        if symbolize:
+            if crash_pattern_symbolize_1 is None:
+                raise ValueError(
+                    "--symbolize inline validation requires a symbolize=1 crash pattern."
+                )
+            crash_preserved = validate_symbolized_crash_pattern_depth_location(
+                inline_harness_path,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=phase3_mode,
+                validation_log_path=validation_log_path,
+            )
+        else:
+            crash_preserved = validate_crash_pattern_and_stack_trace(
+                inline_harness_path,
+                fast_crash_pattern,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=phase3_mode,
+                validation_log_path=validation_log_path,
+            )
+        if crash_preserved:
             print("[+] Inline reduction preserved crash behavior.")
             inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
             cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
@@ -661,10 +701,14 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     reduction_phase3_mode = config.phase3_mode
     check_tree_reducer()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
+    crash_pattern_kwargs = {}
+    if config.symbolize:
+        crash_pattern_kwargs["record_symbolized_crash_location"] = True
     crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
         config.crash_input,
         harness_path=config.harness_path,
         link_flags=config.link_flags,
+        **crash_pattern_kwargs,
     )
     if not crash_pattern_symbolize_0:
         return ReductionResult(
@@ -684,22 +728,36 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             "[!] No separate symbolize=1 crash pattern was recorded; "
             "symbolized stack validations will not require a symbolized crash regex."
         )
-    check_reducer_crash_pattern(
-        config.harness_path,
-        crash_pattern_symbolize_0,
-        config.crash_input,
-        config.compile_flags,
-        config.link_flags,
-        phase3_mode=validation_phase3_mode,
-    )
-    check_reducer_symbolized_crash_pattern(
-        config.harness_path,
-        recorded_symbolized_pattern,
-        config.crash_input,
-        config.compile_flags,
-        config.link_flags,
-        phase3_mode=validation_phase3_mode,
-    )
+    if config.symbolize:
+        if crash_pattern_symbolize_1 is None:
+            raise ValueError(
+                "--symbolize requires an extractable symbolize=1 crash pattern."
+            )
+        check_reducer_symbolized_reduction_oracle(
+            config.harness_path,
+            crash_pattern_symbolize_1,
+            config.crash_input,
+            config.compile_flags,
+            config.link_flags,
+            phase3_mode=validation_phase3_mode,
+        )
+    else:
+        check_reducer_crash_pattern(
+            config.harness_path,
+            crash_pattern_symbolize_0,
+            config.crash_input,
+            config.compile_flags,
+            config.link_flags,
+            phase3_mode=validation_phase3_mode,
+        )
+        check_reducer_symbolized_crash_pattern(
+            config.harness_path,
+            recorded_symbolized_pattern,
+            config.crash_input,
+            config.compile_flags,
+            config.link_flags,
+            phase3_mode=validation_phase3_mode,
+        )
     if config.check:
         print(
             "[+] Stored reference depths: "
@@ -726,6 +784,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.link_flags,
             phase3_mode=validation_phase3_mode,
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
+            symbolize=config.symbolize,
         )
     else:
         effective_harness_path = config.harness_path
@@ -773,7 +832,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         reduced_harness = run_treereducer(
             tagged_harness_file,
             fdp_trace_file,
-            crash_pattern_symbolize_0,
+            crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
             config.compile_flags,
             config.link_flags,
             config.crash_input,
@@ -782,6 +841,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             statistics=config.statistics,
             snapshot=config.snapshot,
             amortize_link=config.amortize_link,
+            symbolize=config.symbolize,
         )
     format_reduced_harness(reduced_harness)
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
@@ -795,18 +855,20 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         phase3_mode=validation_phase3_mode,
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
+        symbolize=config.symbolize,
     )
 
     if config.use_llm:
         from harnessreducer.llm_reducer import apply_llm_reduction
         final_harness = apply_llm_reduction(
             post_inline_harness,
-            crash_pattern_symbolize_0,
+            crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
             config.crash_input,
             config.compile_flags,
             config.link_flags,
             fdp_trace_file,
             phase3_mode=validation_phase3_mode,
+            symbolize=config.symbolize,
         )
     else:
         final_harness = post_inline_harness
@@ -833,6 +895,7 @@ def process(
     check: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
+    symbolize: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -847,6 +910,7 @@ def process(
         slice_enabled=slice_enabled,
         check=check,
         snapshot=snapshot,
+        symbolize=symbolize,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

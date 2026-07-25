@@ -23,6 +23,8 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner._IS_USER_WORK_DIR = False
         reducer_runner.set_normal_reference_stack_depth(None)
         reducer_runner.set_symbolized_reference_stack_depth(None)
+        reducer_runner.set_dynamic_reference_crash_site(None)
+        reducer_runner.set_symbolized_reference_crash_location_pattern(None)
 
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_command_success(self, mock_run):
@@ -75,6 +77,45 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
         self.assertNotIn("--last-interesting-file", cmd)
+
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_symbolize_uses_symbolized_oracle(self, mock_run):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            Path(tmpdir, "reduced_harness.cpp").write_text("", encoding="utf-8")
+            reducer_runner.set_symbolized_reference_stack_depth(6)
+            reducer_runner.set_symbolized_reference_crash_location_pattern(
+                r"/src/lib\.c:10:3"
+            )
+            reducer_runner.set_dynamic_reference_crash_site(
+                reducer_runner.DynamicCrashSite(
+                    library_path="/tmp/build/lib/libtarget.so",
+                    library_name="libtarget.so",
+                    offset="0xbeaf0",
+                )
+            )
+
+            reducer_runner.run_treereducer(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file="/tmp/trace.log",
+                crash_pattern="SymbolizedPattern",
+                compile_flags=None,
+                link_flags="-lm",
+                crash_input=None,
+                symbolize=True,
+            )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--symbolize", cmd)
+        self.assertIn("SymbolizedPattern", cmd)
+        self.assertIn("--stack-depth", cmd)
+        self.assertIn("6", cmd)
+        self.assertIn("--crash-location-pattern", cmd)
+        self.assertIn(r"/src/lib\.c:10:3", cmd)
+        self.assertNotIn("--crash-location-file", cmd)
+        self.assertNotIn("--dynamic-crash-site-library", cmd)
+        self.assertNotIn("--dynamic-crash-site-offset", cmd)
 
     @patch("harnessreducer.reducer_runner.run_amortized_reference_candidate")
     @patch("harnessreducer.reducer_runner.start_amortized_runner")
