@@ -29,3 +29,17 @@ harnessreducer harness.cpp \
  --stable \
  --statistics \
  -o reduced.cpp
+
+python3 measure_time.py benchmark/library-bug/sqlite-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/sqlite-1/build/sanitizer/include" \
+  --link-flags="benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.a" \
+  --crash-input benchmark/library-bug/sqlite-1/crash-input \
+  --suffix static \
+  -o benchmark/library-bug/sqlite-1/harness.out
+
+python3 measure_time.py benchmark/library-bug/sqlite-1/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/sqlite-1/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/sqlite-1/build/sanitizer/lib -lsqlite3" \
+  --crash-input benchmark/library-bug/sqlite-1/crash-input \
+  --suffix dynamic \
+  -o benchmark/library-bug/sqlite-1/harness.out

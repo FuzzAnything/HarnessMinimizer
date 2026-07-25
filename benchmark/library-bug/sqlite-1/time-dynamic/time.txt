@@ -1,0 +1,259 @@
+===============================================================================
+HARNESSREDUCER TIMING BENCHMARK
+===============================================================================
+
+Benchmark configuration
+-----------------------
+
+Field                      Value                                                                               
+-------------------------  ------------------------------------------------------------------------------------
+Generated                  2026-07-25T17:08:34.440628+08:00                                                    
+Harness                    /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/harness.cpp                   
+Crash input                /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/crash-input                   
+Crash input bytes          967                                                                                 
+Iterations                 100                                                                                 
+Suffix                     dynamic                                                                             
+Output directory           /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic                  
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.out      
+Compile flags              -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include                            
+Link flags                 -Lbenchmark/library-bug/sqlite-1/build/sanitizer/lib -lsqlite3                      
+Library configuration      dynamic                                                                             
+Platform                   Linux-7.0.0-15-generic-x86_64-with-glibc2.39                                        
+Python                     3.12.13                                                                             
+Compiler                   Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)
+Clock                      time.perf_counter_ns / C++ steady_clock                                             
+
+
+===============================================================================
+A. LIBRARY CLASSIFICATION
+===============================================================================
+
+Resolved target inputs
+----------------------
+
+Kind            Resolved path                                                                                 
+--------------  ----------------------------------------------------------------------------------------------
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.so.3.54.0
+
+Normal one-time runner dependencies
+-----------------------------------
+
+-L/root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib
+
+===============================================================================
+B. ONE-TIME PREPARATION
+===============================================================================
+
+Operation                          Time (ms)
+---------------------------------  ---------
+Classify link flags                0.356    
+Split source and write PCH inputs  0.440    
+Build normal PCH                   391.022  
+Build amortized PCH                386.354  
+Plan static archive runner link    0.024    
+Build production harness_runner    1581.836 
+Build instrumented timing runner   1584.774 
+Start timing runner until ready    13.412   
+
+Runner-internal startup breakdown (symbolize=0)
+-----------------------------------------------
+
+Operation                        Time (ms) or status
+-------------------------------  -------------------
+All dynamic-target dlopen calls  0.425              
+Read crash input                 0.367              
+Create/bind/listen socket        0.084              
+Internal startup total           1.147              
+
+Individual dynamic-target dlopen calls
+--------------------------------------
+
+Target                                                                                          Time (ms)
+----------------------------------------------------------------------------------------------  ---------
+/root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.so.3.54.0  0.425    
+
+
+===============================================================================
+C. OBJECT COMPILATION — 100 ITERATIONS
+===============================================================================
+
+Path       Headers  Output         N    Mean ms  Median   Stddev  Min      Max    
+---------  -------  -------------  ---  -------  -------  ------  -------  -------
+Normal     Split    Executable .o  100  393.621  401.333  31.358  328.218  462.469
+Normal     PCH      Executable .o  100  147.784  141.430  13.150  136.306  177.134
+Amortized  Split    Plugin .o      100  343.877  320.792  31.705  309.298  388.555
+Amortized  PCH      Plugin .o      100  137.225  128.644  13.765  119.964  176.897
+
+Compilation comparisons
+-----------------------
+
+Comparison                             Speedup
+-------------------------------------  -------
+PCH benefit for normal compilation     2.66x  
+PCH benefit for amortized compilation  2.51x  
+Plugin split versus normal split       1.14x  
+Plugin PCH versus normal PCH           1.08x  
+
+
+===============================================================================
+D. OUTPUT LINKING — 100 ITERATIONS
+===============================================================================
+
+Output               N    Mean ms  Median   Stddev  Min      Max    
+-------------------  ---  -------  -------  ------  -------  -------
+Normal executable    100  227.692  237.630  17.766  192.932  250.563
+Candidate plugin.so  100  84.033   85.586   5.706   70.135   95.779 
+
+Plugin-link speedup over normal executable link: 2.71x
+No candidate plugin fallback link was configured.
+
+===============================================================================
+E. END-TO-END EXECUTION — 100 ITERATIONS
+===============================================================================
+
+Path        Symbolize  N    Mean ms  Median   Stddev  Min      Max      Statuses code:count
+----------  ---------  ---  -------  -------  ------  -------  -------  -------------------
+Standalone  0          100  44.524   45.844   3.167   39.611   53.161   77:100             
+Standalone  1          100  269.599  277.611  18.143  225.239  288.730  77:100             
+Amortized   0          100  22.173   22.330   2.046   18.568   33.474   77:100             
+Amortized   1          100  253.037  257.648  13.614  217.252  276.906  77:100             
+
+Execution comparisons
+---------------------
+
+Comparison                        Speedup
+--------------------------------  -------
+Amortization, symbolize=0         2.01x  
+Amortization, symbolize=1         1.07x  
+symbolize=0 versus 1, standalone  6.06x  
+symbolize=0 versus 1, amortized   11.41x 
+
+Python-side candidate oracle parsing
+------------------------------------
+
+Output                  Check                                              N    Mean us   Median    Stddev   Min       Max     
+----------------------  -------------------------------------------------  ---  --------  --------  -------  --------  --------
+symbolize_0             crash regex match                                  100  5.438     3.088     21.609   2.490     220.313 
+symbolize_0             stack-depth check (expected 17)                    100  23.795    22.308    4.364    19.679    44.003  
+symbolize_0             dynamic .so offset check                           100  158.489   141.855   58.107   127.420   673.774 
+symbolize_0             pre-harness stack-trace regex (not active)         0    0.000     0.000     0.000    0.000     0.000   
+symbolize_0             combined active checks                             100  179.926   167.145   29.381   150.913   253.238 
+symbolize_1             crash regex match                                  100  2.345     2.236     0.891    2.012     11.031  
+symbolize_1             stack-depth check (expected 18)                    100  19.872    19.471    1.361    18.903    28.437  
+symbolize_1             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000   
+symbolize_1             pre-harness stack-trace regex                      100  1538.369  1515.310  212.262  1492.124  3645.128
+symbolize_1             combined active checks                             100  1532.936  1528.770  23.215   1505.239  1682.032
+two_stage_slice_inline  symbolize=0 crash + symbolize=1 crash/depth/stack  100  1752.841  1731.236  95.458   1689.163  2276.474
+
+Recorded dynamic crash-site used for timing: /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.so.3.54.0+0x113067b
+These rows measure Python parsing of already captured output. They are not extra harness executions.
+The two-stage row mirrors slicing/inline validation: first the symbolize=0 crash-pattern check, then the symbolize=1 stack/depth check; a symbolize=1 crash regex is included only when one was extracted.
+
+===============================================================================
+F. AMORTIZED REQUEST BREAKDOWN — 100 ITERATIONS
+===============================================================================
+
+symbolize=0
+-----------
+
+Stage                                 N    Mean us    Median     Stddev    Min        Max      
+------------------------------------  ---  ---------  ---------  --------  ---------  ---------
+Socket + complete request             100  22172.675  22329.759  2046.495  18567.543  33474.440
+Monitor fork                          100  2629.534   2634.455   354.835   1865.824   4347.366 
+Executor fork                         100  776.923    760.173    77.018    641.681    983.510  
+dlopen(candidate.so)                  100  455.545    439.269    92.702    336.772    924.075  
+dlsym(callback)                       100  5.697      5.639      1.087     4.356      13.402   
+Call to child termination             100  16795.037  17213.753  1376.145  13770.869  21537.183
+Output-pipe interval (overlaps call)  100  16719.524  17182.640  1290.977  13740.480  20030.426
+waitpid after pipe EOF                100  57.267     16.262     405.088   10.528     4087.643 
+Monitor internal total                100  19355.574  19574.731  1760.965  15849.900  25863.011
+
+symbolize=1
+-----------
+
+Stage                                 N    Mean us     Median      Stddev     Min         Max       
+------------------------------------  ---  ----------  ----------  ---------  ----------  ----------
+Socket + complete request             100  253037.342  257647.522  13613.799  217251.935  276905.644
+Monitor fork                          100  3386.417    3269.997    795.087    1946.988    5235.826  
+Executor fork                         100  930.071     906.992     122.611    713.723     1597.789  
+dlopen(candidate.so)                  100  582.645     527.935     160.759    416.897     1159.169  
+dlsym(callback)                       100  6.808       6.121       2.035      4.941       15.571    
+Call to child termination             100  246128.258  250846.837  13580.154  211016.006  268709.428
+Output-pipe interval (overlaps call)  100  246067.791  250791.256  13579.218  210968.593  268635.572
+waitpid after pipe EOF                100  29.372      25.253      10.861     15.624      68.038    
+Monitor internal total                100  249318.487  254062.152  13629.505  214003.821  272708.982
+
+Note: 'Call to child termination' includes target execution and sanitizer crash reporting. The output-pipe interval overlaps that time and must not be added to it.
+If fallback is triggered, the request end-to-end row includes the failed fast-path load request plus the successful fallback load request. The fallback plugin link itself is measured in section D when fallback is needed.
+
+===============================================================================
+G. COMMANDS USED
+===============================================================================
+
+Normal Pch Build
+----------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -x c++-header -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.normal.pch
+
+Amortized Pch Build
+-------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -x c++-header -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.amortized.pch
+
+Normal Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/normal_split.o
+
+Normal Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.normal.pch -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/normal_pch.o
+
+Plugin Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/plugin_split.o
+
+Plugin Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.amortized.pch -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/sqlite-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/plugin_pch.o
+
+Normal Executable Link
+----------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/normal_split.o -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.out -Lbenchmark/library-bug/sqlite-1/build/sanitizer/lib -lsqlite3
+
+Candidate Plugin Link
+---------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/plugin_pch.o -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/candidate.so
+
+Production Runner Build
+-----------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/src/harnessreducer/harness_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.so.3.54.0 -L/root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_runner
+
+Timing Runner Build
+-------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/timing_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib/libsqlite3.so.3.54.0 -L/root/HarnessMinimizer/benchmark/library-bug/sqlite-1/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/timing_runner
+
+
+===============================================================================
+H. ARTIFACTS
+===============================================================================
+
+Artifact                   Path                                                                                           
+-------------------------  -----------------------------------------------------------------------------------------------
+Human-readable report      /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/time.txt                    
+Raw timing samples         /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/raw_samples.json            
+PCH prefix header          /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.h            
+Normal PCH                 /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.normal.pch   
+Amortized PCH              /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_prefix.amortized.pch
+Include-free harness body  /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.harness_body.cpp    
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness.out                 
+Candidate plugin           /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/candidate.so                
+Production runner          /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/harness_runner              
+Instrumented runner        /root/HarnessMinimizer/benchmark/library-bug/sqlite-1/time-dynamic/timing_runner

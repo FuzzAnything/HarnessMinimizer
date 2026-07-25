@@ -1,0 +1,271 @@
+===============================================================================
+HARNESSREDUCER TIMING BENCHMARK
+===============================================================================
+
+Benchmark configuration
+-----------------------
+
+Field                      Value                                                                                                                                                                                                
+-------------------------  -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Generated                  2026-07-25T16:46:31.220687+08:00                                                                                                                                                                     
+Harness                    /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/harness.cpp                                                                                                                                  
+Crash input                /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/crash-input                                                                                                                                  
+Crash input bytes          9                                                                                                                                                                                                    
+Iterations                 100                                                                                                                                                                                                  
+Suffix                     dynamic                                                                                                                                                                                              
+Output directory           /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic                                                                                                                                 
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.out                                                                                                                     
+Compile flags              -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include                                                                                                                                           
+Link flags                 -Lbenchmark/library-bug/protobuf-1/build/sanitizer/lib -lprotobuf -lutf8_range -labsl_log_internal_check_op -labsl_log_internal_message -labsl_raw_hash_set -labsl_status -labsl_raw_logging_internal
+Library configuration      dynamic                                                                                                                                                                                              
+Platform                   Linux-7.0.0-15-generic-x86_64-with-glibc2.39                                                                                                                                                         
+Python                     3.12.13                                                                                                                                                                                              
+Compiler                   Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)                                                                                                                 
+Clock                      time.perf_counter_ns / C++ steady_clock                                                                                                                                                              
+
+
+===============================================================================
+A. LIBRARY CLASSIFICATION
+===============================================================================
+
+Resolved target inputs
+----------------------
+
+Kind            Resolved path                                                                                               
+--------------  ------------------------------------------------------------------------------------------------------------
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libprotobuf.so                  
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libutf8_range.so                
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_check_op.so
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_message.so 
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_hash_set.so         
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_status.so               
+Dynamic target  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_logging_internal.so 
+
+Normal one-time runner dependencies
+-----------------------------------
+
+-L/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib
+
+===============================================================================
+B. ONE-TIME PREPARATION
+===============================================================================
+
+Operation                          Time (ms)
+---------------------------------  ---------
+Classify link flags                0.811    
+Split source and write PCH inputs  0.393    
+Build normal PCH                   3153.661 
+Build amortized PCH                3776.254 
+Plan static archive runner link    0.028    
+Build production harness_runner    1628.972 
+Build instrumented timing runner   1708.716 
+Start timing runner until ready    70.581   
+
+Runner-internal startup breakdown (symbolize=0)
+-----------------------------------------------
+
+Operation                        Time (ms) or status
+-------------------------------  -------------------
+All dynamic-target dlopen calls  27.597             
+Read crash input                 0.149              
+Create/bind/listen socket        0.160              
+Internal startup total           28.036             
+
+Individual dynamic-target dlopen calls
+--------------------------------------
+
+Target                                                                                                        Time (ms)
+------------------------------------------------------------------------------------------------------------  ---------
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libprotobuf.so                    23.254   
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libutf8_range.so                  0.113    
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_check_op.so  1.071    
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_message.so   1.079    
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_hash_set.so           1.013    
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_status.so                 0.969    
+/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_logging_internal.so   0.098    
+
+
+===============================================================================
+C. OBJECT COMPILATION — 100 ITERATIONS
+===============================================================================
+
+Path       Headers  Output         N    Mean ms   Median    Stddev   Min       Max     
+---------  -------  -------------  ---  --------  --------  -------  --------  --------
+Normal     Split    Executable .o  100  3953.028  3989.680  315.011  3510.858  4679.112
+Normal     PCH      Executable .o  100  1750.423  1842.146  154.251  1523.596  2068.209
+Amortized  Split    Plugin .o      100  3879.125  3936.339  291.537  3375.319  4518.934
+Amortized  PCH      Plugin .o      100  1530.026  1490.172  131.307  1377.935  1807.642
+
+Compilation comparisons
+-----------------------
+
+Comparison                             Speedup
+-------------------------------------  -------
+PCH benefit for normal compilation     2.26x  
+PCH benefit for amortized compilation  2.54x  
+Plugin split versus normal split       1.02x  
+Plugin PCH versus normal PCH           1.14x  
+
+
+===============================================================================
+D. OUTPUT LINKING — 100 ITERATIONS
+===============================================================================
+
+Output               N    Mean ms  Median   Stddev  Min      Max    
+-------------------  ---  -------  -------  ------  -------  -------
+Normal executable    100  314.855  301.658  29.551  280.983  441.783
+Candidate plugin.so  100  101.883  101.013  6.221   92.890   115.672
+
+Plugin-link speedup over normal executable link: 3.09x
+No candidate plugin fallback link was configured.
+
+===============================================================================
+E. END-TO-END EXECUTION — 100 ITERATIONS
+===============================================================================
+
+Path        Symbolize  N    Mean ms  Median   Stddev  Min      Max      Statuses code:count
+----------  ---------  ---  -------  -------  ------  -------  -------  -------------------
+Standalone  0          100  68.198   70.535   4.443   61.556   75.879   77:100             
+Standalone  1          100  252.004  257.351  15.156  222.411  273.134  77:100             
+Amortized   0          100  12.867   12.525   1.821   9.888    23.054   77:100             
+Amortized   1          100  196.203  205.518  15.828  173.062  232.724  77:100             
+
+Execution comparisons
+---------------------
+
+Comparison                        Speedup
+--------------------------------  -------
+Amortization, symbolize=0         5.30x  
+Amortization, symbolize=1         1.28x  
+symbolize=0 versus 1, standalone  3.70x  
+symbolize=0 versus 1, amortized   15.25x 
+
+Python-side candidate oracle parsing
+------------------------------------
+
+Output                  Check                                              N    Mean us  Median   Stddev   Min      Max     
+----------------------  -------------------------------------------------  ---  -------  -------  -------  -------  --------
+symbolize_0             crash regex match                                  100  8.271    2.499    57.053   1.706    575.905 
+symbolize_0             stack-depth check (expected 8)                     100  22.715   21.137   5.515    15.937   53.479  
+symbolize_0             dynamic .so offset check                           100  118.796  110.412  28.036   81.665   240.645 
+symbolize_0             pre-harness stack-trace regex (not active)         0    0.000    0.000    0.000    0.000    0.000   
+symbolize_0             combined active checks                             100  141.209  130.357  31.191   98.962   213.765 
+symbolize_1             crash regex match                                  100  1.435    1.379    0.301    1.054    3.061   
+symbolize_1             stack-depth check (expected 9)                     100  13.231   12.627   1.727    11.947   21.409  
+symbolize_1             dynamic .so offset check (not active)              0    0.000    0.000    0.000    0.000    0.000   
+symbolize_1             pre-harness stack-trace regex                      100  529.429  490.966  155.751  478.640  1877.274
+symbolize_1             combined active checks                             100  534.279  503.309  101.852  492.128  1373.424
+two_stage_slice_inline  symbolize=0 crash + symbolize=1 crash/depth/stack  100  596.378  589.770  28.288   574.027  829.730 
+
+Recorded dynamic crash-site used for timing: /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libprotobuf.so.35.0.0+0x157b2eb
+These rows measure Python parsing of already captured output. They are not extra harness executions.
+The two-stage row mirrors slicing/inline validation: first the symbolize=0 crash-pattern check, then the symbolize=1 stack/depth check; a symbolize=1 crash regex is included only when one was extracted.
+
+===============================================================================
+F. AMORTIZED REQUEST BREAKDOWN — 100 ITERATIONS
+===============================================================================
+
+symbolize=0
+-----------
+
+Stage                                 N    Mean us    Median     Stddev    Min       Max      
+------------------------------------  ---  ---------  ---------  --------  --------  ---------
+Socket + complete request             100  12866.724  12524.855  1821.187  9887.770  23054.068
+Monitor fork                          100  4080.648   4072.108   855.682   2551.273  6694.828 
+Executor fork                         100  2140.699   2079.190   402.763   1688.549  5216.631 
+dlopen(candidate.so)                  100  1317.688   1281.843   216.581   1051.726  2556.292 
+dlsym(callback)                       100  5.981      5.755      1.836     4.473     21.652   
+Call to child termination             100  3798.204   3811.771   478.842   3150.362  6395.344 
+Output-pipe interval (overlaps call)  100  3756.784   3774.655   466.065   3118.681  6278.816 
+waitpid after pipe EOF                100  15.695     14.357     7.937     10.465    87.006   
+Monitor internal total                100  8618.597   8349.183   1327.643  7073.419  16460.819
+
+symbolize=1
+-----------
+
+Stage                                 N    Mean us     Median      Stddev     Min         Max       
+------------------------------------  ---  ----------  ----------  ---------  ----------  ----------
+Socket + complete request             100  196203.256  205517.715  15828.350  173061.533  232724.132
+Monitor fork                          100  4502.992    4406.901    862.097    2874.512    6563.097  
+Executor fork                         100  2166.950    2081.749    314.803    1736.745    3089.925  
+dlopen(candidate.so)                  100  1614.442    1572.608    179.236    1362.535    2469.801  
+dlsym(callback)                       100  7.130       6.905       1.048      5.362       11.328    
+Call to child termination             100  185638.322  196377.160  15880.916  164141.628  221812.389
+Output-pipe interval (overlaps call)  100  185570.168  196305.717  15879.008  164088.399  221758.900
+waitpid after pipe EOF                100  39.350      32.266      14.356     22.156      89.414    
+Monitor internal total                100  191253.305  201173.000  15881.659  168859.588  228731.069
+
+Note: 'Call to child termination' includes target execution and sanitizer crash reporting. The output-pipe interval overlaps that time and must not be added to it.
+If fallback is triggered, the request end-to-end row includes the failed fast-path load request plus the successful fallback load request. The fallback plugin link itself is measured in section D when fallback is needed.
+
+===============================================================================
+G. COMMANDS USED
+===============================================================================
+
+Normal Pch Build
+----------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -x c++-header -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.normal.pch
+
+Amortized Pch Build
+-------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -x c++-header -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.amortized.pch
+
+Normal Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/normal_split.o
+
+Normal Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.normal.pch -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/normal_pch.o
+
+Plugin Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/plugin_split.o
+
+Plugin Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.amortized.pch -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/protobuf-1/build/sanitizer/include /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/plugin_pch.o
+
+Normal Executable Link
+----------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/normal_split.o -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.out -Lbenchmark/library-bug/protobuf-1/build/sanitizer/lib -lprotobuf -lutf8_range -labsl_log_internal_check_op -labsl_log_internal_message -labsl_raw_hash_set -labsl_status -labsl_raw_logging_internal
+
+Candidate Plugin Link
+---------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/plugin_pch.o -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/candidate.so
+
+Production Runner Build
+-----------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/src/harnessreducer/harness_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libprotobuf.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libutf8_range.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_check_op.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_message.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_hash_set.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_status.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_logging_internal.so -L/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_runner
+
+Timing Runner Build
+-------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/timing_runner.cpp -Wl,--no-as-needed /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libprotobuf.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libutf8_range.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_check_op.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_log_internal_message.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_hash_set.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_status.so /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib/libabsl_raw_logging_internal.so -L/root/HarnessMinimizer/benchmark/library-bug/protobuf-1/build/sanitizer/lib -Wl,--as-needed -ldl -o /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/timing_runner
+
+
+===============================================================================
+H. ARTIFACTS
+===============================================================================
+
+Artifact                   Path                                                                                             
+-------------------------  -------------------------------------------------------------------------------------------------
+Human-readable report      /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/time.txt                    
+Raw timing samples         /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/raw_samples.json            
+PCH prefix header          /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.h            
+Normal PCH                 /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.normal.pch   
+Amortized PCH              /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_prefix.amortized.pch
+Include-free harness body  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.harness_body.cpp    
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness.out                 
+Candidate plugin           /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/candidate.so                
+Production runner          /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/harness_runner              
+Instrumented runner        /root/HarnessMinimizer/benchmark/library-bug/protobuf-1/time-dynamic/timing_runner
