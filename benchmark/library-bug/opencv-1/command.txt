@@ -54,3 +54,19 @@ python3 measure_time.py benchmark/library-bug/opencv-3/harness.cpp \
   --crash-input benchmark/library-bug/opencv-3/crash-input \
   --suffix static \
   -o benchmark/library-bug/opencv-3/harness.out
+
+opencv-4 opencv-5
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    -I$(pwd)/build/sanitizer/include/opencv4 \
+    harness.cpp -o harness \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+    -L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -lz -lm
+
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    -I$(pwd)/build/sanitizer/include/opencv4 \
+    harness.cpp -o harness \
+    $(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a -lz -lm
