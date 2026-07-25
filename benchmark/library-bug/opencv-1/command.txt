@@ -1,7 +1,7 @@
 opencv-1
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
-  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lz -fsanitize=vptr" \
   --work-dir ./statistics-pch-link \
   --crash-input crash-input \
   --pch \
@@ -9,6 +9,19 @@ harnessreducer harness.cpp \
   --stable \
   --statistics \
   -o reduced.cpp
+
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer,vptr \
+    -I$(pwd)/build/sanitizer/include \
+    harness.cpp -o harness \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+    -L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lz
+
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer,vptr \
+    -I$(pwd)/build/sanitizer/include \
+    harness.cpp -o harness \
+    $(pwd)/build/sanitizer/lib/libopencv_photo.a $(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a $(pwd)/build/sanitizer/lib/libittnotify.a -lz
 
 opencv-2
 harnessreducer harness.cpp \
@@ -70,3 +83,28 @@ clang++ -g -O1 -fno-omit-frame-pointer \
     -I$(pwd)/build/sanitizer/include/opencv4 \
     harness.cpp -o harness \
     $(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a -lz -lm
+
+opencv-6
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    -I$(pwd)/build/sanitizer/include/opencv4 \
+    harness.cpp -o harness \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+    -L$(pwd)/build/sanitizer/lib -lopencv_features2d -lopencv_flann -lopencv_imgproc -lopencv_core -littnotify -lzlib
+
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    -I$(pwd)/build/sanitizer/include/opencv4 \
+    harness.cpp -o harness \
+    $(pwd)/build/sanitizer/lib/libopencv_features2d.a $(pwd)/build/sanitizer/lib/libopencv_flann.a $(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a $(pwd)/build/sanitizer/lib/libittnotify.a $(pwd)/build/sanitizer/lib/libzlib.a
+
+opencv-7
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    -I$(pwd)/build/sanitizer/include/opencv4 \
+    harness.cpp -o harness \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+    -L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core
