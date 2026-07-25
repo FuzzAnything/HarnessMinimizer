@@ -198,6 +198,7 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             phase3_mode="direct",
             crash_pattern_symbolize_0="AddressSanitizer",
+            symbolize=False,
         )
         mock_tag.assert_called_once_with("/tmp/sliced.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
@@ -214,6 +215,7 @@ class TestApiPipeline(unittest.TestCase):
             statistics=False,
             snapshot=False,
             amortize_link=False,
+            symbolize=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -227,6 +229,7 @@ class TestApiPipeline(unittest.TestCase):
             phase3_mode="direct",
             snapshot=False,
             crash_pattern_symbolize_0="AddressSanitizer",
+            symbolize=False,
         )
         mock_check.assert_called_once()
 
@@ -480,6 +483,7 @@ class TestApiPipeline(unittest.TestCase):
             statistics=False,
             snapshot=False,
             amortize_link=False,
+            symbolize=False,
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
@@ -492,6 +496,94 @@ class TestApiPipeline(unittest.TestCase):
             phase3_mode="direct",
             snapshot=False,
             crash_pattern_symbolize_0="AddressSanitizer",
+            symbolize=False,
+        )
+
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.reset_last_interesting_state")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_symbolized_reduction_oracle")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_symbolize_uses_symbolized_reduction_oracle(
+        self,
+        mock_check_tree,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_symbolized_oracle,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_reset_last_interesting_state,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+    ):
+        mock_tag.return_value = TaggedHarness("/tmp/tagged.cpp", 0)
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "FastPattern"
+        self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+            symbolize=True,
+        )
+
+        result = reduce_with_config(config)
+
+        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        mock_extract.assert_called_once_with(
+            "seed.bin",
+            harness_path="a.cpp",
+            link_flags=None,
+            record_symbolized_crash_location=True,
+        )
+        mock_symbolized_oracle.assert_called_once_with(
+            "a.cpp",
+            "SymbolizedPattern",
+            "seed.bin",
+            None,
+            None,
+            phase3_mode="direct",
+        )
+        mock_check_pattern.assert_not_called()
+        self.mock_check_symbolized_pattern.assert_not_called()
+        mock_reduce.assert_called_once_with(
+            "/tmp/tagged.cpp",
+            None,
+            "SymbolizedPattern",
+            None,
+            None,
+            "seed.bin",
+            stable=False,
+            phase3_mode="split",
+            statistics=False,
+            snapshot=False,
+            amortize_link=False,
+            symbolize=True,
+        )
+        mock_inline.assert_called_once_with(
+            "/tmp/reduced.cpp",
+            None,
+            "SymbolizedPattern",
+            "seed.bin",
+            None,
+            None,
+            100000,
+            phase3_mode="direct",
+            snapshot=False,
+            crash_pattern_symbolize_0="FastPattern",
+            symbolize=True,
         )
 
 

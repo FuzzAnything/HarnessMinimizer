@@ -88,12 +88,24 @@ From the symbolized run it:
 - normalizes the trace with `normalize_crash_signature(..., escape=True)`
 - stores it in `stack_trace.pattern`
 
+When public `--symbolize` reduction is enabled, it also extracts the first
+source location from the symbolized pre-harness stack trace and stores its
+normalized pattern in `symbolized_crash_location.pattern`. The candidate tester
+receives that normalized pattern directly through `--crash-location-pattern`, so
+the reduction hot path does not read the artifact file.
+
 The crash patterns are intentionally coarse enough to tolerate cosmetic changes.
 Normal candidate checks use the `symbolize=0` pattern and fast-path depth. Deeper
 symbolized equivalence checks use the `symbolize=1` pattern, symbolized depth,
 and stored stack-trace pattern. If no `symbolize=1` pattern can be extracted, the
 symbolized paths still require exit code `77`, symbolized depth, and the stored
 stack-trace pattern when available, but skip the symbolized crash-regex match.
+Public `--symbolize` reduction fails early when the `symbolize=1` crash pattern
+cannot be extracted.
+
+With public `--symbolize`, tree-reduction candidates instead use the
+`symbolize=1` pattern, symbolized depth, and direct crash-location pattern.
+The dynamic `.so+offset` check is skipped in that mode.
 
 When `--check` is enabled, the tool also performs a second reference capture pass that:
 
@@ -111,6 +123,11 @@ When `--check` is enabled, the tool also performs a second reference capture pas
 available, symbolized first-stack-trace depth, and stored pre-harness trace are
 valid before reduction continues. If no `symbolize=1` pattern was extracted, it
 skips only the symbolized regex match.
+
+With public `--symbolize`, the immediate reducer-oracle validation uses
+`check_reducer_symbolized_reduction_oracle()` instead. That path requires an
+extractable `symbolize=1` crash pattern, symbolized first-stack-trace depth, and
+the recorded symbolized crash location.
 
 ### 5. Dynamic slicing (coverage-guided pre-slice)
 
@@ -289,7 +306,7 @@ When `phase3_mode="pch"`, the PCH path is used only for the main tree-reduction 
 - replaces FDP calls with concrete literals where possible
 - writes `<reduced>.inline.cpp`
 - optionally emits `harness_values.h` for large buffers
-- validates the inlined result with `validate_stack_trace()`
+- validates the inlined result with the active crash-preservation oracle
 
 If validation fails, it falls back to the tree-reduced harness.
 
@@ -306,9 +323,10 @@ HarnessReducer currently uses a layered notion of “same crash”:
 1. sanitizer exit code must be `77`
 2. crash output must match the extracted crash regex
 3. the first stack trace must have the same frame depth as the original run
-4. when a symbolized validation path is used, the pre-harness stack trace must also match `stack_trace.pattern`
+4. when public `--symbolize` is used, the symbolized crash location must match the direct `--crash-location-pattern` argument
+5. when a symbolized stack-trace validation path is used, the pre-harness stack trace must also match `stack_trace.pattern`
 
-The crash regex catches the same broad bug type. The stack-depth check adds a cheap structural guard for every candidate. The symbolized stack-trace check catches deeper drift in crash location or call path.
+The crash regex catches the same broad bug type. The stack-depth check adds a cheap structural guard for every candidate. The symbolized crash-location and stack-trace checks catch deeper drift in crash site or call path.
 
 ### Pattern extraction priority
 
@@ -349,6 +367,11 @@ Explicit deeper validation paths first check the `symbolize=0` crash pattern
 under fast sanitizer output, then force `symbolize=1` to compare against the
 symbolized reference depth and pre-harness stack trace. The `symbolize=1` crash
 pattern is also checked when it was recorded.
+
+Public `--symbolize` is an ablation mode for the tree-reduction loop and related
+pipeline validations. It runs candidates with `symbolize=1` and compares the
+symbolized crash pattern, symbolized first-stack-trace depth, and recorded
+symbolized crash location.
 
 ### 9. Optional tree-reduction statistics
 
@@ -443,6 +466,7 @@ Typical work-dir files include:
 - `crash_pattern.symbolize0`
 - `crash_pattern.symbolize1`
 - `stack_trace.pattern`
+- `symbolized_crash_location.pattern` when public `--symbolize` is enabled; candidate checks receive the same pattern directly
 - `fdp_trace.log`
 - `reduced_harness.cpp`
 - `*.inline.cpp`

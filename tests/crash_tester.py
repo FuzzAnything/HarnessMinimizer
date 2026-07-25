@@ -28,6 +28,7 @@ from harnessreducer.reducer_runner import (
     _frame_matches_harness_source,
     count_first_stack_trace_frames,
     extract_first_dynamic_library_crash_site,
+    extract_symbolized_crash_location,
     runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
@@ -614,6 +615,41 @@ def _check_dynamic_crash_site(
     return False
 
 
+def _check_crash_location_pattern(
+    run_log: str,
+    stored_pattern: str,
+    source_path: str,
+) -> bool:
+    pattern = stored_pattern.strip()
+    if not pattern:
+        print("[*] No stored crash-location pattern; skipping crash-location check.")
+        return True
+
+    location = extract_symbolized_crash_location(run_log, harness_path=source_path)
+    if location is None:
+        print("[-] No symbolized crash location found in the first stack trace.")
+        return False
+
+    if re.fullmatch(pattern, location) is not None:
+        print("[+] Symbolized crash-location validation passed.")
+        return True
+
+    print(
+        "[-] Symbolized crash location did not match. "
+        f"Expected pattern {pattern!r}, got {location!r}."
+    )
+    return False
+
+
+def _check_crash_location(
+    run_log: str,
+    crash_location_file: str,
+    source_path: str,
+) -> bool:
+    stored_pattern = Path(crash_location_file).read_text(encoding="utf-8").strip()
+    return _check_crash_location_pattern(run_log, stored_pattern, source_path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -631,6 +667,8 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
+    parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
     parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
@@ -731,12 +769,27 @@ def main() -> int:
                 )
                 return _finalize_result(args, 1)
 
-        if args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
+        if (
+            not use_symbolize
+            and args.dynamic_crash_site_library
+            and args.dynamic_crash_site_offset
+        ):
             if not _check_dynamic_crash_site(
                 run_log,
                 args.dynamic_crash_site_library,
                 args.dynamic_crash_site_offset,
             ):
+                return _finalize_result(args, 1)
+
+        if args.crash_location_pattern:
+            if not _check_crash_location_pattern(
+                run_log,
+                args.crash_location_pattern,
+                args.source,
+            ):
+                return _finalize_result(args, 1)
+        elif args.crash_location_file and os.path.exists(args.crash_location_file):
+            if not _check_crash_location(run_log, args.crash_location_file, args.source):
                 return _finalize_result(args, 1)
 
         # Crash pattern matched.  If symbolized, also validate stack trace.

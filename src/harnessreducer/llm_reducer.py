@@ -11,6 +11,7 @@ from harnessreducer.reducer_runner import (
     pch_tester_args,
     prepare_phase3_pch_harness,
     run_command,
+    validate_symbolized_crash_pattern_depth_location,
     validate_phase3_mode,
 )
     
@@ -110,6 +111,7 @@ def apply_llm_reduction(
     link_flags: str | None,
     fdp_trace_file: str | None,
     phase3_mode: str = "direct",
+    symbolize: bool = False,
 ) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     print("Applying LLM semantic reduction...")
@@ -130,6 +132,22 @@ def apply_llm_reduction(
     
     print(f"LLM semantic reduction completed. Verifying crash preservation for {llm_reduced_path}")
     validate_phase3_mode(phase3_mode)
+    if symbolize:
+        if validate_symbolized_crash_pattern_depth_location(
+            llm_reduced_path,
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=fdp_trace_file,
+            phase3_mode=phase3_mode,
+        ):
+            print("[+] LLM reduction succeeded and preserved the crash.")
+            return llm_reduced_path
+        print("[-] LLM reduction failed to preserve the crash. Falling back to earlier reduced version.")
+        print(f"LLM reduced version for reference: \n{transformed}")
+        return reduced_harness_path
+
     pch_artifacts = None
     validation_source = llm_reduced_path
     if phase3_mode == "pch":

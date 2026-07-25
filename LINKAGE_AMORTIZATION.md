@@ -1160,6 +1160,14 @@ During repeated candidate checks, the library comparison uses only stack-trace
 strings, path text, and library basenames; it does not resolve symlinks or query
 the filesystem.
 
+When the public `--symbolize` ablation mode is enabled, the reduction loop starts
+the persistent runner with `symbolize=1` and does not pass the dynamic offset
+oracle. Candidates are checked with the `symbolize=1` crash pattern, the
+symbolized first-stack-trace depth, and the recorded symbolized crash-location
+pattern passed directly as a tester argument. The
+`symbolized_crash_location.pattern` file is kept as a work-dir artifact, not read
+by every candidate check.
+
 This helps distinguish two crashes that both say, for example,
 `SUMMARY: AddressSanitizer: ABRT` and have the same number of frames, but stop
 inside different parts of the target library.
@@ -1196,7 +1204,9 @@ preserve that offset in the runner/plugin path.
 Check mode has two amortized runners: the main symbolized runner validates the
 `symbolize=1` crash pattern when one was recorded and always validates
 symbolized stack depth, while the optional unsymbolized diagnostic runner
-validates the `symbolize=0` crash pattern and fast stack depth.
+validates the `symbolize=0` crash pattern and fast stack depth. This is separate
+from public `--symbolize` ablation mode, which uses a single symbolized
+reduction oracle with crash-location matching.
 
 ## 12. Why the runner does not explicitly load every system library
 

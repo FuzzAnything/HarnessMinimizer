@@ -146,6 +146,14 @@ The report also measures:
 - function-call start until child termination; and
 - socket request/response time.
 
+The main reducer also has a public `--symbolize` ablation mode. That mode is the
+end-to-end counterpart to these timing rows: it runs reduction candidates with
+`symbolize=1` and uses the symbolized crash pattern, symbolized stack depth, and
+recorded symbolized crash-location pattern instead of the default `symbolize=0`
+crash pattern/depth plus optional dynamic offset check. That crash-location
+pattern is passed directly to the tester so it does not add per-candidate file
+I/O.
+
 For static targets, the report states whether the runner build used rooted
 static archive extraction or the whole-archive fallback, and it reports the
 number of inferred root symbols plus how many static archives were copied for

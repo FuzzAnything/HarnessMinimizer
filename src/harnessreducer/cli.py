@@ -86,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--symbolize",
+        action="store_true",
+        help=(
+            "Ablation mode: run reduction candidates with symbolize=1 and validate "
+            "the symbolized crash pattern, stack depth, and crash location."
+        ),
+    )
+    parser.add_argument(
         "--snapshot",
         action="store_true",
         help=(
@@ -148,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         slice_enabled=args.slice,
         check=args.check,
         snapshot=args.snapshot,
+        symbolize=args.symbolize,
     )
     result = reduce_with_config(config)
     if not result.success:

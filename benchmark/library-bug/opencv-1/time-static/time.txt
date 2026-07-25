@@ -1,0 +1,277 @@
+===============================================================================
+HARNESSREDUCER TIMING BENCHMARK
+===============================================================================
+
+Benchmark configuration
+-----------------------
+
+Field                      Value                                                                                                                                            
+-------------------------  -------------------------------------------------------------------------------------------------------------------------------------------------
+Generated                  2026-07-25T13:44:16.545229+08:00                                                                                                                 
+Harness                    /root/HarnessMinimizer/benchmark/library-bug/opencv-1/harness.cpp                                                                                
+Crash input                /root/HarnessMinimizer/benchmark/library-bug/opencv-1/crash-input                                                                                
+Crash input bytes          1552                                                                                                                                             
+Iterations                 100                                                                                                                                              
+Suffix                     static                                                                                                                                           
+Output directory           /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static                                                                                
+Representative executable  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.out                                                                    
+Compile flags              -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr                                                                         
+Link flags                 -Lbenchmark/library-bug/opencv-1/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr
+Library configuration      static                                                                                                                                           
+Platform                   Linux-7.0.0-15-generic-x86_64-with-glibc2.39                                                                                                     
+Python                     3.12.13                                                                                                                                          
+Compiler                   Ubuntu clang version 21.1.8 (++20251221032922+2078da43e25a-1~exp1~20251221153059.70)                                                             
+Clock                      time.perf_counter_ns / C++ steady_clock                                                                                                          
+
+
+===============================================================================
+A. LIBRARY CLASSIFICATION
+===============================================================================
+
+Resolved target inputs
+----------------------
+
+Kind           Resolved path                                                                                
+-------------  ---------------------------------------------------------------------------------------------
+Static target  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libopencv_photo.a  
+Static target  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libopencv_imgproc.a
+Static target  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libopencv_core.a   
+Static target  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libittnotify.a     
+
+Normal one-time runner dependencies
+-----------------------------------
+
+-L/root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib -lpthread -ldl -lz -fsanitize=vptr
+Static archive runner extraction
+--------------------------------
+
+Field                                  Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+-------------------------------------  -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Mode                                   rooted undefined-symbol closure                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+Root symbol count                      13                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+Static archives copied for export fix  3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+Static symbols made exportable         13                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
+Root symbols                           _ZN2cv11colorChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEfff, _ZN2cv13seamlessCloneERKNS_11_InputArrayES2_S2_NS_6Point_IiEERKNS_12_OutputArrayEi, _ZN2cv17textureFlatteningERKNS_11_InputArrayES2_RKNS_12_OutputArrayEffi, _ZN2cv18illuminationChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEff, _ZN2cv3MatC1Eiii, _ZN2cv3MatC1EiiiRKNS_7Scalar_IdEE, _ZN2cv3MatC1Ev, _ZN2cv3MatD1Ev, _ZN2cv5errorEiRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPKcS9_i, _ZN2cv6circleERKNS_17_InputOutputArrayENS_6Point_IiEEiRKNS_7Scalar_IdEEiii, _ZN2cv7ellipseERKNS_17_InputOutputArrayENS_6Point_IiEENS_5Size_IiEEdddRKNS_7Scalar_IdEEiii, _ZN2cv9rectangleERKNS_17_InputOutputArrayENS_6Point_IiEES4_RKNS_7Scalar_IdEEiii, _ZNK2cv3Mat5emptyEv
+
+
+===============================================================================
+B. ONE-TIME PREPARATION
+===============================================================================
+
+Operation                                                            Time (ms)
+-------------------------------------------------------------------  ---------
+Classify link flags                                                  2.703    
+Split source and write PCH inputs                                    0.402    
+Build normal PCH                                                     2153.867 
+Build amortized PCH                                                  2108.462 
+Plan static archive runner link                                      5050.572 
+Build production harness_runner (rooted static archive extraction)   7508.563 
+Build instrumented timing runner (rooted static archive extraction)  8005.304 
+Start timing runner until ready                                      12.249   
+
+Runner-internal startup breakdown (symbolize=0)
+-----------------------------------------------
+
+Operation                        Time (ms) or status                            
+-------------------------------  -----------------------------------------------
+All dynamic-target dlopen calls  N/A (static targets are linked into the runner)
+Read crash input                 0.404                                          
+Create/bind/listen socket        0.153                                          
+Internal startup total           0.558                                          
+
+
+===============================================================================
+C. OBJECT COMPILATION — 100 ITERATIONS
+===============================================================================
+
+Path       Headers  Output         N    Mean ms   Median    Stddev   Min       Max     
+---------  -------  -------------  ---  --------  --------  -------  --------  --------
+Normal     Split    Executable .o  100  1969.852  1963.420  172.552  1737.130  2315.693
+Normal     PCH      Executable .o  100  838.548   872.605   76.032   733.216   1024.346
+Amortized  Split    Plugin .o      100  1920.628  1883.946  172.626  1693.670  2408.789
+Amortized  PCH      Plugin .o      100  809.623   825.141   69.803   704.289   967.707 
+
+Compilation comparisons
+-----------------------
+
+Comparison                             Speedup
+-------------------------------------  -------
+PCH benefit for normal compilation     2.35x  
+PCH benefit for amortized compilation  2.37x  
+Plugin split versus normal split       1.03x  
+Plugin PCH versus normal PCH           1.04x  
+
+
+===============================================================================
+D. OUTPUT LINKING — 100 ITERATIONS
+===============================================================================
+
+Output               N    Mean ms   Median    Stddev   Min       Max     
+-------------------  ---  --------  --------  -------  --------  --------
+Normal executable    100  6910.405  6850.509  568.077  5896.407  8235.503
+Candidate plugin.so  100  87.680    86.148    5.533    77.622    101.901 
+
+Plugin-link speedup over normal executable link: 78.81x
+Fallback use during candidate execution
+---------------------------------------
+
+Mode         Fallback needed?
+-----------  ----------------
+symbolize=0  no              
+symbolize=1  no              
+
+Fallback is needed when the lightweight candidate plugin fails to load with an unresolved symbol.
+candidate.fallback.so was not built or timed because fallback was not needed.
+
+===============================================================================
+E. END-TO-END EXECUTION — 100 ITERATIONS
+===============================================================================
+
+Path        Symbolize  N    Mean ms  Median   Stddev  Min      Max      Statuses code:count
+----------  ---------  ---  -------  -------  ------  -------  -------  -------------------
+Standalone  0          100  45.016   45.543   2.572   40.351   50.956   77:100             
+Standalone  1          100  267.268  256.843  20.351  239.845  344.592  77:100             
+Amortized   0          100  9.065    8.701    1.106   6.994    12.476   77:100             
+Amortized   1          100  233.944  237.596  20.455  207.918  287.620  77:100             
+
+Execution comparisons
+---------------------
+
+Comparison                        Speedup
+--------------------------------  -------
+Amortization, symbolize=0         4.97x  
+Amortization, symbolize=1         1.14x  
+symbolize=0 versus 1, standalone  5.94x  
+symbolize=0 versus 1, amortized   25.81x 
+
+Python-side candidate oracle parsing
+------------------------------------
+
+Output                  Check                                              N    Mean us   Median    Stddev   Min       Max      
+----------------------  -------------------------------------------------  ---  --------  --------  -------  --------  ---------
+symbolize_0             crash regex match                                  100  3.941     1.113     27.858   1.015     281.117  
+symbolize_0             stack-depth check (expected 26)                    100  30.248    29.887    1.259    28.987    38.113   
+symbolize_0             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000    
+symbolize_0             pre-harness stack-trace regex (not active)         0    0.000     0.000     0.000    0.000     0.000    
+symbolize_0             combined active checks                             100  31.047    30.811    0.845    30.117    35.809   
+symbolize_1             crash regex match                                  100  3.964     1.552     22.913   1.286     231.845  
+symbolize_1             stack-depth check (expected 28)                    100  40.643    39.969    2.656    39.098    62.427   
+symbolize_1             dynamic .so offset check (not active)              0    0.000     0.000     0.000    0.000     0.000    
+symbolize_1             pre-harness stack-trace regex                      100  3382.887  3280.708  760.248  3189.825  10184.810
+symbolize_1             combined active checks                             100  3333.848  3315.723  85.657   3250.232  3806.804 
+two_stage_slice_inline  symbolize=0 crash + symbolize=1 crash/depth/stack  100  3407.849  3372.449  294.009  3329.178  6299.125 
+
+These rows measure Python parsing of already captured output. They are not extra harness executions.
+The two-stage row mirrors slicing/inline validation: first the symbolize=0 crash-pattern check, then the symbolize=1 stack/depth check; a symbolize=1 crash regex is included only when one was extracted.
+
+===============================================================================
+F. AMORTIZED REQUEST BREAKDOWN — 100 ITERATIONS
+===============================================================================
+
+symbolize=0
+-----------
+
+Stage                                 N    Mean us   Median    Stddev    Min       Max      
+------------------------------------  ---  --------  --------  --------  --------  ---------
+Socket + complete request             100  9065.317  8700.762  1105.821  6993.691  12475.629
+Monitor fork                          100  2566.019  2502.512  590.592   1887.830  5061.261 
+Executor fork                         100  986.920   932.311   161.844   740.659   1379.677 
+dlopen(candidate.so)                  100  492.198   469.067   117.943   365.398   1047.806 
+dlsym(callback)                       100  7.111     6.524     1.911     5.093     16.911   
+Call to child termination             100  3519.085  3474.700  338.375   2786.495  4407.706 
+Output-pipe interval (overlaps call)  100  3466.173  3435.570  321.634   2759.121  4286.318 
+waitpid after pipe EOF                100  18.183    17.279    3.758     11.784    31.226   
+Monitor internal total                100  6320.534  6119.857  857.168   4849.936  9051.400 
+
+symbolize=1
+-----------
+
+Stage                                 N    Mean us     Median      Stddev     Min         Max       
+------------------------------------  ---  ----------  ----------  ---------  ----------  ----------
+Socket + complete request             100  233943.669  237595.924  20454.750  207917.941  287619.923
+Monitor fork                          100  3473.529    3170.706    828.190    2080.836    5394.077  
+Executor fork                         100  1113.594    1052.273    175.019    860.833     1465.084  
+dlopen(candidate.so)                  100  621.696     573.401     161.275    438.761     1133.589  
+dlsym(callback)                       100  8.715       8.244       2.381      5.676       16.750    
+Call to child termination             100  226360.581  231327.639  20270.259  201657.671  278031.813
+Output-pipe interval (overlaps call)  100  226269.491  231207.782  20265.375  201572.215  277961.186
+waitpid after pipe EOF                100  45.851      43.854      14.355     25.395      94.021    
+Monitor internal total                100  230020.091  234204.878  20376.103  205240.554  282751.726
+
+Note: 'Call to child termination' includes target execution and sanitizer crash reporting. The output-pipe interval overlaps that time and must not be added to it.
+If fallback is triggered, the request end-to-end row includes the failed fast-path load request plus the successful fallback load request. The fallback plugin link itself is measured in section D when fallback is needed.
+
+===============================================================================
+G. COMMANDS USED
+===============================================================================
+
+Normal Pch Build
+----------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -x c++-header -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.normal.pch
+
+Amortized Pch Build
+-------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -x c++-header -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.h -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.amortized.pch
+
+Normal Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/normal_split.o
+
+Normal Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.normal.pch -fsanitize=address,fuzzer,undefined -O0 -gline-tables-only -Werror=uninitialized -c -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/normal_pch.o
+
+Plugin Split Compile
+--------------------
+
+clang++ -Qunused-arguments -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/harness.cpp -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/plugin_split.o
+
+Plugin Pch Compile
+------------------
+
+clang++ -Qunused-arguments -include-pch /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.amortized.pch -fsanitize=address,undefined -O0 -gline-tables-only -Werror=uninitialized -fPIC -c -Ibenchmark/library-bug/opencv-1/build/sanitizer/include -fsanitize=vptr /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.harness_body.cpp -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/plugin_pch.o
+
+Normal Executable Link
+----------------------
+
+clang++ -Qunused-arguments -fsanitize=address,fuzzer,undefined /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/normal_split.o -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.out -Lbenchmark/library-bug/opencv-1/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr
+
+Candidate Plugin Link
+---------------------
+
+clang++ -Qunused-arguments -shared -fsanitize=address,undefined /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/plugin_pch.o -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/candidate.so
+
+Production Runner Build
+-----------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/src/harnessreducer/harness_runner.cpp -no-pie -Wl,--export-dynamic -Wl,-u,_ZN2cv11colorChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEfff -Wl,-u,_ZN2cv13seamlessCloneERKNS_11_InputArrayES2_S2_NS_6Point_IiEERKNS_12_OutputArrayEi -Wl,-u,_ZN2cv17textureFlatteningERKNS_11_InputArrayES2_RKNS_12_OutputArrayEffi -Wl,-u,_ZN2cv18illuminationChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEff -Wl,-u,_ZN2cv3MatC1Eiii -Wl,-u,_ZN2cv3MatC1EiiiRKNS_7Scalar_IdEE -Wl,-u,_ZN2cv3MatC1Ev -Wl,-u,_ZN2cv3MatD1Ev -Wl,-u,_ZN2cv5errorEiRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPKcS9_i -Wl,-u,_ZN2cv6circleERKNS_17_InputOutputArrayENS_6Point_IiEEiRKNS_7Scalar_IdEEiii -Wl,-u,_ZN2cv7ellipseERKNS_17_InputOutputArrayENS_6Point_IiEENS_5Size_IiEEdddRKNS_7Scalar_IdEEiii -Wl,-u,_ZN2cv9rectangleERKNS_17_InputOutputArrayENS_6Point_IiEES4_RKNS_7Scalar_IdEEiii -Wl,-u,_ZNK2cv3Mat5emptyEv /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/0_libopencv_photo.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/1_libopencv_imgproc.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/2_libopencv_core.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libittnotify.a -L/root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib -lpthread -ldl -lz -fsanitize=vptr -ldl -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_runner
+
+Timing Runner Build
+-------------------
+
+clang++ -std=c++17 -fsanitize=address,undefined -O1 -gline-tables-only -fno-omit-frame-pointer /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/timing_runner.cpp -no-pie -Wl,--export-dynamic -Wl,-u,_ZN2cv11colorChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEfff -Wl,-u,_ZN2cv13seamlessCloneERKNS_11_InputArrayES2_S2_NS_6Point_IiEERKNS_12_OutputArrayEi -Wl,-u,_ZN2cv17textureFlatteningERKNS_11_InputArrayES2_RKNS_12_OutputArrayEffi -Wl,-u,_ZN2cv18illuminationChangeERKNS_11_InputArrayES2_RKNS_12_OutputArrayEff -Wl,-u,_ZN2cv3MatC1Eiii -Wl,-u,_ZN2cv3MatC1EiiiRKNS_7Scalar_IdEE -Wl,-u,_ZN2cv3MatC1Ev -Wl,-u,_ZN2cv3MatD1Ev -Wl,-u,_ZN2cv5errorEiRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPKcS9_i -Wl,-u,_ZN2cv6circleERKNS_17_InputOutputArrayENS_6Point_IiEEiRKNS_7Scalar_IdEEiii -Wl,-u,_ZN2cv7ellipseERKNS_17_InputOutputArrayENS_6Point_IiEENS_5Size_IiEEdddRKNS_7Scalar_IdEEiii -Wl,-u,_ZN2cv9rectangleERKNS_17_InputOutputArrayENS_6Point_IiEES4_RKNS_7Scalar_IdEEiii -Wl,-u,_ZNK2cv3Mat5emptyEv /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/0_libopencv_photo.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/1_libopencv_imgproc.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/2_libopencv_core.a /root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib/libittnotify.a -L/root/HarnessMinimizer/benchmark/library-bug/opencv-1/build/sanitizer/lib -lpthread -ldl -lz -fsanitize=vptr -ldl -o /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/timing_runner
+
+
+===============================================================================
+H. ARTIFACTS
+===============================================================================
+
+Artifact                          Path                                                                                                                                
+--------------------------------  ------------------------------------------------------------------------------------------------------------------------------------
+Human-readable report             /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/time.txt                                                          
+Raw timing samples                /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/raw_samples.json                                                  
+PCH prefix header                 /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.h                                                  
+Normal PCH                        /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.normal.pch                                         
+Amortized PCH                     /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_prefix.amortized.pch                                      
+Include-free harness body         /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.harness_body.cpp                                          
+Representative executable         /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness.out                                                       
+Candidate plugin                  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/candidate.so                                                      
+Temporary fixed static archive 1  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/0_libopencv_photo.a  
+Temporary fixed static archive 2  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/1_libopencv_imgproc.a
+Temporary fixed static archive 3  /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/amortized_static_exports_1784958180193591254/2_libopencv_core.a   
+Production runner                 /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/harness_runner                                                    
+Instrumented runner               /root/HarnessMinimizer/benchmark/library-bug/opencv-1/time-static/timing_runner
