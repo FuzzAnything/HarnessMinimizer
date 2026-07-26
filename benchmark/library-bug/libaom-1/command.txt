@@ -116,3 +116,8 @@ clang++ -g -O1 -fno-omit-frame-pointer \
     -I$(pwd)/build/sanitizer/include \
     harness.cpp -o harness \
     $(pwd)/build/sanitizer/lib/libaom.a
+
+python3 crash_triage.py benchmark/library-bug/libaom-17/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-17/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-17/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-17/crash-input
