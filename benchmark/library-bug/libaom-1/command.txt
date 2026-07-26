@@ -84,25 +84,25 @@ harnessreducer harness.cpp \
   --check \
   -o reduced.cpp
 
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -laom" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
 
---pch
-[INFO] Total time: 321076ms
-[INFO] Total time: 302724ms
-[INFO] Total time: 
-
---split
-[INFO] Total time: 406270ms
-[INFO] Total time: 417301ms
-
---direct
-[INFO] Total time: 
-
---pch --amortize-link
-[INFO] Total time: 186049ms
-[INFO] Total time: 185868ms
-
---pch --amortize-link (static libraries)
-[INFO] Total time: 182126ms
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -laom" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
+  -o reduced.cpp
 
 clang++ -g -O1 -fno-omit-frame-pointer \
     -fsanitize=address,undefined,fuzzer \
@@ -117,7 +117,7 @@ clang++ -g -O1 -fno-omit-frame-pointer \
     harness.cpp -o harness \
     $(pwd)/build/sanitizer/lib/libaom.a
 
-python3 crash_triage.py benchmark/library-bug/libaom-17/harness.cpp \
-  --compile-flags="-Ibenchmark/library-bug/libaom-17/build/sanitizer/include" \
-  --link-flags="-Lbenchmark/library-bug/libaom-17/build/sanitizer/lib -laom" \
-  --crash-input benchmark/library-bug/libaom-17/crash-input
+python3 crash_triage.py benchmark/library-bug/libaom-2/harness.cpp \
+  --compile-flags="-Ibenchmark/library-bug/libaom-2/build/sanitizer/include" \
+  --link-flags="-Lbenchmark/library-bug/libaom-2/build/sanitizer/lib -laom" \
+  --crash-input benchmark/library-bug/libaom-2/crash-input

@@ -25,6 +25,8 @@ statistics-split
 check-level-stack
 check-level-stack-new
 check-level-stack-final
+pch-amorlink-nosymbol
+split-normallink-symbol
 scripts
 reduced.cpp
 harness_values.h
