@@ -104,18 +104,15 @@ harnessreducer harness.cpp \
 --pch --amortize-link (static libraries)
 [INFO] Total time: 182126ms
 
-COMMON="-Qunused-arguments \
-  -DFDP_MIN_MODE_REPLAY \
-  -I/mnt/raid/home/lihaiying/HarnessMinimizer/include \
-  -I$(pwd)/../build/sanitizer/include \
-  -fsanitize=fuzzer,address,undefined \
-  -gline-tables-only -O0 -Werror=uninitialized"
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    harness.cpp -o harness \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib \
+    -L$(pwd)/build/sanitizer/lib -laom
 
-time clang++ $COMMON \
-  -c harness.tagged.cpp \
-  -o /tmp/direct.o
-
-time clang++ $COMMON \
-  -include-pch harness_prefix.pch \
-  -c harness.tagged.harness_body.cpp \
-  -o /tmp/pch.o
+clang++ -g -O1 -fno-omit-frame-pointer \
+    -fsanitize=address,undefined,fuzzer \
+    -I$(pwd)/build/sanitizer/include \
+    harness.cpp -o harness \
+    $(pwd)/build/sanitizer/lib/libaom.a
