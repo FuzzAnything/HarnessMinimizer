@@ -1,13 +1,22 @@
 opencv-1
 harnessreducer harness.cpp \
-  --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
-  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lz -fsanitize=vptr" \
-  --work-dir ./statistics-pch-link \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lz" \
+  --work-dir ./pch-amorlink-nosymbol \
   --crash-input crash-input \
   --pch \
   --amortize-link \
   --stable \
-  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_photo -lopencv_imgproc -lopencv_core -littnotify -lz" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
   -o reduced.cpp
 
 clang++ -g -O1 -fno-omit-frame-pointer \
@@ -25,14 +34,23 @@ clang++ -g -O1 -fno-omit-frame-pointer \
 
 opencv-2
 harnessreducer harness.cpp \
-  --compile-flags="-I$(pwd)/build/sanitizer/include -fsanitize=vptr" \
-  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_objdetect -lopencv_imgproc -lopencv_core -littnotify -lpthread -ldl -lz -fsanitize=vptr" \
-  --work-dir ./statistics-pch-link \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_objdetect -lopencv_dnn -lopencv_calib3d -lopencv_features2d -lopencv_flann -lopencv_imgproc -lopencv_core -littnotify -lz" \
+  --work-dir ./pch-amorlink-nosymbol \
   --crash-input crash-input \
   --pch \
   --amortize-link \
   --stable \
-  --statistics \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_objdetect -lopencv_dnn -lopencv_calib3d -lopencv_features2d -lopencv_flann -lopencv_imgproc -lopencv_core -littnotify -lz" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
   -o reduced.cpp
 
 clang++ -g -O1 -fno-omit-frame-pointer \
