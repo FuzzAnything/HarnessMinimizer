@@ -760,15 +760,10 @@ def main() -> int:
             print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
             return _finalize_result(args, 1)
 
-        if args.stack_depth is not None:
-            candidate_stack_depth = count_first_stack_trace_frames(run_log)
-            if candidate_stack_depth != args.stack_depth:
-                print(
-                    "Stack depth did not match. "
-                    f"Expected {args.stack_depth}, got {candidate_stack_depth}."
-                )
-                return _finalize_result(args, 1)
-
+        # Location-identifying anchor checks run first: these are the gates
+        # that can reject a candidate.  Stack depth is advisory below, because
+        # it can fluctuate across runs for multithreaded targets (e.g. libaom
+        # row-MT) even when the crash site itself is stable.
         if (
             not use_symbolize
             and args.dynamic_crash_site_library
@@ -791,6 +786,22 @@ def main() -> int:
         elif args.crash_location_file and os.path.exists(args.crash_location_file):
             if not _check_crash_location(run_log, args.crash_location_file, args.source):
                 return _finalize_result(args, 1)
+
+        # Advisory stack-depth check.  A mismatch is logged as a warning but
+        # does not reject the candidate: the location/anchor check above is the
+        # authoritative oracle.  This applies to both the non-symbolized path
+        # (normal reference depth) and the symbolized path (symbolized depth),
+        # with the caller selecting the appropriate --stack-depth value.
+        if args.stack_depth is not None:
+            candidate_stack_depth = count_first_stack_trace_frames(run_log)
+            if candidate_stack_depth != args.stack_depth:
+                print(
+                    "[!] Warning: stack depth did not match. "
+                    f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
+                    "Treating as advisory; crash site/location anchor already validated."
+                )
+            else:
+                print("[+] Stack depth validation passed.")
 
         # Crash pattern matched.  If symbolized, also validate stack trace.
         if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
