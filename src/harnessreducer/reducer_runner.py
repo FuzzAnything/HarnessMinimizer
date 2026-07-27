@@ -2715,6 +2715,11 @@ def validate_stack_trace(
         cmd.append("--skip-crash-pattern")
     cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args(symbolized=True))
+    # The symbolized crash-location anchor is the authoritative gate on this
+    # path.  The full symbolized stack-trace match (stack_trace_arg above) is
+    # advisory: it can fluctuate for multithreaded targets whose worker thread
+    # wins the crash race nondeterministically.
+    cmd.extend(symbolized_crash_location_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
