@@ -126,9 +126,21 @@ class TraceStore {
     long double value = it->second.front();
     it->second.pop_front();
 
-    if constexpr (std::is_integral_v<T> || std::is_enum_v<T>) {
+    if constexpr (std::is_integral_v<T>) {
       const long double lo = static_cast<long double>(std::numeric_limits<T>::lowest());
       const long double hi = static_cast<long double>(std::numeric_limits<T>::max());
+      if (value < lo)
+        value = lo;
+      if (value > hi)
+        value = hi;
+    } else if constexpr (std::is_enum_v<T>) {
+      // std::numeric_limits is not specialized for enum types and returns 0
+      // for both min and max, which would clamp every replayed enum value to 0.
+      // Use the underlying type's range instead so valid enum values survive
+      // the round-trip through long double.
+      using UT = std::underlying_type_t<T>;
+      const long double lo = static_cast<long double>(std::numeric_limits<UT>::lowest());
+      const long double hi = static_cast<long double>(std::numeric_limits<UT>::max());
       if (value < lo)
         value = lo;
       if (value > hi)
