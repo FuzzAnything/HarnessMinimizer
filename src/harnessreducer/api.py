@@ -113,6 +113,15 @@ class ReductionResult:
     success: bool = True
 
 
+@dataclass(frozen=True)
+class DirectInputEntry:
+    insert_pos: int
+    data_name: str
+    size_name: str
+    data_uses_canonical_type: bool
+    size_uses_canonical_type: bool
+
+
 def tag_harness_with_fdp_ids(
     harness_path: str,
     start_id: int,
@@ -325,7 +334,35 @@ def _function_declarator_has_name(
     )
 
 
-def _find_fuzzer_entry_for_direct_input(source: str) -> tuple[int, str, str]:
+def _normalized_type_text(text: str) -> str:
+    return " ".join(text.strip().split())
+
+
+def _parameter_name_and_shape(node, source_bytes: bytes) -> tuple[str, str, str] | None:
+    name = _last_identifier_text(node, source_bytes)
+    type_node = node.child_by_field_name("type")
+    declarator_node = node.child_by_field_name("declarator")
+    if name is None or type_node is None or declarator_node is None:
+        return None
+    return (
+        name,
+        _normalized_type_text(_node_text(source_bytes, type_node)),
+        _node_text(source_bytes, declarator_node),
+    )
+
+
+def _is_canonical_direct_data_parameter(type_text: str, declarator_text: str) -> bool:
+    byte_types = {"uint8_t", "std::uint8_t", "unsigned char"}
+    return type_text in byte_types and (
+        "*" in declarator_text or "[" in declarator_text
+    )
+
+
+def _is_canonical_direct_size_parameter(type_text: str) -> bool:
+    return type_text in {"size_t", "std::size_t"}
+
+
+def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
 
@@ -341,15 +378,17 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> tuple[int, str, str]:
         parameter_list = _find_first_descendant(declarator, "parameter_list")
         if parameter_list is None:
             break
-        parameter_names = [
-            name
+        parameters = [
+            shape
             for child in parameter_list.named_children
             if child.type == "parameter_declaration"
-            for name in [_last_identifier_text(child, source_bytes)]
-            if name is not None
+            for shape in [_parameter_name_and_shape(child, source_bytes)]
+            if shape is not None
         ]
-        if len(parameter_names) < 2:
+        if len(parameters) < 2:
             break
+        data_name, data_type, data_declarator = parameters[0]
+        size_name, size_type, _size_declarator = parameters[1]
 
         body = next(
             (child for child in node.children if child.type == "compound_statement"),
@@ -357,7 +396,15 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> tuple[int, str, str]:
         )
         if body is None:
             break
-        return body.start_byte + 1, parameter_names[0], parameter_names[1]
+        return DirectInputEntry(
+            insert_pos=body.start_byte + 1,
+            data_name=data_name,
+            size_name=size_name,
+            data_uses_canonical_type=_is_canonical_direct_data_parameter(
+                data_type, data_declarator
+            ),
+            size_uses_canonical_type=_is_canonical_direct_size_parameter(size_type),
+        )
 
     raise ValueError(
         "Could not find LLVMFuzzerTestOneInput with named data and size parameters."
@@ -365,12 +412,22 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> tuple[int, str, str]:
 
 
 def _inline_direct_input_source(source: str, header_name: str) -> str:
-    insert_pos, data_name, size_name = _find_fuzzer_entry_for_direct_input(source)
-    assignment = (
-        f"\n    {data_name} = ::fuzz_values;\n"
-        f"    {size_name} = ::fuzz_index;\n"
+    entry = _find_fuzzer_entry_for_direct_input(source)
+    data_value = (
+        "::fuzz_values"
+        if entry.data_uses_canonical_type
+        else f"reinterpret_cast<decltype({entry.data_name})>(::fuzz_values)"
     )
-    transformed = source[:insert_pos] + assignment + source[insert_pos:]
+    size_value = (
+        "::fuzz_index"
+        if entry.size_uses_canonical_type
+        else f"static_cast<decltype({entry.size_name})>(::fuzz_index)"
+    )
+    assignment = (
+        f"\n    {entry.data_name} = {data_value};\n"
+        f"    {entry.size_name} = {size_value};\n"
+    )
+    transformed = source[: entry.insert_pos] + assignment + source[entry.insert_pos :]
     include_line = f'#include "{header_name}"\n'
     if include_line.strip() not in transformed:
         transformed = include_line + transformed
