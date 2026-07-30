@@ -1,45 +1,43 @@
+libpcap-1
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
-  --link-flags="$(pwd)/build/sanitizer/lib/libpcap.a" \
-  --work-dir ./statistics-pch-link-static \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap" \
+  --work-dir ./pch-amorlink-nosymbol \
   --crash-input crash-input \
   --pch \
   --amortize-link \
   --stable \
-  --statistics \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
   --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap" \
-  --work-dir ./statistics-pch-link \
+  --work-dir ./split-normallink-symbol \
   --crash-input crash-input \
-  --pch \
-  --amortize-link \
+  --split \
+  --symbolize \
   --stable \
-  --statistics \
   -o reduced.cpp
 
+libpcap-2
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
-  --link-flags="$(pwd)/build/sanitizer/lib/libpcap.a -lnl-genl-3 -lnl-3 -ldbus-1" \
-  --work-dir ./statistics-pch-link-static \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
+  --work-dir ./pch-amorlink-nosymbol \
   --crash-input crash-input \
   --pch \
   --amortize-link \
   --stable \
-  --statistics \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include" \
   --link-flags="-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1" \
-  --work-dir ./statistics-pch-link \
+  --work-dir ./split-normallink-symbol \
   --crash-input crash-input \
-  --pch \
-  --amortize-link \
+  --split \
+  --symbolize \
   --stable \
-  --statistics \
   -o reduced.cpp
 
 python3 measure_time.py benchmark/library-bug/libpcap-1/harness.cpp \
