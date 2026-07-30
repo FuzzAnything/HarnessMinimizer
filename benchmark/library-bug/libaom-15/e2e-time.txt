@@ -1,4 +1,9 @@
 --pch --amortize-link (symbolize=0)
-
+real    4m16.265s
+user    100m48.768s
+sys     23m15.375s
 
 --split --symbolize (no linkage amortization)
+real    8m31.401s
+user    253m7.047s
+sys     57m3.336s

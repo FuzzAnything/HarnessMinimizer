@@ -35,6 +35,9 @@ VALUES_HEADER_NAME = "harness_values.h"
 MAX_INLINE_BUFFER_BYTES = 64   # threshold for large buffers that should be moved to a header instead of inlined as literals
 _HEADER_BYTES_PER_LINE = 16
 _STRING_LITERAL_CHUNK_BYTES = 64
+_LLONG_MIN = -(2**63)
+_LLONG_MAX = 2**63 - 1
+_ULLONG_MAX = 2**64 - 1
 
 _BOOL_METHODS = {"ConsumeBool"}
 _STRING_METHODS = {
@@ -455,7 +458,17 @@ def _format_cpp_number(value: Any) -> str:
         if "." not in text and "e" not in text.lower():
             text += ".0"
         return text
-    return str(int(value))
+    ivalue = int(value)
+    # -9223372036854775808 (LLONG_MIN) cannot be written as a C++ integer
+    # literal: the magnitude 9223372036854775808 exceeds LLONG_MAX, so the
+    # compiler interprets it as unsigned and rejects the narrowing to long
+    # long.  Express it as -(LLONG_MAX) - 1, which keeps every literal token
+    # representable while producing the same final value.
+    if ivalue == _LLONG_MIN:
+        return f"(-{_LLONG_MAX}LL - 1)"
+    if _LLONG_MAX < ivalue <= _ULLONG_MAX:
+        return f"{ivalue}ULL"
+    return str(ivalue)
 
 
 def _numeric_array_type(values: list[Any]) -> str:
@@ -465,7 +478,7 @@ def _numeric_array_type(values: list[Any]) -> str:
     ints = [int(value) for value in values]
     if all(-(2**31) <= value <= 2**31 - 1 for value in ints):
         return "int"
-    if all(value >= 0 for value in ints) and any(value > 2**63 - 1 for value in ints):
+    if all(value >= 0 for value in ints) and any(value > _LLONG_MAX for value in ints):
         return "unsigned long long"
     return "long long"
 
