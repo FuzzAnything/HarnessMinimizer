@@ -648,12 +648,17 @@ def inline_literals_in_reduced_harness(
                 f"they remain as FDP calls for validation/replay: {skipped_ids}"
             )
 
-        if count == 0:
+        if count == 0 and inline_result.detected_calls == 0:
             print(
                 "[!] Skipping inline validation because no FDP callsites were inlined/replayed; "
                 f"returning the {attempt_label} harness."
             )
             return _finalize_fallback_harness(base_harness_path, start_id), ()
+        if count == 0:
+            print(
+                "[!] No FDP callsites were replayed, but FDP callsites remain in the "
+                "reduced harness; validating crash preservation before accepting it."
+            )
 
         print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
         validation_log_path = f"{inline_harness_path}.validation.log"

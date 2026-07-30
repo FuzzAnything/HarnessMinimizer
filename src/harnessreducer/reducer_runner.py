@@ -1653,19 +1653,48 @@ def extract_first_sanitizer_stack_trace(output: str) -> str | None:
     return "\n".join(frames)
 
 
+_GENERIC_ABORT_FRAME_TOKENS = (
+    " in __pthread_kill_implementation ",
+    " in __pthread_kill_internal ",
+    " in pthread_kill ",
+    " in raise ",
+    " in abort ",
+    " in __assert_fail ",
+)
+
+_GENERIC_ABORT_LOCATION_SUFFIXES = (
+    "/pthread_kill.c",
+    "/raise.c",
+    "/abort.c",
+    "/assert.c",
+)
+
+
+def _is_generic_abort_frame(line: str, location: str) -> bool:
+    location_path = location.split(":", 1)[0]
+    return any(token in line for token in _GENERIC_ABORT_FRAME_TOKENS) or any(
+        location_path.endswith(suffix) for suffix in _GENERIC_ABORT_LOCATION_SUFFIXES
+    )
+
+
 def extract_symbolized_crash_location(
     output: str,
     harness_path: str | None = None,
 ) -> str | None:
-    """Return the first source location from the symbolized pre-harness trace."""
+    """Return the best source location from the symbolized pre-harness trace."""
     trace = extract_stack_trace(output, harness_path=harness_path)
     if not trace:
         return None
+    first_location: str | None = None
     for line in trace.splitlines():
         match = SOURCE_LOCATION_PATTERN.search(line)
         if match:
-            return match.group(0)
-    return None
+            location = match.group(0)
+            if first_location is None:
+                first_location = location
+            if not _is_generic_abort_frame(line, location):
+                return location
+    return first_location
 
 
 def count_first_stack_trace_frames(output: str) -> int:

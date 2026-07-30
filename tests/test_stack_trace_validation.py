@@ -266,6 +266,23 @@ class TestExtractStackTrace(unittest.TestCase):
             "/src/lib.c:10:3",
         )
 
+    def test_extract_symbolized_crash_location_skips_abort_wrapper_frames(self):
+        output = """\
+==12345==ERROR: AddressSanitizer: ABRT
+    #0 0xaaa in __pthread_kill_implementation nptl/pthread_kill.c:44:76
+    #1 0xbbb in __pthread_kill_internal nptl/pthread_kill.c:78:10
+    #2 0xccc in pthread_kill nptl/pthread_kill.c:89:10
+    #3 0xddd in raise signal/../sysdeps/posix/raise.c:26:13
+    #4 0xeee in abort stdlib/abort.c:79:7
+    #5 0xfff in pcapint_filter_with_aux_data /root/src/libpcap/bpf_filter.c:112:4
+    #6 0x111 in LLVMFuzzerTestOneInput /tmp/harness.cpp:19:3
+SUMMARY: AddressSanitizer: ABRT
+"""
+        self.assertEqual(
+            extract_symbolized_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/root/src/libpcap/bpf_filter.c:112:4",
+        )
+
     def test_extract_symbolized_crash_location_returns_none_without_source_location(self):
         self.assertIsNone(
             extract_symbolized_crash_location(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED)
