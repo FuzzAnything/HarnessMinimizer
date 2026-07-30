@@ -88,6 +88,7 @@ class InlineResult:
     skipped: tuple[InlineSkip, ...] = ()
     header_name: str | None = None
     header_source: str = ""
+    detected_calls: int = 0
     loop_replaced: int = 0
     header_replaced: int = 0
     large_buffer_replaced: int = 0
@@ -780,7 +781,7 @@ def inline_source_with_report(
 ) -> InlineResult:
     calls = _find_fdp_calls_for_inline(source)
     if not calls:
-        return InlineResult(source=source, replaced=0)
+        return InlineResult(source=source, replaced=0, detected_calls=0)
 
     replacements: list[tuple[int, int, str]] = []
     skipped: list[InlineSkip] = []
@@ -871,7 +872,12 @@ def inline_source_with_report(
             header_keys.add(header_entry.key)
 
     if not replacements:
-        return InlineResult(source=source, replaced=0, skipped=tuple(skipped))
+        return InlineResult(
+            source=source,
+            replaced=0,
+            skipped=tuple(skipped),
+            detected_calls=len(calls),
+        )
 
     output = source.encode("utf-8")
     for start, end, literal in sorted(replacements, key=lambda item: item[0], reverse=True):
@@ -892,6 +898,7 @@ def inline_source_with_report(
         skipped=tuple(skipped),
         header_name=result_header_name,
         header_source=header_source,
+        detected_calls=len(calls),
         loop_replaced=loop_replaced,
         header_replaced=header_replaced,
         large_buffer_replaced=large_buffer_replaced,

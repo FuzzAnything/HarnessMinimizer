@@ -258,6 +258,40 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
     assert "Skipping inline validation because no FDP callsites were inlined" in captured.out
 
 
+def test_inline_literals_validates_when_fdp_calls_remain_unreplayed(
+    tmp_path: Path, capsys
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text(
+        """
+#include <fuzzer/FuzzedDataProvider.h>
+extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  return fdp.ConsumeIntegralInRange<size_t>(1, 0, 0);
+}
+""",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("S 100004 4\n", encoding="utf-8")
+
+    with patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
+        out, generated_headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    assert out.endswith(".inline.cpp")
+    assert generated_headers == ()
+    mock_validate.assert_called_once()
+    captured = capsys.readouterr()
+    assert "FDP callsites remain" in captured.out
+
+
 def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys) -> None:
     reduced = tmp_path / "reduced.cpp"
     reduced.write_text(
