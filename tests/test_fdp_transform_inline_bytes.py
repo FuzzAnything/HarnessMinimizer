@@ -104,6 +104,46 @@ size_t g(uint8_t* data, int size) {
     assert "static const size_t fuzz_values_100004[]" in result.header_source
 
 
+def test_inline_repeated_signed_min_uses_valid_cpp_literal() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto pts = fdp.ConsumeIntegral<long long>(/*FDP_ID:100008*/ 100008);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100008].append(("S", -(2**63)))
+    streams[100008].append(("S", -(2**63)))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert "static const long long fuzz_values_100008[]" in result.header_source
+    assert "(-9223372036854775807LL - 1)" in result.header_source
+    assert "-9223372036854775808" not in result.header_source
+
+
+def test_inline_repeated_unsigned_values_use_unsigned_literals() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto pts = fdp.ConsumeIntegral<unsigned long long>(/*FDP_ID:100009*/ 100009);
+}
+"""
+
+    streams = defaultdict(deque)
+    streams[100009].append(("S", 2**63))
+    streams[100009].append(("S", 2**64 - 1))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert "static const unsigned long long fuzz_values_100009[]" in result.header_source
+    assert "9223372036854775808ULL" in result.header_source
+    assert "18446744073709551615ULL" in result.header_source
+
+
 def test_inline_nested_fdp_call_keeps_outer_replay_replacement() -> None:
     source = """
 void f(uint8_t* data, int size) {
