@@ -8,3 +8,6 @@ clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
     harness.cpp -o harness \
     -I$(pwd)/build/sanitizer/include \
     $(pwd)/build/sanitizer/lib/liblouis.a
+
+echo 'export LOUIS_TABLEPATH=/root/HarnessMinimizer/benchmark/library-bug/liblouis-1/build/sanitizer/share/liblouis/tables' >> ~/.bashrc
+source ~/.bashrc
