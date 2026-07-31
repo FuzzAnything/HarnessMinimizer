@@ -374,6 +374,70 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
     assert "AddressSanitizer" in result.stdout + result.stderr
 
 
+def test_split_source_for_pch_moves_pre_include_directives_ahead_of_headers(
+    tmp_path: Path,
+) -> None:
+    source = """/*
+ * Top comment
+ */
+#define VPX_DISABLE_CTRL_TYPECHECKS 1
+#include <stddef.h>
+#include <stdint.h>
+#include "demo.h"
+
+#define MAX_WIDTH 1920
+int value = MAX_WIDTH;
+"""
+
+    pch_prefix, restore_prefix, body = reducer_runner._split_source_for_pch(
+        source,
+        tmp_path,
+    )
+
+    assert "#define VPX_DISABLE_CTRL_TYPECHECKS 1" in pch_prefix
+    assert pch_prefix.index("#define VPX_DISABLE_CTRL_TYPECHECKS 1") < pch_prefix.index(
+        '#include "'
+    )
+    assert "#define VPX_DISABLE_CTRL_TYPECHECKS 1" not in body
+    assert "#define MAX_WIDTH 1920" not in pch_prefix
+    assert "#define MAX_WIDTH 1920" in body
+
+    restored_path = tmp_path / "restored.cpp"
+    restored_path.write_text(body, encoding="utf-8")
+    reducer_runner.restore_pch_includes(
+        str(restored_path),
+        reducer_runner.PchArtifacts(
+            body_source=str(restored_path),
+            prefix_header="",
+            pch_file="",
+            restore_prefix=restore_prefix,
+        ),
+    )
+    restored_source = restored_path.read_text(encoding="utf-8")
+    assert restored_source.index("#define VPX_DISABLE_CTRL_TYPECHECKS 1") < restored_source.index(
+        '#include "demo.h"'
+    )
+
+
+def test_split_source_for_pch_keeps_conditional_include_closers_with_prefix(
+    tmp_path: Path,
+) -> None:
+    source = """#ifdef USE_DEMO
+#include "demo.h"
+#endif
+#define AFTER_HEADERS 1
+int value = AFTER_HEADERS;
+"""
+
+    pch_prefix, _, body = reducer_runner._split_source_for_pch(source, tmp_path)
+
+    assert "#ifdef USE_DEMO" in pch_prefix
+    assert '#include "' in pch_prefix
+    assert "#endif" in pch_prefix
+    assert "#define AFTER_HEADERS 1" not in pch_prefix
+    assert "#define AFTER_HEADERS 1" in body
+
+
 def test_amortized_static_runner_uses_rooted_archive_members(
     tmp_path: Path,
 ) -> None:
