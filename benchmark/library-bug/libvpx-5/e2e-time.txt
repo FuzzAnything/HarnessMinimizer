@@ -2,3 +2,6 @@
 
 
 --split --symbolize (no linkage amortization)
+real    29m43.909s
+user    2247m53.016s
+sys     179m18.513s
