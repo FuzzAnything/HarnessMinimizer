@@ -70,6 +70,7 @@ ct_check_stack_trace = _ct_module._check_stack_trace
 ct_check_crash_location_pattern = _ct_module._check_crash_location_pattern
 ct_check_crash_location = _ct_module._check_crash_location
 ct_check_dynamic_crash_site = _ct_module._check_dynamic_crash_site
+ct_stack_depth_is_advisory = _ct_module._stack_depth_is_advisory
 ct_compile_error_mentions_uninitialized = _ct_module.compile_error_mentions_uninitialized
 
 
@@ -710,6 +711,39 @@ class TestStackTraceStateManagement(unittest.TestCase):
 
 
 class TestValidateStackTraceInvocation(unittest.TestCase):
+    def test_fast_stack_depth_is_strict_without_dynamic_crash_site_anchor(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "dynamic_crash_site_library": None,
+                "dynamic_crash_site_offset": None,
+            },
+        )()
+        self.assertFalse(ct_stack_depth_is_advisory(args, use_symbolize=False))
+
+    def test_fast_stack_depth_stays_advisory_with_dynamic_crash_site_anchor(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "dynamic_crash_site_library": "/tmp/build/lib/libtarget.so",
+                "dynamic_crash_site_offset": "0xbeaf0",
+            },
+        )()
+        self.assertTrue(ct_stack_depth_is_advisory(args, use_symbolize=False))
+
+    def test_symbolized_stack_depth_stays_advisory(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "dynamic_crash_site_library": None,
+                "dynamic_crash_site_offset": None,
+            },
+        )()
+        self.assertTrue(ct_stack_depth_is_advisory(args, use_symbolize=True))
+
     @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
