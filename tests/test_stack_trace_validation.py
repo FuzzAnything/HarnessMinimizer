@@ -284,6 +284,20 @@ SUMMARY: AddressSanitizer: ABRT
             "/root/src/libpcap/bpf_filter.c:112:4",
         )
 
+    def test_extract_symbolized_crash_location_skips_sanitizer_wrapper_frames(self):
+        output = """\
+==12345==ERROR: AddressSanitizer: negative-size-param: (size=-4)
+    #0 0xaaa in __asan_memset /root/llvm-project/compiler-rt/lib/asan/asan_interceptors_memintrinsics.cpp:31:3
+    #1 0xbbb in _lou_backTranslate /root/src/liblouis/liblouis/lou_backTranslateString.c:257:23
+    #2 0xccc in lou_backTranslate /root/src/liblouis/liblouis/lou_backTranslateString.c:179:9
+    #3 0xddd in LLVMFuzzerTestOneInput /tmp/harness.cpp:42:3
+SUMMARY: AddressSanitizer: negative-size-param
+"""
+        self.assertEqual(
+            extract_symbolized_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/root/src/liblouis/liblouis/lou_backTranslateString.c:257:23",
+        )
+
     def test_extract_symbolized_crash_location_returns_none_without_source_location(self):
         self.assertIsNone(
             extract_symbolized_crash_location(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED)
