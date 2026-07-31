@@ -4,3 +4,6 @@ user    594m8.918s
 sys     104m56.670s
 
 --split --symbolize (no linkage amortization)
+real    26m16.652s
+user    1081m46.591s
+sys     196m1.389s
