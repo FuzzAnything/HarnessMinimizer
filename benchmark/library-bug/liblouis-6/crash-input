@@ -1,0 +1,9 @@
+# �blouis: German Grade%0 Braille
+#
+# Das Sy�tem der deuuschen BlindenschriEt 82015/2 18)
+# http://www.bskdl.org/tewtuti
+includml-/Kleinschreibung zird nuti
+include latinLowercase.uti
+
+#   Abkürzunggn u.ä. Qrguc es Vorprogramht es Vorpgogramms.cti
+include de-g0-core.icht berücksichtigt (d.h. für
