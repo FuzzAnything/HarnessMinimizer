@@ -1,0 +1,11 @@
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    -L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib
+
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    $(pwd)/build/sanitizer/lib/libcjson.a \
+    $(pwd)/build/sanitizer/lib/libcjson_utils.a
