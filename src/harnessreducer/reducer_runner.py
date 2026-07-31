@@ -1669,11 +1669,33 @@ _GENERIC_ABORT_LOCATION_SUFFIXES = (
     "/assert.c",
 )
 
+_GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS = (
+    " in __asan_memset ",
+    " in __asan_memcpy ",
+    " in __asan_memmove ",
+    " in __interceptor_memset ",
+    " in __interceptor_memcpy ",
+    " in __interceptor_memmove ",
+)
+
+_GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES = (
+    "/asan_interceptors_memintrinsics.cpp",
+    "/sanitizer_common_interceptors_memintrinsics.inc",
+)
+
 
 def _is_generic_abort_frame(line: str, location: str) -> bool:
     location_path = location.split(":", 1)[0]
     return any(token in line for token in _GENERIC_ABORT_FRAME_TOKENS) or any(
         location_path.endswith(suffix) for suffix in _GENERIC_ABORT_LOCATION_SUFFIXES
+    )
+
+
+def _is_generic_sanitizer_wrapper_frame(line: str, location: str) -> bool:
+    location_path = location.split(":", 1)[0]
+    return any(token in line for token in _GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS) or any(
+        location_path.endswith(suffix)
+        for suffix in _GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES
     )
 
 
@@ -1692,7 +1714,9 @@ def extract_symbolized_crash_location(
             location = match.group(0)
             if first_location is None:
                 first_location = location
-            if not _is_generic_abort_frame(line, location):
+            if not _is_generic_abort_frame(line, location) and not _is_generic_sanitizer_wrapper_frame(
+                line, location
+            ):
                 return location
     return first_location
 
