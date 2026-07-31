@@ -1,0 +1,10 @@
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    -L$(pwd)/build/sanitizer/lib -llcms2 \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib
+
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    $(pwd)/build/sanitizer/lib/liblcms2.a
