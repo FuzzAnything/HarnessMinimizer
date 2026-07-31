@@ -298,6 +298,22 @@ SUMMARY: AddressSanitizer: negative-size-param
             "/root/src/liblouis/liblouis/lou_backTranslateString.c:257:23",
         )
 
+    def test_extract_symbolized_crash_location_skips_sanitizer_allocator_frames(self):
+        output = """\
+==12345==ERROR: AddressSanitizer: stack-overflow on address 0x7ffe3f448fd8
+    #0 0xaaa in UseImpl /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:33:35
+    #1 0xbbb in Use /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/../sanitizer_common/sanitizer_allocator_dlsym.h:27:43
+    #2 0xccc in malloc /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:65:7
+    #3 0xddd in default_malloc /root/src/c-ares/src/lib/ares_library_init.c:52:10
+    #4 0xeee in ares_malloc /root/src/c-ares/src/lib/ares_library_init.c:71:10
+    #5 0xfff in LLVMFuzzerTestOneInput /tmp/harness.cpp:42:3
+SUMMARY: AddressSanitizer: stack-overflow /root/src/c-ares/src/lib/ares_library_init.c:52:10 in default_malloc
+"""
+        self.assertEqual(
+            extract_symbolized_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/root/src/c-ares/src/lib/ares_library_init.c:52:10",
+        )
+
     def test_extract_symbolized_crash_location_returns_none_without_source_location(self):
         self.assertIsNone(
             extract_symbolized_crash_location(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED)

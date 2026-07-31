@@ -1784,6 +1784,12 @@ _GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS = (
 _GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES = (
     "/asan_interceptors_memintrinsics.cpp",
     "/sanitizer_common_interceptors_memintrinsics.inc",
+    "/asan_malloc_linux.cpp",
+    "/asan_malloc.cpp",
+    "/asan_new_delete.cpp",
+    "/sanitizer_allocator_dlsym.h",
+    "/sanitizer_allocator.cpp",
+    "/sanitizer_allocator.h",
 )
 
 
