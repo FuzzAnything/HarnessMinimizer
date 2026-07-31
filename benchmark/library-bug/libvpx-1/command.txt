@@ -1,3 +1,23 @@
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lvpx" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lvpx" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
+  -o reduced.cpp
+
 clang++ -g -O1 -fno-omit-frame-pointer \
     -fsanitize=address,undefined,fuzzer \
     -I$(pwd)/build/sanitizer/include \

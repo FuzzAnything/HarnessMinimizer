@@ -650,6 +650,16 @@ def _check_crash_location(
     return _check_crash_location_pattern(run_log, stored_pattern, source_path)
 
 
+def _stack_depth_is_advisory(
+    args: argparse.Namespace,
+    *,
+    use_symbolize: bool,
+) -> bool:
+    if use_symbolize:
+        return True
+    return bool(args.dynamic_crash_site_library and args.dynamic_crash_site_offset)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -787,19 +797,26 @@ def main() -> int:
             if not _check_crash_location(run_log, args.crash_location_file, args.source):
                 return _finalize_result(args, 1)
 
-        # Advisory stack-depth check.  A mismatch is logged as a warning but
-        # does not reject the candidate: the location/anchor check above is the
-        # authoritative oracle.  This applies to both the non-symbolized path
-        # (normal reference depth) and the symbolized path (symbolized depth),
-        # with the caller selecting the appropriate --stack-depth value.
+        # Stack-depth handling depends on the active oracle.  When a crash-site
+        # anchor is available (symbolized crash location or fast-path DSO+offset),
+        # depth is advisory.  In fast non-symbolized mode without a dynamic
+        # crash-site anchor, depth becomes part of the hard equivalence check.
         if args.stack_depth is not None:
             candidate_stack_depth = count_first_stack_trace_frames(run_log)
             if candidate_stack_depth != args.stack_depth:
-                print(
-                    "[!] Warning: stack depth did not match. "
-                    f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
-                    "Treating as advisory; crash site/location anchor already validated."
-                )
+                if _stack_depth_is_advisory(args, use_symbolize=use_symbolize):
+                    print(
+                        "[!] Warning: stack depth did not match. "
+                        f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
+                        "Treating as advisory; crash site/location anchor already validated."
+                    )
+                else:
+                    print(
+                        "[-] Stack depth did not match. "
+                        f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
+                        "No dynamic crash-site anchor is available in non-symbolized mode."
+                    )
+                    return _finalize_result(args, 1)
             else:
                 print("[+] Stack depth validation passed.")
 
