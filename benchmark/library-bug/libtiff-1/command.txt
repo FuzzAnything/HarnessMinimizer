@@ -9,3 +9,15 @@ clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
     harness.cpp -o harness \
     -I$(pwd)/build/sanitizer/include \
     $(pwd)/build/sanitizer/lib/libtiff.a -ljbig -ljpeg -llzma -lz
+
+libtiff-6
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    -L$(pwd)/build/sanitizer/lib -ltiff -ltiffxx -ljbig -ljpeg -llzma -lz \
+    -Wl,-rpath,$(pwd)/build/sanitizer/lib
+
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    harness.cpp -o harness \
+    -I$(pwd)/build/sanitizer/include \
+    $(pwd)/build/sanitizer/lib/libtiff.a $(pwd)/build/sanitizer/lib/libtiffxx.a -ljbig -ljpeg -llzma -lz
