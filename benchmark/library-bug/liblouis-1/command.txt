@@ -11,3 +11,23 @@ clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
 
 echo 'export LOUIS_TABLEPATH=/root/HarnessMinimizer/benchmark/library-bug/liblouis-1/build/sanitizer/share/liblouis/tables' >> ~/.bashrc
 source ~/.bashrc
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -llouis" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -llouis" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
+  -o reduced.cpp
