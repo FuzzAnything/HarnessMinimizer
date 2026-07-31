@@ -7,4 +7,4 @@ clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
 clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
     harness.cpp -o harness \
     -I$(pwd)/build/sanitizer/include \
-    -L$(pwd)/build/sanitizer/lib/libpugixml.a
+    $(pwd)/build/sanitizer/lib/libpugixml.a
