@@ -10,12 +10,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from harnessreducer.reducer_runner import (
+    DEFAULT_EXEC_TIMEOUT_MS,
     PHASE3_DIRECT,
     PHASE3_PCH,
     PHASE3_SPLIT,
     PchArtifacts,
     STACK_FRAME_COUNT_PATTERN,
     StaticArchiveRootConfig,
+    append_exec_timeout_tester_args,
+    calibrate_exec_timeout_ms,
     dynamic_crash_site_tester_args,
     get_last_interesting_file,
     extract_first_sanitizer_stack_trace,
@@ -27,6 +30,7 @@ from harnessreducer.reducer_runner import (
     restore_pch_includes,
     run_command,
     run_amortized_reference_candidate,
+    set_current_exec_timeout_ms,
     start_amortized_runner,
     get_stack_trace_file,
     validate_phase3_mode,
@@ -358,6 +362,88 @@ def run_treereducer_with_check(
         )
         reducer_source = pch_artifacts.body_source
 
+    if amortize_link:
+        calibration_root = StaticArchiveRootConfig(
+            source=reducer_source,
+            compile_flags=compile_flags,
+            pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
+            use_replay=fdp_trace_file is not None,
+        )
+        with start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=True,
+            static_root_config=calibration_root,
+            exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+        ) as calibration_runner:
+            symbolize_1_timeout_ms = calibrate_exec_timeout_ms(
+                harness_path,
+                fdp_trace_file,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode=phase3_mode,
+                pch_artifacts=pch_artifacts,
+                symbolize=True,
+                runner_socket=calibration_runner.socket_path,
+                plugin_link_flags=getattr(
+                    calibration_runner,
+                    "plugin_link_flags",
+                    (),
+                ),
+            )
+        with start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=False,
+            static_root_config=calibration_root,
+            exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+        ) as calibration_runner_symbolize_0:
+            symbolize_0_timeout_ms = calibrate_exec_timeout_ms(
+                harness_path,
+                fdp_trace_file,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode=phase3_mode,
+                pch_artifacts=pch_artifacts,
+                symbolize=False,
+                runner_socket=calibration_runner_symbolize_0.socket_path,
+                plugin_link_flags=getattr(
+                    calibration_runner_symbolize_0,
+                    "plugin_link_flags",
+                    (),
+                ),
+            )
+        exec_timeout_ms = max(symbolize_1_timeout_ms, symbolize_0_timeout_ms)
+    else:
+        exec_timeout_ms = max(
+            calibrate_exec_timeout_ms(
+                harness_path,
+                fdp_trace_file,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode=phase3_mode,
+                pch_artifacts=pch_artifacts,
+                symbolize=True,
+            ),
+            calibrate_exec_timeout_ms(
+                harness_path,
+                fdp_trace_file,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode=phase3_mode,
+                pch_artifacts=pch_artifacts,
+                symbolize=False,
+            ),
+        )
+    set_current_exec_timeout_ms(exec_timeout_ms)
+    print(f"[+] Using fixed execution timeout for check mode: {exec_timeout_ms} ms")
+
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
         "treereduce-c",
@@ -397,6 +483,7 @@ def run_treereducer_with_check(
             get_stack_trace_file(),
         ]
     )
+    append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
@@ -418,6 +505,7 @@ def run_treereducer_with_check(
                 pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
                 use_replay=fdp_trace_file is not None,
             ),
+            exec_timeout_ms=exec_timeout_ms,
         )
         if amortize_link
         else nullcontext(None)
@@ -434,6 +522,7 @@ def run_treereducer_with_check(
                 pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
                 use_replay=fdp_trace_file is not None,
             ),
+            exec_timeout_ms=exec_timeout_ms,
         )
         if amortize_link
         else nullcontext(None)

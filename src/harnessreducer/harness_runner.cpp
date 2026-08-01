@@ -127,7 +127,8 @@ bool LoadTargetLibrariesWithRetry(const std::vector<std::string> &paths,
 }
 
 void HandleRequest(int connection, int listen_fd,
-                   const std::vector<uint8_t> &crash_data) {
+                   const std::vector<uint8_t> &crash_data,
+                   int exec_timeout_seconds) {
   close(listen_fd);
   const std::string plugin_path = ReadPluginPath(connection);
   if (plugin_path.empty()) {
@@ -179,7 +180,7 @@ void HandleRequest(int connection, int listen_fd,
   TimedChild = child;
   ChildTimedOut = 0;
   signal(SIGALRM, HandleTimeout);
-  alarm(300);
+  alarm(static_cast<unsigned int>(exec_timeout_seconds));
   close(output_pipe[1]);
   std::string output;
   char buffer[16384];
@@ -196,6 +197,11 @@ void HandleRequest(int connection, int listen_fd,
   }
   close(output_pipe[0]);
   alarm(0);
+  if (ChildTimedOut) {
+    output.append("Execution timed out after ");
+    output.append(std::to_string(exec_timeout_seconds));
+    output.append(" seconds.\n");
+  }
 
   int wait_status = 0;
   if (child < 0 || waitpid(child, &wait_status, 0) < 0)
@@ -212,14 +218,23 @@ void HandleRequest(int connection, int listen_fd,
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
+  if (argc < 4) {
     std::fprintf(stderr,
-                 "usage: harness_runner SOCKET CRASH_INPUT [TARGET_SO...]\n");
+                 "usage: harness_runner SOCKET CRASH_INPUT EXEC_TIMEOUT_SECS "
+                 "[TARGET_SO...]\n");
     return 2;
   }
 
+  char *timeout_end = nullptr;
+  const unsigned long parsed_timeout = std::strtoul(argv[3], &timeout_end, 10);
+  if (timeout_end == nullptr || *timeout_end != '\0' || parsed_timeout == 0UL) {
+    std::fprintf(stderr, "invalid execution timeout: %s\n", argv[3]);
+    return 2;
+  }
+  const int exec_timeout_seconds = static_cast<int>(parsed_timeout);
+
   std::vector<std::string> target_paths;
-  for (int index = 3; index < argc; ++index) {
+  for (int index = 4; index < argc; ++index) {
     target_paths.emplace_back(argv[index]);
   }
   std::vector<void *> target_handles;
@@ -277,7 +292,7 @@ int main(int argc, char **argv) {
     }
     const pid_t monitor = fork();
     if (monitor == 0)
-      HandleRequest(connection, listen_fd, crash_data);
+      HandleRequest(connection, listen_fd, crash_data, exec_timeout_seconds);
     close(connection);
   }
 
