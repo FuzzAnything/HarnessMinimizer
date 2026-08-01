@@ -41,6 +41,13 @@ SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
 SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
 STATISTICS_FILE_NAME = "statistics.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
+DEFAULT_EXEC_TIMEOUT_MS = 300_000
+CALIBRATED_EXEC_TIMEOUT_MIN_MS = 2_000
+CALIBRATED_EXEC_TIMEOUT_MAX_MS = 60_000
+CALIBRATION_PROBE_RUNS = 5
+CALIBRATION_WARMUP_RUNS = 1
+CALIBRATED_EXEC_TIMEOUT_MULTIPLIER = 8
+EXEC_TIME_MARKER_PREFIX = "HARNESSREDUCER_EXEC_TIME_MS="
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
@@ -57,6 +64,7 @@ NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
+CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
@@ -65,6 +73,10 @@ STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVM_COV_SHOW_LINE_PATTERN = re.compile(r"^\s*(\d+)\|\s*([^|]*)\|")
+EXEC_TIME_MARKER_PATTERN = re.compile(
+    rf"^{re.escape(EXEC_TIME_MARKER_PREFIX)}(\d+)$",
+    re.MULTILINE,
+)
 SHARED_LIBRARY_FRAME_PATTERN = re.compile(
     r"\((?P<library>[^()\s]+?\.so(?:\.[^()+\s]+)?)\+"
     r"(?P<offset>0x[0-9a-fA-F]+)\)"
@@ -183,6 +195,56 @@ def get_fdp_header_dir() -> str:
 
 def get_crash_tester_path() -> str:
     return str(get_project_root() / "tests" / "crash_tester.py")
+
+
+def set_current_exec_timeout_ms(timeout_ms: int | None) -> None:
+    global CURRENT_EXEC_TIMEOUT_MS
+
+    if timeout_ms is None:
+        CURRENT_EXEC_TIMEOUT_MS = None
+        return
+    CURRENT_EXEC_TIMEOUT_MS = max(1, int(timeout_ms))
+
+
+def get_current_exec_timeout_ms() -> int | None:
+    return CURRENT_EXEC_TIMEOUT_MS
+
+
+def append_exec_timeout_tester_args(
+    cmd: list[str],
+    timeout_ms: int | None = None,
+) -> list[str]:
+    effective_timeout_ms = (
+        get_current_exec_timeout_ms() if timeout_ms is None else timeout_ms
+    )
+    if effective_timeout_ms is not None:
+        cmd.append(f"--exec-timeout-ms={max(1, int(effective_timeout_ms))}")
+    return cmd
+
+
+def amortized_runner_exec_timeout_seconds(timeout_ms: int | None) -> int:
+    effective_timeout_ms = (
+        DEFAULT_EXEC_TIMEOUT_MS if timeout_ms is None else max(1, int(timeout_ms))
+    )
+    return max(1, (effective_timeout_ms + 999) // 1000)
+
+
+def _extract_exec_time_marker_ms(output: str) -> int | None:
+    match = EXEC_TIME_MARKER_PATTERN.search(output)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def calibrated_exec_timeout_ms_from_samples(samples_ms: list[int]) -> int | None:
+    if len(samples_ms) <= CALIBRATION_WARMUP_RUNS:
+        return None
+    reference_ms = max(samples_ms[CALIBRATION_WARMUP_RUNS :])
+    timeout_ms = max(
+        CALIBRATED_EXEC_TIMEOUT_MIN_MS,
+        CALIBRATED_EXEC_TIMEOUT_MULTIPLIER * reference_ms,
+    )
+    return min(CALIBRATED_EXEC_TIMEOUT_MAX_MS, timeout_ms)
 
 
 def validate_phase3_mode(mode: str) -> str:
@@ -1154,6 +1216,7 @@ def start_amortized_runner(
     *,
     symbolize: bool,
     static_root_config: StaticArchiveRootConfig | None = None,
+    exec_timeout_ms: int | None = None,
 ):
     link_inputs = resolve_amortized_link_inputs(link_flags)
     shared_libraries = link_inputs.shared_libraries
@@ -1179,7 +1242,13 @@ def start_amortized_runner(
         env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
 
     process = subprocess.Popen(
-        [runner_binary, socket_path, crash_input or "", *shared_libraries],
+        [
+            runner_binary,
+            socket_path,
+            crash_input or "",
+            str(amortized_runner_exec_timeout_seconds(exec_timeout_ms)),
+            *shared_libraries,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1266,6 +1335,7 @@ def run_amortized_reference_candidate(
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
     proc = run_command(
         cmd,
         "Amortized-link reference candidate failed",
@@ -2502,6 +2572,7 @@ def check_reducer_crash_pattern(
     cmd.extend(stack_depth_tester_args(symbolized=False))
     cmd.extend(dynamic_crash_site_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
     if proc.returncode != 77:
         print("Tester command: " + " ".join(cmd))
@@ -2556,6 +2627,82 @@ def dump_fdp_trace(
     return fdp_trace_file
 
 
+def calibrate_exec_timeout_ms(
+    harness_path: str,
+    fdp_trace_file: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    crash_input: str | None,
+    *,
+    phase3_mode: str = PHASE3_DIRECT,
+    pch_artifacts: PchArtifacts | None = None,
+    symbolize: bool,
+    runner_socket: str | None = None,
+    plugin_link_flags: tuple[str, ...] = (),
+) -> int:
+    samples_ms: list[int] = []
+    tester_source = pch_artifacts.body_source if pch_artifacts is not None else harness_path
+
+    for _ in range(CALIBRATION_PROBE_RUNS):
+        cmd = [
+            get_crash_tester_path(),
+            tester_source,
+            ".*",
+            "--crash-input",
+            crash_input or "",
+            f"--compile-flags={compile_flags or ''}",
+            f"--link-flags={link_flags or ''}",
+            "--skip-crash-pattern",
+            "--print-exec-time-ms",
+        ]
+        if fdp_trace_file:
+            cmd.extend(["--fdp-trace", fdp_trace_file])
+        if symbolize:
+            cmd.append("--symbolize")
+        if runner_socket is not None:
+            cmd.extend(["--amortized-runner-socket", runner_socket])
+        if plugin_link_flags:
+            cmd.append(
+                "--amortized-plugin-fallback-link-flags="
+                + " ".join(plugin_link_flags)
+            )
+        cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+        append_exec_timeout_tester_args(cmd, DEFAULT_EXEC_TIMEOUT_MS)
+        proc = run_command(
+            cmd,
+            "Execution-time calibration run failed",
+            ignore_errors=True,
+        )
+        output = proc.stdout + proc.stderr
+        if proc.returncode != 77:
+            print(
+                "[!] Execution-time calibration fell back to the default timeout "
+                f"after a non-crashing probe (exit={proc.returncode})."
+            )
+            return DEFAULT_EXEC_TIMEOUT_MS
+        sample_ms = _extract_exec_time_marker_ms(output)
+        if sample_ms is None:
+            print(
+                "[!] Execution-time calibration fell back to the default timeout "
+                "because the probe did not report an execution-time marker."
+            )
+            return DEFAULT_EXEC_TIMEOUT_MS
+        samples_ms.append(sample_ms)
+
+    calibrated_timeout_ms = calibrated_exec_timeout_ms_from_samples(samples_ms)
+    if calibrated_timeout_ms is None:
+        print(
+            "[!] Execution-time calibration fell back to the default timeout "
+            "because there were not enough timing samples."
+        )
+        return DEFAULT_EXEC_TIMEOUT_MS
+    print(
+        "[+] Calibrated execution timeout: "
+        f"{calibrated_timeout_ms} ms from probe samples {samples_ms}"
+    )
+    return calibrated_timeout_ms
+
+
 def run_treereducer(
     harness_path: str,
     fdp_trace_file: str | None,
@@ -2589,6 +2736,53 @@ def run_treereducer(
         )
         reducer_source = pch_artifacts.body_source
 
+    exec_timeout_ms = DEFAULT_EXEC_TIMEOUT_MS
+    if amortize_link:
+        calibration_root = StaticArchiveRootConfig(
+            source=reducer_source,
+            compile_flags=compile_flags,
+            pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
+            use_replay=fdp_trace_file is not None,
+        )
+        with start_amortized_runner(
+            link_flags,
+            crash_input,
+            fdp_trace_file,
+            symbolize=symbolize,
+            static_root_config=calibration_root,
+            exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+        ) as calibration_runner:
+            calibration_plugin_link_flags = getattr(
+                calibration_runner,
+                "plugin_link_flags",
+                (),
+            )
+            exec_timeout_ms = calibrate_exec_timeout_ms(
+                harness_path,
+                fdp_trace_file,
+                compile_flags,
+                link_flags,
+                crash_input,
+                phase3_mode=phase3_mode,
+                pch_artifacts=pch_artifacts,
+                symbolize=symbolize,
+                runner_socket=calibration_runner.socket_path,
+                plugin_link_flags=calibration_plugin_link_flags,
+            )
+    else:
+        exec_timeout_ms = calibrate_exec_timeout_ms(
+            harness_path,
+            fdp_trace_file,
+            compile_flags,
+            link_flags,
+            crash_input,
+            phase3_mode=phase3_mode,
+            pch_artifacts=pch_artifacts,
+            symbolize=symbolize,
+        )
+    set_current_exec_timeout_ms(exec_timeout_ms)
+    print(f"[+] Using fixed execution timeout: {exec_timeout_ms} ms")
+
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
         "treereduce-c",
@@ -2618,6 +2812,7 @@ def run_treereducer(
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
     ])
+    append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
@@ -2645,6 +2840,7 @@ def run_treereducer(
                 pch_path=pch_artifacts.pch_file if pch_artifacts is not None else None,
                 use_replay=fdp_trace_file is not None,
             ),
+            exec_timeout_ms=exec_timeout_ms,
         )
         if amortize_link
         else nullcontext(None)
@@ -2811,6 +3007,7 @@ def validate_crash_pattern(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
         cmd,
@@ -2885,6 +3082,7 @@ def validate_stack_trace(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
 
     proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
     if validation_log_path is not None and proc.returncode != 77:
@@ -2930,6 +3128,7 @@ def validate_symbolized_crash_pattern_depth_location(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
         cmd,

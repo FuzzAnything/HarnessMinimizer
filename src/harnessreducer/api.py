@@ -24,6 +24,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_SPLIT,
     apply_coverage_guided_slice,
+    append_exec_timeout_tester_args,
     candidate_files_match,
     check_reducer_crash_pattern,
     check_reducer_symbolized_reduction_oracle,
@@ -50,9 +51,11 @@ from harnessreducer.reducer_runner import (
     resolve_amortized_link_inputs,
     run_treereducer,
     run_command,
+    set_current_exec_timeout_ms,
     validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
     validate_phase3_mode,
+    DEFAULT_EXEC_TIMEOUT_MS,
 )
 
 ADDITIONAL_HEADERS = [
@@ -193,6 +196,7 @@ def _run_inline_stack_diagnostic(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if symbolize:
         cmd.append("--symbolize")
+    append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
         cmd,
@@ -746,6 +750,7 @@ def inline_literals_in_reduced_harness(
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
+    set_current_exec_timeout_ms(DEFAULT_EXEC_TIMEOUT_MS)
     reset_stack_trace_state()
     reset_last_interesting_state()
     reset_check_state()

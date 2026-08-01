@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import argparse
 from pathlib import Path
 
@@ -138,6 +139,9 @@ def _update_statistics_file(statistics_file: str, result_code: int) -> None:
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
     if args.statistics_file:
         _update_statistics_file(args.statistics_file, result_code)
+    exec_time_ms = getattr(args, "_last_exec_time_ms", None)
+    if getattr(args, "print_exec_time_ms", False) and exec_time_ms is not None:
+        print(f"HARNESSREDUCER_EXEC_TIME_MS={exec_time_ms}")
     return result_code
 
 
@@ -523,12 +527,62 @@ def run_with_amortized_runner(socket_path: str, plugin_path: str) -> tuple[int, 
             raise RuntimeError(
                 "Amortized-link runner returned a truncated execution log: "
                 f"expected {expected_size} bytes, got {len(output)}."
-            )
+        )
         return status, output.decode("utf-8", errors="replace")
+
+
+def run_executable(
+    exec_cmd: list[str],
+    *,
+    env: dict[str, str],
+    exec_timeout_ms: int | None,
+) -> tuple[int, str, int]:
+    timeout_seconds = (
+        None
+        if exec_timeout_ms is None or exec_timeout_ms <= 0
+        else exec_timeout_ms / 1000.0
+    )
+    started_at = time.monotonic()
+    try:
+        run_proc = subprocess.run(
+            exec_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            check=False,
+            timeout=timeout_seconds,
+        )
+        status = run_proc.returncode
+        run_log = run_proc.stdout + run_proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        status = 124
+        parts: list[str] = []
+        if exc.stdout:
+            parts.append(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode("utf-8", errors="replace"))
+        if exc.stderr:
+            parts.append(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode("utf-8", errors="replace"))
+        if timeout_seconds is None:
+            parts.append("Execution timed out.\n")
+        else:
+            parts.append(f"Execution timed out after {timeout_seconds:.3f} seconds.\n")
+        run_log = "".join(parts)
+    elapsed_ms = max(1, int((time.monotonic() - started_at) * 1000))
+    return status, run_log, elapsed_ms
 
 
 def should_retry_amortized_plugin_with_fallback(status: int, run_log: str) -> bool:
     return status == 125 and bool(AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN.search(run_log))
+
+
+def run_with_amortized_runner_timed(
+    socket_path: str,
+    plugin_path: str,
+) -> tuple[int, str, int]:
+    started_at = time.monotonic()
+    status, run_log = run_with_amortized_runner(socket_path, plugin_path)
+    elapsed_ms = max(1, int((time.monotonic() - started_at) * 1000))
+    return status, run_log, elapsed_ms
 
 
 def run_with_amortized_runner_maybe_fallback(
@@ -561,6 +615,38 @@ def run_with_amortized_runner_maybe_fallback(
             output_path,
         )
     return status, run_log
+
+
+def run_with_amortized_runner_maybe_fallback_timed(
+    args: argparse.Namespace,
+    output_path: str,
+    object_path: str | None,
+) -> tuple[int | None, str, int | None]:
+    status, run_log, exec_time_ms = run_with_amortized_runner_timed(
+        args.amortized_runner_socket,
+        output_path,
+    )
+    fallback_link_flags = getattr(args, "amortized_plugin_fallback_link_flags", None)
+    if (
+        object_path
+        and fallback_link_flags
+        and not bool(getattr(args, "_amortized_plugin_fallback_linked", False))
+        and should_retry_amortized_plugin_with_fallback(status, run_log)
+    ):
+        if link_amortized_plugin(
+            args,
+            object_path,
+            output_path,
+            fallback_link_flags,
+        ) != 0:
+            return None, "", None
+        args._amortized_plugin_fallback_linked = True
+        _enable_amortized_fallback_first(args)
+        status, run_log, exec_time_ms = run_with_amortized_runner_timed(
+            args.amortized_runner_socket,
+            output_path,
+        )
+    return status, run_log, exec_time_ms
 
 
 def _check_stack_trace(
@@ -685,6 +771,8 @@ def main() -> int:
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
+    parser.add_argument("--exec-timeout-ms", type=int, default=None, help="Execution-only timeout in milliseconds")
+    parser.add_argument("--print-exec-time-ms", action="store_true", help="Print the measured execution time marker")
     parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
         "--amortized-plugin-link-flags",
@@ -694,6 +782,7 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    args._last_exec_time_ms = None
     pid = os.getpid()
 
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir="/tmp") as out_file:
@@ -734,11 +823,12 @@ def main() -> int:
 
         if args.amortized_runner_socket:
             try:
-                status, run_log = run_with_amortized_runner_maybe_fallback(
+                status, run_log, exec_time_ms = run_with_amortized_runner_maybe_fallback_timed(
                     args,
                     output_path,
                     object_path,
                 )
+                args._last_exec_time_ms = exec_time_ms
             except Exception as exc:
                 print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
                 return _finalize_result(args, 1)
@@ -746,16 +836,12 @@ def main() -> int:
                 return _finalize_result(args, -1)
         else:
             exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-            run_proc = subprocess.run(
+            status, run_log, exec_time_ms = run_executable(
                 exec_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
                 env=env,
-                check=False,
+                exec_timeout_ms=args.exec_timeout_ms,
             )
-            status = run_proc.returncode
-            run_log = run_proc.stdout + run_proc.stderr
+            args._last_exec_time_ms = exec_time_ms
 
         if status != 77:
             print(

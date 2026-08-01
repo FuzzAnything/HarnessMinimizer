@@ -40,6 +40,7 @@ amortized_initial_plugin_link_flags = _crash_tester.amortized_initial_plugin_lin
 run_with_amortized_runner_maybe_fallback = (
     _crash_tester.run_with_amortized_runner_maybe_fallback
 )
+run_executable = _crash_tester.run_executable
 update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
@@ -75,15 +76,12 @@ def _run_compiled_candidate(
         )
 
     exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-    run_proc = subprocess.run(
+    status, run_log, _ = run_executable(
         exec_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
         env=_execution_env(args, symbolize=symbolize),
-        check=False,
+        exec_timeout_ms=args.exec_timeout_ms,
     )
-    return run_proc.returncode, run_proc.stdout + run_proc.stderr
+    return status, run_log
 
 
 def _evaluate_check_candidate(
@@ -151,6 +149,7 @@ def main() -> int:
     parser.add_argument("--check-stack-log-file", type=str, required=True, help="Path to the per-candidate check stack-trace log")
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the symbolized crash regex")
+    parser.add_argument("--exec-timeout-ms", type=int, default=None, help="Execution-only timeout in milliseconds")
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
     parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")

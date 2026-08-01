@@ -278,6 +278,18 @@ class TestCheckModeHelpers(unittest.TestCase):
                     plugin_link_flags=(),
                 )
             ),
+            nullcontext(
+                SimpleNamespace(
+                    socket_path="/tmp/harness-check-symbolize1.sock",
+                    plugin_link_flags=(),
+                )
+            ),
+            nullcontext(
+                SimpleNamespace(
+                    socket_path="/tmp/harness-check-symbolize0.sock",
+                    plugin_link_flags=(),
+                )
+            ),
         ]
         mock_reference.side_effect = [SAMPLE_OUTPUT, SAMPLE_UNSYMBOLIZED_OUTPUT]
 
@@ -311,8 +323,10 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertIn("/tmp/harness-check-symbolize1.sock", cmd)
             self.assertIn("--amortized-runner-socket-symbolize-0", cmd)
             self.assertIn("/tmp/harness-check-symbolize0.sock", cmd)
-            self.assertEqual(mock_start_runner.call_args_list[0].kwargs["symbolize"], True)
-            self.assertEqual(mock_start_runner.call_args_list[1].kwargs["symbolize"], False)
+            self.assertEqual(
+                [call.kwargs["symbolize"] for call in mock_start_runner.call_args_list],
+                [True, False, True, False],
+            )
             self.assertEqual(mock_reference.call_args_list[0].args[2], "SymbolizedPattern")
             self.assertEqual(mock_reference.call_args_list[1].args[2], "FastPattern")
             self.assertEqual(mock_reference.call_args_list[0].kwargs["symbolize"], True)
