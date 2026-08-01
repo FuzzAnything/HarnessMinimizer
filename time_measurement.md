@@ -262,7 +262,6 @@ strings -a benchmark/library-bug/libaom-1/build/sanitizer/lib/libaom.so \
 docker run -d \
   --name harnessminimizer-eval \
   --init \
-  --pids-limit 4096 \
   --mount type=bind,src=/mnt/raid/home/lihaiying/HarnessMinimizer,dst=/root/HarnessMinimizer \
   harnessminimizer:latest \
   sleep infinity

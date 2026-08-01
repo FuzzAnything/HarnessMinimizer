@@ -6,6 +6,7 @@ harnessreducer harness.cpp \
   --pch \
   --amortize-link \
   --stable \
+  --statistics \
   -o reduced.cpp
 
 harnessreducer harness.cpp \
