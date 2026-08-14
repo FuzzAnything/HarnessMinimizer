@@ -81,6 +81,12 @@ SHARED_LIBRARY_FRAME_PATTERN = re.compile(
     r"\((?P<library>[^()\s]+?\.so(?:\.[^()+\s]+)?)\+"
     r"(?P<offset>0x[0-9a-fA-F]+)\)"
 )
+ELF_NEEDED_PATTERN = re.compile(
+    r"\(NEEDED\)\s+Shared library: \[(?P<name>[^\]]+)\]"
+)
+ELF_SONAME_PATTERN = re.compile(
+    r"\(SONAME\)\s+Library soname: \[(?P<name>[^\]]+)\]"
+)
 
 
 @dataclass(frozen=True)
@@ -917,6 +923,72 @@ def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...
     return resolve_amortized_link_inputs(link_flags).shared_libraries
 
 
+def _read_elf_dynamic_metadata(
+    elf_path: str | Path,
+) -> tuple[tuple[str, ...], str | None]:
+    """Return an ELF file's DT_NEEDED names and optional DT_SONAME."""
+    proc = subprocess.run(
+        ["readelf", "-dW", str(elf_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        err_msg = proc.stderr.strip() or proc.stdout.strip() or "Unknown readelf error"
+        raise RuntimeError(
+            f"Failed to inspect dynamic dependencies in {elf_path}: {err_msg}"
+        )
+    needed = tuple(
+        match.group("name") for match in ELF_NEEDED_PATTERN.finditer(proc.stdout)
+    )
+    soname_match = ELF_SONAME_PATTERN.search(proc.stdout)
+    soname = soname_match.group("name") if soname_match is not None else None
+    return needed, soname
+
+
+def filter_amortized_shared_libraries_for_reference(
+    link_inputs: AmortizedLinkInputs,
+    reference_executable: str | Path | None,
+) -> AmortizedLinkInputs:
+    """Keep only shared inputs retained by the original harness link.
+
+    Stateful linker flags such as ``--as-needed`` can cause the original
+    executable to discard some explicitly listed DSOs.  The persistent runner
+    has no direct references to target symbols, so its required DSO set cannot
+    be inferred by relinking the runner.  The already validated original
+    executable is the authoritative record of which direct dynamic inputs the
+    linker selected.
+
+    Static archives are deliberately left unchanged.  Their member selection
+    is handled separately by the static-root planning path.
+    """
+    if reference_executable is None or not link_inputs.shared_libraries:
+        return link_inputs
+
+    needed, _ = _read_elf_dynamic_metadata(reference_executable)
+    needed_names = set(needed)
+    needed_basenames = {Path(name).name for name in needed}
+    retained: list[str] = []
+    for library in link_inputs.shared_libraries:
+        library_path = Path(library)
+        _, soname = _read_elf_dynamic_metadata(library_path)
+        if (
+            str(library_path) in needed_names
+            or library_path.name in needed_names
+            or library_path.name in needed_basenames
+            or (soname is not None and soname in needed_names)
+        ):
+            retained.append(library)
+
+    return AmortizedLinkInputs(
+        shared_libraries=tuple(retained),
+        static_libraries=link_inputs.static_libraries,
+        runner_link_flags=link_inputs.runner_link_flags,
+        plugin_link_flags=link_inputs.plugin_link_flags,
+    )
+
+
 def runner_dynamic_dependency_link_flags(
     link_inputs: AmortizedLinkInputs,
 ) -> list[str]:
@@ -1217,8 +1289,22 @@ def start_amortized_runner(
     symbolize: bool,
     static_root_config: StaticArchiveRootConfig | None = None,
     exec_timeout_ms: int | None = None,
+    reference_executable: str | Path | None = None,
 ):
-    link_inputs = resolve_amortized_link_inputs(link_flags)
+    unfiltered_link_inputs = resolve_amortized_link_inputs(link_flags)
+    link_inputs = filter_amortized_shared_libraries_for_reference(
+        unfiltered_link_inputs,
+        reference_executable,
+    )
+    if len(link_inputs.shared_libraries) != len(
+        unfiltered_link_inputs.shared_libraries
+    ):
+        print(
+            "[+] Original harness dependency filtering retained "
+            f"{len(link_inputs.shared_libraries)} of "
+            f"{len(unfiltered_link_inputs.shared_libraries)} shared libraries "
+            "for the amortized runner."
+        )
     shared_libraries = link_inputs.shared_libraries
     runner_binary = _compile_harness_runner(link_inputs, static_root_config)
     socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
@@ -2725,6 +2811,9 @@ def run_treereducer(
     validate_phase3_mode(phase3_mode)
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
+    reference_executable = (
+        str(Path(get_work_dir()) / "poc.out") if amortize_link else None
+    )
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
     if phase3_mode == PHASE3_PCH:
@@ -2751,6 +2840,7 @@ def run_treereducer(
             symbolize=symbolize,
             static_root_config=calibration_root,
             exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+            reference_executable=reference_executable,
         ) as calibration_runner:
             calibration_plugin_link_flags = getattr(
                 calibration_runner,
@@ -2841,6 +2931,7 @@ def run_treereducer(
                 use_replay=fdp_trace_file is not None,
             ),
             exec_timeout_ms=exec_timeout_ms,
+            reference_executable=reference_executable,
         )
         if amortize_link
         else nullcontext(None)

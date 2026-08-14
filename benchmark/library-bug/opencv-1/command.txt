@@ -172,6 +172,16 @@ harnessreducer harness.cpp \
 
 harnessreducer harness.cpp \
   --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="$(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a -lz" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
   --link-flags="-Wl,--as-needed /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_calib3d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_core.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_dnn.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_features2d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_flann.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_gapi.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_highgui.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgcodecs.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgproc.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_ml.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_objdetect.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_photo.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_stitching.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_video.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_videoio.so -Wl,--no-as-needed" \
   --work-dir ./pch-amorlink-nosymbol-test \
   --crash-input crash-input \
