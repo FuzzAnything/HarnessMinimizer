@@ -113,6 +113,113 @@ def test_runner_dependency_flags_do_not_wrap_static_only_dependencies() -> None:
     assert reducer_runner.runner_dynamic_dependency_link_flags(inputs) == ["-lm"]
 
 
+def test_amortized_runner_filters_unused_broken_dso_selected_by_as_needed(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-as-needed-filter"))
+    broken_source = tmp_path / "broken.cpp"
+    broken_library = tmp_path / "libbroken.so"
+    used_source = tmp_path / "used.cpp"
+    used_library = tmp_path / "libused.so"
+    reference_source = tmp_path / "reference.cpp"
+    reference_executable = tmp_path / "reference"
+
+    broken_source.write_text(
+        'extern "C" void missing_dependency();\n'
+        'extern "C" void unused_entry() { missing_dependency(); }\n',
+        encoding="utf-8",
+    )
+    used_source.write_text(
+        'extern "C" int used_entry() { return 42; }\n',
+        encoding="utf-8",
+    )
+    reference_source.write_text(
+        'extern "C" int used_entry();\n'
+        "int main() { return used_entry() == 42 ? 0 : 1; }\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            str(broken_source),
+            "-Wl,--allow-shlib-undefined",
+            "-o",
+            str(broken_library),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            str(used_source),
+            "-o",
+            str(used_library),
+        ],
+        check=True,
+    )
+    link_flags = (
+        f"-Wl,--as-needed {broken_library} {used_library} "
+        "-Wl,--no-as-needed"
+    )
+    reference_link = subprocess.run(
+        [
+            "clang++",
+            str(reference_source),
+            "-Wl,--as-needed",
+            str(broken_library),
+            str(used_library),
+            "-Wl,--no-as-needed",
+            "-o",
+            str(reference_executable),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert reference_link.returncode == 0, reference_link.stderr
+
+    unfiltered = reducer_runner.resolve_amortized_link_inputs(link_flags)
+    assert unfiltered.shared_libraries == (
+        str(broken_library.resolve()),
+        str(used_library.resolve()),
+    )
+    filtered = reducer_runner.filter_amortized_shared_libraries_for_reference(
+        unfiltered,
+        reference_executable,
+    )
+    assert filtered.shared_libraries == (str(used_library.resolve()),)
+
+    with reducer_runner.start_amortized_runner(
+        link_flags,
+        None,
+        None,
+        symbolize=False,
+        reference_executable=reference_executable,
+    ) as runner:
+        assert runner.shared_libraries == (str(used_library.resolve()),)
+
+
+def test_reference_filter_does_not_change_static_archive_inputs() -> None:
+    inputs = reducer_runner.AmortizedLinkInputs(
+        shared_libraries=(),
+        static_libraries=("/tmp/libtarget.a", "/tmp/libhelper.a"),
+        runner_link_flags=("-Wl,--start-group", "-Wl,--end-group"),
+        plugin_link_flags=("/tmp/libtarget.a", "/tmp/libhelper.a"),
+    )
+
+    assert (
+        reducer_runner.filter_amortized_shared_libraries_for_reference(
+            inputs,
+            "/this/reference/does/not/need/to/exist",
+        )
+        is inputs
+    )
+
+
 def test_amortized_link_resolves_multiple_static_libraries(tmp_path: Path) -> None:
     first = _compile_static_archive(
         tmp_path,
@@ -704,6 +811,8 @@ def test_amortized_runner_retains_dynamic_dependency_for_unresolved_target_symbo
     target_source = tmp_path / "dynamic_target.cpp"
     target_library = tmp_path / "libdynamic_target.so"
     harness_source = tmp_path / "dynamic_dependency_harness.cpp"
+    reference_source = tmp_path / "dynamic_dependency_reference.cpp"
+    reference_executable = tmp_path / "dynamic_dependency_reference"
     trace_path = tmp_path / "dynamic_dependency_fdp_trace.log"
     trace_path.write_text("", encoding="utf-8")
 
@@ -772,6 +881,29 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
     )
     assert compile_target.returncode == 0, compile_target.stderr
 
+    reference_source.write_text(
+        'extern "C" void dynamic_target_entry();\n'
+        "int main() { dynamic_target_entry(); return 0; }\n",
+        encoding="utf-8",
+    )
+    compile_reference = subprocess.run(
+        [
+            "clang++",
+            "-fsanitize=address,undefined",
+            str(reference_source),
+            "-Wl,--as-needed",
+            str(target_library),
+            str(dependency_library),
+            "-Wl,--no-as-needed",
+            "-o",
+            str(reference_executable),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_reference.returncode == 0, compile_reference.stderr
+
     link_flags = f"-L{tmp_path} -ldynamic_target -ldynamic_dep"
     inputs = reducer_runner.resolve_amortized_link_inputs(link_flags)
     assert inputs.shared_libraries == (
@@ -791,7 +923,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
         None,
         str(trace_path),
         symbolize=False,
+        reference_executable=reference_executable,
     ) as runner:
+        assert runner.shared_libraries == (
+            str(target_library.resolve()),
+            str(dependency_library.resolve()),
+        )
         result = subprocess.run(
             [
                 sys.executable,

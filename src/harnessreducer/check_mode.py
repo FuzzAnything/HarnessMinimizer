@@ -351,6 +351,9 @@ def run_treereducer_with_check(
     validate_phase3_mode(phase3_mode)
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
+    reference_executable = (
+        str(Path(get_work_dir()) / "poc.out") if amortize_link else None
+    )
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
     if phase3_mode == PHASE3_PCH:
@@ -376,6 +379,7 @@ def run_treereducer_with_check(
             symbolize=True,
             static_root_config=calibration_root,
             exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+            reference_executable=reference_executable,
         ) as calibration_runner:
             symbolize_1_timeout_ms = calibrate_exec_timeout_ms(
                 harness_path,
@@ -400,6 +404,7 @@ def run_treereducer_with_check(
             symbolize=False,
             static_root_config=calibration_root,
             exec_timeout_ms=DEFAULT_EXEC_TIMEOUT_MS,
+            reference_executable=reference_executable,
         ) as calibration_runner_symbolize_0:
             symbolize_0_timeout_ms = calibrate_exec_timeout_ms(
                 harness_path,
@@ -506,6 +511,7 @@ def run_treereducer_with_check(
                 use_replay=fdp_trace_file is not None,
             ),
             exec_timeout_ms=exec_timeout_ms,
+            reference_executable=reference_executable,
         )
         if amortize_link
         else nullcontext(None)
@@ -523,6 +529,7 @@ def run_treereducer_with_check(
                 use_replay=fdp_trace_file is not None,
             ),
             exec_timeout_ms=exec_timeout_ms,
+            reference_executable=reference_executable,
         )
         if amortize_link
         else nullcontext(None)
