@@ -160,6 +160,56 @@ clang++ -g -O1 -fno-omit-frame-pointer \
     harness.cpp -o harness \
     $(pwd)/build/sanitizer/lib/libopencv_imgproc.a $(pwd)/build/sanitizer/lib/libopencv_core.a -lz
 
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -lz" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="-Wl,--as-needed /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_calib3d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_core.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_dnn.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_features2d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_flann.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_gapi.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_highgui.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgcodecs.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgproc.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_ml.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_objdetect.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_photo.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_stitching.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_video.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_videoio.so -Wl,--no-as-needed" \
+  --work-dir ./pch-amorlink-nosymbol-test \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="-Wl,--as-needed /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_calib3d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_core.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_dnn.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_features2d.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_flann.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_gapi.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_highgui.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgcodecs.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgproc.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_ml.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_objdetect.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_photo.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_stitching.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_video.so /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_videoio.so -Wl,--no-as-needed" \
+  --work-dir ./pch-normallink-symbol-test \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="-Wl,--start-group /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libade.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libIlmImf.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libittnotify.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libjpeg-turbo.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_calib3d.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_core.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_dnn.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_features2d.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_flann.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_gapi.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_highgui.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgcodecs.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_imgproc.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_ml.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_objdetect.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_photo.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_stitching.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_video.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopencv_videoio.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libopenjp2.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libpng.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libprotobuf.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libtiff.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libwebp.a /mnt/raid/home/lihaiying/HarnessMinimizer/benchmark/library-bug/opencv-7/build/sanitizer/lib/libzlib.a -Wl,--end-group" \
+  --work-dir ./pch-amorlink-nosymbol-teststatic \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4" \
+  --link-flags="-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -lz" \
+  --work-dir ./split-normallink-symbol \
+  --crash-input crash-input \
+  --split \
+  --symbolize \
+  --stable \
+  -o reduced.cpp
+
 opencv-8
 clang++ -g -O1 -fno-omit-frame-pointer \
     -fsanitize=address,undefined,fuzzer \
