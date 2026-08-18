@@ -27,6 +27,7 @@ class TestFdpComplexExample(unittest.TestCase):
             "-gline-tables-only",
             "-O0",
             "-Werror=uninitialized",
+            "-DHARNESS_MINIMIZER_STANDALONE=1",
             str(self.example),
             "-o",
             str(out_bin),

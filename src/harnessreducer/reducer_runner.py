@@ -1307,7 +1307,8 @@ def start_amortized_runner(
         )
     shared_libraries = link_inputs.shared_libraries
     runner_binary = _compile_harness_runner(link_inputs, static_root_config)
-    socket_path = f"/tmp/harness_runner_{os.getpid()}_{time.time_ns()}.sock"
+    socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
+    socket_path = str(Path(socket_dir) / "runner.sock")
     env = runtime_library_env(link_flags)
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = sanitizer_asan_options(
@@ -1371,14 +1372,7 @@ def start_amortized_runner(
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
-        try:
-            os.remove(socket_path)
-        except FileNotFoundError:
-            pass
-        try:
-            os.remove(socket_path + AMORTIZED_FALLBACK_STATE_SUFFIX)
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(socket_dir, ignore_errors=True)
 
 
 def run_amortized_reference_candidate(
