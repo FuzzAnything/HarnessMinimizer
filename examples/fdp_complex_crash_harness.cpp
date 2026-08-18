@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -119,3 +120,18 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
   return 0;
 }
+
+#ifdef HARNESS_MINIMIZER_STANDALONE
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    return 2;
+  }
+  std::ifstream input(argv[1], std::ios::binary);
+  if (!input) {
+    return 2;
+  }
+  const std::vector<uint8_t> data{
+      std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  return LLVMFuzzerTestOneInput(data.data(), data.size());
+}
+#endif
