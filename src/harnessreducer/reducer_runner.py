@@ -104,6 +104,12 @@ class DynamicCrashSite:
     offset: str
 
 
+class HarnessCrashDetected(RuntimeError):
+    def __init__(self, location: str):
+        self.location = location
+        super().__init__(f"Crash location is inside the harness: {location}")
+
+
 @dataclass(frozen=True)
 class DynamicLibraryHints:
     exact_paths: tuple[str, ...] = ()
@@ -1852,6 +1858,15 @@ def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> 
     return Path(frame_source).name == Path(harness_path).name
 
 
+def _source_location_matches_harness(location: str, harness_path: str | None) -> bool:
+    if not harness_path:
+        return False
+    match = SOURCE_LOCATION_PATTERN.search(location)
+    if not match:
+        return False
+    return _frame_matches_harness_source(match.group(0), harness_path)
+
+
 def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
     """Extract the first stack trace from symbolized sanitizer output.
 
@@ -1978,6 +1993,42 @@ def extract_symbolized_crash_location(
             ):
                 return location
     return first_location
+
+
+def extract_harness_crash_location(
+    output: str,
+    harness_path: str | None = None,
+) -> str | None:
+    """Return the harness source location when the original crash is in the harness."""
+    if not harness_path:
+        return None
+
+    runtime_error_match = RUNTIME_ERROR_PATTERN.search(output)
+    if runtime_error_match:
+        location_match = SOURCE_LOCATION_PATTERN.search(runtime_error_match.group(0))
+        if location_match and _source_location_matches_harness(
+            location_match.group(0),
+            harness_path,
+        ):
+            return location_match.group(0)
+
+    trace = extract_first_sanitizer_stack_trace(output)
+    if not trace:
+        return None
+
+    for line in trace.splitlines():
+        match = SOURCE_LOCATION_PATTERN.search(line)
+        location = match.group(0) if match else ""
+        if location and (
+            _is_generic_abort_frame(line, location)
+            or _is_generic_sanitizer_wrapper_frame(line, location)
+        ):
+            continue
+        if _frame_matches_harness_source(line, harness_path):
+            return location or line.strip()
+        if location:
+            return None
+    return None
 
 
 def count_first_stack_trace_frames(output: str) -> int:
@@ -2572,6 +2623,13 @@ def extract_crash_pattern_from_output(
             "skipping symbolized stack-trace reference capture."
         )
         return crash_pattern
+
+    harness_crash_location = extract_harness_crash_location(
+        symbolized_output,
+        harness_path=harness_path,
+    )
+    if harness_crash_location:
+        raise HarnessCrashDetected(harness_crash_location)
 
     symbolized_crash_pattern = _extract_crash_signature_from_output(symbolized_output)
     if symbolized_crash_pattern:
