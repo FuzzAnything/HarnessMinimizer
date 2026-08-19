@@ -20,6 +20,7 @@ from harnessreducer.reducer_runner import (
     extract_crash_pattern_from_output,
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
+    extract_harness_crash_location,
     extract_stack_trace,
     extract_symbolized_crash_location,
     get_crash_pattern_file,
@@ -31,6 +32,7 @@ from harnessreducer.reducer_runner import (
     get_symbolized_crash_location_file,
     get_symbolized_reference_crash_location_pattern,
     get_symbolized_reference_stack_depth,
+    HarnessCrashDetected,
     has_static_target_libraries,
     infer_target_dynamic_library_hints,
     normalize_crash_signature,
@@ -317,6 +319,50 @@ SUMMARY: AddressSanitizer: stack-overflow /root/src/c-ares/src/lib/ares_library_
     def test_extract_symbolized_crash_location_returns_none_without_source_location(self):
         self.assertIsNone(
             extract_symbolized_crash_location(SAMPLE_ASAN_OUTPUT_UNSYMBOLIZED)
+        )
+
+    def test_extract_harness_crash_location_detects_ubsan_runtime_error(self):
+        output = """\
+/tmp/harness.cpp:82:36: runtime error: load of value 10512, which is not a valid value for type 'ares_dns_class_t'
+    #0 0xaaa in LLVMFuzzerTestOneInput /tmp/harness.cpp:82:36
+    #1 0xbbb in ExecuteFilesOnyByOne /tmp/AFLplusplus/aflpp_driver.c:291:7
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /tmp/harness.cpp:82:36
+"""
+        self.assertEqual(
+            extract_harness_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/tmp/harness.cpp:82:36",
+        )
+
+    def test_extract_harness_crash_location_detects_asan_harness_top_frame(self):
+        output = """\
+==1==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000034
+    #0 0xaaa in LLVMFuzzerTestOneInput /tmp/harness.cpp:82:36
+    #1 0xbbb in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/tmp/fuzzer+0x123)
+SUMMARY: AddressSanitizer: heap-buffer-overflow /tmp/harness.cpp:82:36 in LLVMFuzzerTestOneInput
+"""
+        self.assertEqual(
+            extract_harness_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/tmp/harness.cpp:82:36",
+        )
+
+    def test_extract_harness_crash_location_skips_asan_wrapper_frames(self):
+        output = """\
+==1==ERROR: AddressSanitizer: negative-size-param: (size=-4)
+    #0 0xaaa in __asan_memcpy /root/llvm-project/compiler-rt/lib/asan/asan_interceptors_memintrinsics.cpp:31:3
+    #1 0xbbb in LLVMFuzzerTestOneInput /tmp/harness.cpp:42:3
+SUMMARY: AddressSanitizer: negative-size-param
+"""
+        self.assertEqual(
+            extract_harness_crash_location(output, harness_path="/tmp/harness.cpp"),
+            "/tmp/harness.cpp:42:3",
+        )
+
+    def test_extract_harness_crash_location_ignores_library_crash_with_harness_caller(self):
+        self.assertIsNone(
+            extract_harness_crash_location(
+                SAMPLE_ASAN_OUTPUT,
+                harness_path="/root/FuzzAgent/output/libaom/crash_002/reduced_poc.cpp",
+            )
         )
 
 
@@ -680,6 +726,28 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
 
             self.assertIsNone(get_symbolized_reference_crash_location_pattern())
             self.assertFalse(os.path.exists(get_symbolized_crash_location_file()))
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_extract_crash_pattern_stops_on_harness_crash(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            fast_output = "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /tmp/harness.cpp:82:36\n"
+            symbolized_output = """\
+/tmp/harness.cpp:82:36: runtime error: load of value 10512, which is not a valid value for type 'ares_dns_class_t'
+    #0 0xaaa in LLVMFuzzerTestOneInput /tmp/harness.cpp:82:36
+    #1 0xbbb in ExecuteFilesOnyByOne /tmp/AFLplusplus/aflpp_driver.c:291:7
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /tmp/harness.cpp:82:36
+"""
+            mock_run.side_effect = [
+                type("Proc", (), {"returncode": 77, "stdout": fast_output, "stderr": ""})(),
+                type("Proc", (), {"returncode": 77, "stdout": symbolized_output, "stderr": ""})(),
+            ]
+
+            with self.assertRaisesRegex(HarnessCrashDetected, "inside the harness"):
+                extract_crash_pattern_from_output(
+                    None,
+                    harness_path="/tmp/harness.cpp",
+                )
 
 
 class TestStackTraceStateManagement(unittest.TestCase):

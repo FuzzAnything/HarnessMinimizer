@@ -46,6 +46,7 @@ from harnessreducer.reducer_runner import (
     format_reduced_harness,
     get_work_dir,
     has_static_target_libraries,
+    HarnessCrashDetected,
     reset_stack_trace_state,
     reset_last_interesting_state,
     resolve_amortized_link_inputs,
@@ -771,12 +772,25 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     crash_pattern_kwargs = {}
     if config.symbolize:
         crash_pattern_kwargs["record_symbolized_crash_location"] = True
-    crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
-        config.crash_input,
-        harness_path=config.harness_path,
-        link_flags=config.link_flags,
-        **crash_pattern_kwargs,
-    )
+    try:
+        crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
+            config.crash_input,
+            harness_path=config.harness_path,
+            link_flags=config.link_flags,
+            **crash_pattern_kwargs,
+        )
+    except HarnessCrashDetected as exc:
+        print(f"[!] Warning: Crash location is inside the harness: {exc.location}")
+        print(
+            "[*] Harness minimization stopped early because this is a harness "
+            "crash, not a library crash."
+        )
+        return ReductionResult(
+            reduced_harness="",
+            tagged_harness="",
+            fdp_trace="",
+            success=False,
+        )
     if not crash_pattern_symbolize_0:
         return ReductionResult(
             reduced_harness="",

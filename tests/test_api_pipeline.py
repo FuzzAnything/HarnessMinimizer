@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from harnessreducer.api import ReductionConfig, TaggedHarness, process, reduce_with_config
+from harnessreducer.reducer_runner import HarnessCrashDetected
 
 
 class TestApiPipeline(unittest.TestCase):
@@ -28,6 +29,46 @@ class TestApiPipeline(unittest.TestCase):
                     amortize_link=True,
                 )
             )
+
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessreducer.api.resolve_amortized_link_inputs")
+    def test_pch_amortized_link_stops_before_reduction_for_harness_crash(
+        self,
+        mock_resolve_amortized,
+        mock_check_tree,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_reduce,
+    ):
+        mock_extract.side_effect = HarnessCrashDetected("/tmp/harness.cpp:82:36")
+
+        result = reduce_with_config(
+            ReductionConfig(
+                harness_path="/tmp/harness.cpp",
+                compile_flags="-std=c++17",
+                link_flags="-lm",
+                crash_input="/tmp/crash-input",
+                work_dir="/tmp/workdir",
+                phase3_mode="pch",
+                amortize_link=True,
+            )
+        )
+
+        self.assertFalse(result.success)
+        mock_resolve_amortized.assert_called_once_with("-lm")
+        mock_check_tree.assert_called_once()
+        mock_check_compile.assert_called_once()
+        mock_check_pattern.assert_not_called()
+        self.mock_check_symbolized_pattern.assert_not_called()
+        mock_tag.assert_not_called()
+        mock_reduce.assert_not_called()
 
     @patch("harnessreducer.api.emit_check_statistics_summary")
     @patch("harnessreducer.api.run_treereducer")
