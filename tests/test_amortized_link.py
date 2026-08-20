@@ -87,6 +87,71 @@ def test_amortized_link_resolves_multiple_dynamic_libraries(tmp_path: Path) -> N
     assert "-lpthread" in inputs.runner_link_flags
 
 
+def test_amortized_link_resolves_gnu_ld_script_to_loadable_elf(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "target.cpp"
+    real_library = tmp_path / "libscripted_real.so.1"
+    linker_script = tmp_path / "libscripted.so"
+    source.write_text(
+        'extern "C" int scripted_value() { return 7; }\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["clang++", "-shared", "-fPIC", str(source), "-o", str(real_library)],
+        check=True,
+    )
+    linker_script.write_text(
+        f"/* GNU ld script */\nGROUP ( {real_library} )\n",
+        encoding="utf-8",
+    )
+
+    inputs = reducer_runner.resolve_amortized_link_inputs(
+        f"-L{tmp_path} -lscripted -lpthread"
+    )
+    assert inputs.shared_libraries == (str(real_library.resolve()),)
+    assert inputs.static_libraries == ()
+    assert "-lpthread" in inputs.runner_link_flags
+
+
+def test_amortized_link_demotes_unresolved_shared_link_flag_to_runner_flags(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "target.cpp"
+    real_library = tmp_path / "libtarget.so"
+    bad_linker_script = tmp_path / "libbroken.so"
+    source.write_text(
+        'extern "C" int target_value() { return 11; }\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["clang++", "-shared", "-fPIC", str(source), "-o", str(real_library)],
+        check=True,
+    )
+    bad_linker_script.write_text(
+        "/* GNU ld script */\nGROUP ( /does/not/exist/libbroken.so.1 )\n",
+        encoding="utf-8",
+    )
+
+    inputs = reducer_runner.resolve_amortized_link_inputs(
+        f"-L{tmp_path} -ltarget -lbroken -lpthread"
+    )
+    assert inputs.shared_libraries == (str(real_library.resolve()),)
+    assert inputs.static_libraries == ()
+    assert "-lbroken" in inputs.runner_link_flags
+    assert "-lpthread" in inputs.runner_link_flags
+
+
+def test_amortized_link_rejects_non_elf_shared_library_without_script_target(
+    tmp_path: Path,
+) -> None:
+    fake_library = tmp_path / "libbroken.so"
+    fake_library.write_text("not an elf and not a linker script\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="loadable ELF shared library"):
+        reducer_runner.resolve_amortized_link_inputs(str(fake_library))
+
+
 def test_runner_dynamic_dependency_flags_retain_dynamic_libraries() -> None:
     inputs = reducer_runner.AmortizedLinkInputs(
         shared_libraries=("/tmp/libtarget.so",),
