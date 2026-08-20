@@ -87,6 +87,9 @@ ELF_NEEDED_PATTERN = re.compile(
 ELF_SONAME_PATTERN = re.compile(
     r"\(SONAME\)\s+Library soname: \[(?P<name>[^\]]+)\]"
 )
+LINKER_SCRIPT_SHARED_LIBRARY_PATTERN = re.compile(
+    r"(?P<path>[^()\s]+\.so(?:\.[^()\s]+)*)"
+)
 
 
 @dataclass(frozen=True)
@@ -365,6 +368,52 @@ def _is_shared_library_path(path: Path) -> bool:
 
 def _is_static_library_path(path: Path) -> bool:
     return path.name.endswith(".a")
+
+
+def _has_elf_magic(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def _resolve_linker_script_shared_library(
+    path: Path,
+    *,
+    seen: set[Path] | None = None,
+) -> Path | None:
+    candidate = path.expanduser().resolve()
+    if seen is None:
+        seen = set()
+    if candidate in seen:
+        return None
+    seen.add(candidate)
+    try:
+        script_text = candidate.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for match in LINKER_SCRIPT_SHARED_LIBRARY_PATTERN.finditer(script_text):
+        token = match.group("path")
+        referenced = Path(token)
+        if not referenced.is_absolute():
+            referenced = candidate.parent / referenced
+        referenced = referenced.expanduser().resolve()
+        if not referenced.exists():
+            continue
+        if _has_elf_magic(referenced):
+            return referenced
+        nested = _resolve_linker_script_shared_library(referenced, seen=seen)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _resolve_loadable_shared_library(path: Path) -> Path | None:
+    candidate = path.expanduser().resolve()
+    if _has_elf_magic(candidate):
+        return candidate
+    return _resolve_linker_script_shared_library(candidate)
 
 
 def _dedupe_preserving_order(values: list[str]) -> tuple[str, ...]:
@@ -777,7 +826,11 @@ def resolve_amortized_link_inputs(
     static_libraries: list[str] = []
     runner_link_flags: list[str] = []
 
-    def add_shared_library(path: Path) -> None:
+    def add_shared_library(
+        path: Path,
+        *,
+        fallback_flags: list[str] | None = None,
+    ) -> None:
         candidate = path.expanduser().resolve()
         if not candidate.exists():
             raise ValueError(f"Shared library does not exist: {candidate}")
@@ -786,12 +839,24 @@ def resolve_amortized_link_inputs(
                 "--amortize-link received an unsupported shared-library input: "
                 f"{candidate}"
             )
-        try:
-            with candidate.open("rb") as handle:
-                elf_magic = handle.read(4)
-        except OSError as exc:
-            raise ValueError(f"Could not inspect shared library {candidate}: {exc}") from exc
-        if elf_magic != b"\x7fELF":
+        resolved = _resolve_loadable_shared_library(candidate)
+        if resolved is not None and resolved != candidate:
+            print(
+                "[+] Resolved shared-library linker script for amortized-link: "
+                f"{candidate} -> {resolved}"
+            )
+            candidate = resolved
+        elif resolved is not None:
+            candidate = resolved
+        if resolved is None:
+            if fallback_flags is not None:
+                print(
+                    "[+] Treating non-loadable shared-library input as normal "
+                    "runner link flags for amortized-link: "
+                    f"{candidate} -> {' '.join(fallback_flags)}"
+                )
+                runner_link_flags.extend(fallback_flags)
+                return
             raise ValueError(
                 "--amortize-link requires a loadable ELF shared library, but "
                 f"{candidate} appears to be a linker script or another file type."
@@ -901,7 +966,7 @@ def resolve_amortized_link_inputs(
         elif _is_static_library_path(found):
             add_static_library(found)
         elif _is_shared_library_path(found):
-            add_shared_library(found)
+            add_shared_library(found, fallback_flags=original_library_flags)
         else:
             raise ValueError(f"Unsupported library input resolved from -l: {found}")
 
@@ -922,6 +987,26 @@ def resolve_amortized_link_inputs(
         runner_link_flags=tuple(runner_link_flags),
         plugin_link_flags=plugin_link_flags,
     )
+
+
+def _print_amortized_link_classification(link_inputs: AmortizedLinkInputs) -> None:
+    print("[+] Amortized-link target shared libraries:")
+    if link_inputs.shared_libraries:
+        for library in link_inputs.shared_libraries:
+            print(f"    {library}")
+    else:
+        print("    (none)")
+    print("[+] Amortized-link target static libraries:")
+    if link_inputs.static_libraries:
+        for library in link_inputs.static_libraries:
+            print(f"    {library}")
+    else:
+        print("    (none)")
+    print("[+] Amortized-link normal runner link flags:")
+    if link_inputs.runner_link_flags:
+        print("    " + " ".join(link_inputs.runner_link_flags))
+    else:
+        print("    (none)")
 
 
 def resolve_amortized_shared_libraries(link_flags: str | None) -> tuple[str, ...]:
@@ -1311,6 +1396,7 @@ def start_amortized_runner(
             f"{len(unfiltered_link_inputs.shared_libraries)} shared libraries "
             "for the amortized runner."
         )
+    _print_amortized_link_classification(link_inputs)
     shared_libraries = link_inputs.shared_libraries
     runner_binary = _compile_harness_runner(link_inputs, static_root_config)
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
