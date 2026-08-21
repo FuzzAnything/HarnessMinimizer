@@ -1824,6 +1824,110 @@ def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = 
     return proc
 
 
+def _run_restore_transition_stack_diagnostic(
+    source_path: str,
+    crash_pattern: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None,
+    *,
+    phase3_mode: str,
+    pch_artifacts: PchArtifacts | None,
+    symbolize: bool,
+) -> tuple[int, str, str | None]:
+    cmd = [
+        get_crash_tester_path(),
+        source_path,
+        crash_pattern,
+        "--crash-input",
+        crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+    ]
+    if fdp_trace_file:
+        cmd.extend(["--fdp-trace", fdp_trace_file])
+    if symbolize:
+        cmd.append("--symbolize")
+    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    append_exec_timeout_tester_args(cmd)
+
+    proc = run_command(
+        cmd,
+        "Restore-transition stack diagnostic failed",
+        ignore_errors=True,
+    )
+    output = proc.stdout + "\n" + proc.stderr
+    return proc.returncode, output, extract_first_sanitizer_stack_trace(output)
+
+
+def _append_restore_transition_stack_diagnostics(
+    log_path: str,
+    *,
+    section_label: str,
+    source_path: str,
+    phase3_mode: str,
+    pch_artifacts: PchArtifacts | None,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    fdp_trace_file: str | None,
+    crash_pattern_symbolize_0: str | None,
+    crash_pattern_symbolize_1: str | None,
+) -> None:
+    expected_dynamic_site = get_dynamic_reference_crash_site()
+    lines = [
+        f"\n--- {section_label}: {source_path} ---",
+        f"phase3_mode: {phase3_mode}",
+    ]
+    if expected_dynamic_site is not None:
+        lines.extend(
+            [
+                "expected_dynamic_crash_site:",
+                f"  library: {expected_dynamic_site.library_path}",
+                f"  offset: {expected_dynamic_site.offset}",
+            ]
+        )
+
+    for symbolize in (False, True):
+        pattern = (
+            crash_pattern_symbolize_1 or crash_pattern_symbolize_0 or ".*"
+            if symbolize
+            else crash_pattern_symbolize_0 or crash_pattern_symbolize_1 or ".*"
+        )
+        returncode, output, trace = _run_restore_transition_stack_diagnostic(
+            source_path,
+            pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file,
+            phase3_mode=phase3_mode,
+            pch_artifacts=pch_artifacts,
+            symbolize=symbolize,
+        )
+        mode_label = f"symbolize={int(symbolize)}"
+        lines.append(f"{mode_label} returncode: {returncode}")
+        if expected_dynamic_site is not None:
+            actual_site = extract_first_dynamic_library_crash_site(
+                output,
+                link_flags,
+                expected_library=expected_dynamic_site.library_path,
+            )
+            if actual_site is None:
+                lines.append(f"{mode_label} dynamic_crash_site: <not found>")
+            else:
+                lines.append(
+                    f"{mode_label} dynamic_crash_site: "
+                    f"{actual_site.library_path}+{actual_site.offset}"
+                )
+        lines.append(f"{mode_label} first_stack_trace:")
+        lines.append(trace if trace else "<no-first-stack-trace-found>")
+
+    with Path(log_path).open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+
 def check_tree_reducer() -> None:
     print("[+] Checking for tree-reducer availability...")
     run_command(
@@ -3120,8 +3224,52 @@ def run_treereducer(
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 
+    restore_transition_log_path = os.path.join(
+        get_work_dir(),
+        "reduced_harness.restore_transition.log",
+    )
+    if pch_artifacts is not None:
+        try:
+            os.remove(restore_transition_log_path)
+        except FileNotFoundError:
+            pass
+        header = [
+            "===== pre/post-restore stack diagnostics =====",
+            "These diagnostics are not used for the pass/fail decision above.",
+        ]
+        Path(restore_transition_log_path).write_text(
+            "\n".join(header) + "\n",
+            encoding="utf-8",
+        )
+        _append_restore_transition_stack_diagnostics(
+            restore_transition_log_path,
+            section_label="before_restore",
+            source_path=reduced_harness,
+            phase3_mode=PHASE3_PCH,
+            pch_artifacts=pch_artifacts,
+            crash_input=crash_input,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            fdp_trace_file=fdp_trace_file,
+            crash_pattern_symbolize_0=get_reference_crash_pattern_symbolize_0(),
+            crash_pattern_symbolize_1=get_reference_crash_pattern_symbolize_1(),
+        )
+
     if pch_artifacts is not None:
         restore_pch_includes(reduced_harness, pch_artifacts)
+        _append_restore_transition_stack_diagnostics(
+            restore_transition_log_path,
+            section_label="after_restore",
+            source_path=reduced_harness,
+            phase3_mode=PHASE3_DIRECT,
+            pch_artifacts=None,
+            crash_input=crash_input,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            fdp_trace_file=fdp_trace_file,
+            crash_pattern_symbolize_0=get_reference_crash_pattern_symbolize_0(),
+            crash_pattern_symbolize_1=get_reference_crash_pattern_symbolize_1(),
+        )
         if snapshot:
             last_interesting_file = get_last_interesting_file()
             if os.path.exists(last_interesting_file):
