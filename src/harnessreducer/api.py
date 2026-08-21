@@ -522,6 +522,7 @@ def _inline_direct_input_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
                 debug_stage="post_reduction_direct_input_inline",
+                retry_oom_without_rss_limit=True,
             )
         else:
             crash_preserved = validate_crash_pattern_and_stack_trace(
@@ -535,6 +536,7 @@ def _inline_direct_input_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
                 debug_stage="post_reduction_direct_input_inline",
+                retry_oom_without_rss_limit=True,
             )
         if crash_preserved:
             print("[+] Direct-input inline reduction preserved crash behavior.")
@@ -688,6 +690,7 @@ def inline_literals_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
                 debug_stage="post_reduction_fdp_inline",
+                retry_oom_without_rss_limit=True,
             )
         else:
             crash_preserved = validate_crash_pattern_and_stack_trace(
@@ -701,6 +704,7 @@ def inline_literals_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
                 debug_stage="post_reduction_fdp_inline",
+                retry_oom_without_rss_limit=True,
             )
         if crash_preserved:
             print("[+] Inline reduction preserved crash behavior.")
@@ -951,6 +955,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=validation_phase3_mode,
                 debug_stage="post_reduction_tree_harness_symbolize_1",
+                retry_oom_without_rss_limit=True,
             )
         else:
             validate_crash_pattern(
@@ -962,6 +967,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=validation_phase3_mode,
                 debug_stage="post_reduction_tree_harness_symbolize_0",
+                retry_oom_without_rss_limit=True,
             )
             validate_stack_trace(
                 reduced_harness,
@@ -973,6 +979,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 phase3_mode=validation_phase3_mode,
                 require_crash_pattern=crash_pattern_symbolize_1 is not None,
                 debug_stage="post_reduction_tree_harness_symbolize_1",
+                retry_oom_without_rss_limit=True,
             )
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
         reduced_harness,

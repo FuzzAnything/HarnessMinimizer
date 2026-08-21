@@ -63,6 +63,7 @@ def test_inline_literals_uses_fast_pattern_when_symbolized_pattern_is_missing(
     mock_validate.assert_called_once()
     assert mock_validate.call_args.args[1] == "FastPattern"
     assert mock_validate.call_args.args[2] is None
+    assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
 
 
 def test_inline_literals_supports_direct_input_without_fdp_trace(
@@ -107,6 +108,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     assert "size = ::fuzz_index;" in content
     mock_validate.assert_called_once()
     assert mock_validate.call_args.kwargs["fdp_trace_file"] is None
+    assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
 
 
 def test_inline_literals_supports_direct_input_after_parameter_type_reduction(
@@ -288,6 +290,7 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
     assert out.endswith(".inline.cpp")
     assert generated_headers == ()
     mock_validate.assert_called_once()
+    assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
     captured = capsys.readouterr()
     assert "FDP callsites remain" in captured.out
 

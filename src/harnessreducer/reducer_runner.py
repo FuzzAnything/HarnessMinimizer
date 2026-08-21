@@ -1850,6 +1850,12 @@ def debug_tester_args(stage: str) -> list[str]:
     ]
 
 
+def retry_oom_tester_args(enabled: bool) -> list[str]:
+    if not enabled:
+        return []
+    return ["--retry-oom-without-rss-limit"]
+
+
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         cmd,
@@ -1877,6 +1883,7 @@ def _run_restore_transition_stack_diagnostic(
     pch_artifacts: PchArtifacts | None,
     symbolize: bool,
     debug_stage: str,
+    retry_oom_without_rss_limit: bool = False,
 ) -> tuple[int, str, str | None]:
     cmd = [
         get_crash_tester_path(),
@@ -1892,6 +1899,7 @@ def _run_restore_transition_stack_diagnostic(
     if symbolize:
         cmd.append("--symbolize")
     cmd.extend(debug_tester_args(debug_stage))
+    cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
 
@@ -1917,6 +1925,7 @@ def _append_restore_transition_stack_diagnostics(
     fdp_trace_file: str | None,
     crash_pattern_symbolize_0: str | None,
     crash_pattern_symbolize_1: str | None,
+    retry_oom_without_rss_limit: bool = False,
 ) -> None:
     expected_dynamic_site = get_dynamic_reference_crash_site()
     lines = [
@@ -1951,6 +1960,7 @@ def _append_restore_transition_stack_diagnostics(
             debug_stage=(
                 f"post_reduction_{section_label}_symbolize_{int(symbolize)}"
             ),
+            retry_oom_without_rss_limit=retry_oom_without_rss_limit,
         )
         mode_label = f"symbolize={int(symbolize)}"
         lines.append(f"{mode_label} returncode: {returncode}")
@@ -3300,6 +3310,7 @@ def run_treereducer(
             fdp_trace_file=fdp_trace_file,
             crash_pattern_symbolize_0=get_reference_crash_pattern_symbolize_0(),
             crash_pattern_symbolize_1=get_reference_crash_pattern_symbolize_1(),
+            retry_oom_without_rss_limit=True,
         )
 
     if pch_artifacts is not None:
@@ -3316,6 +3327,7 @@ def run_treereducer(
             fdp_trace_file=fdp_trace_file,
             crash_pattern_symbolize_0=get_reference_crash_pattern_symbolize_0(),
             crash_pattern_symbolize_1=get_reference_crash_pattern_symbolize_1(),
+            retry_oom_without_rss_limit=True,
         )
         if snapshot:
             last_interesting_file = get_last_interesting_file()
@@ -3406,6 +3418,7 @@ def validate_crash_pattern(
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
+    retry_oom_without_rss_limit: bool = False,
 ) -> bool:
     """Run a fast symbolize=0 crash-pattern/depth validation."""
     validate_phase3_mode(phase3_mode)
@@ -3431,6 +3444,7 @@ def validate_crash_pattern(
     cmd.extend(dynamic_crash_site_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -3457,6 +3471,7 @@ def validate_stack_trace(
     validation_log_path: str | None = None,
     require_crash_pattern: bool = True,
     debug_stage: str | None = None,
+    retry_oom_without_rss_limit: bool = False,
 ) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
@@ -3509,6 +3524,7 @@ def validate_stack_trace(
     cmd.extend(symbolized_crash_location_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -3530,6 +3546,7 @@ def validate_symbolized_crash_pattern_depth_location(
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
+    retry_oom_without_rss_limit: bool = False,
 ) -> bool:
     """Run a symbolize=1 crash-pattern/depth/location validation."""
     if not crash_pattern:
@@ -3558,6 +3575,7 @@ def validate_symbolized_crash_pattern_depth_location(
     cmd.extend(required_symbolized_crash_location_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
+    cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -3584,6 +3602,7 @@ def validate_crash_pattern_and_stack_trace(
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
+    retry_oom_without_rss_limit: bool = False,
 ) -> bool:
     """Validate crash identity with symbolize=0, then stack identity with symbolize=1."""
     if not validate_crash_pattern(
@@ -3596,6 +3615,7 @@ def validate_crash_pattern_and_stack_trace(
         phase3_mode=phase3_mode,
         validation_log_path=validation_log_path,
         debug_stage=(f"{debug_stage}_symbolize_0" if debug_stage else None),
+        retry_oom_without_rss_limit=retry_oom_without_rss_limit,
     ):
         return False
 
@@ -3615,6 +3635,7 @@ def validate_crash_pattern_and_stack_trace(
         validation_log_path=validation_log_path,
         require_crash_pattern=crash_pattern_symbolize_1 is not None,
         debug_stage=(f"{debug_stage}_symbolize_1" if debug_stage else None),
+        retry_oom_without_rss_limit=retry_oom_without_rss_limit,
     )
 
 
