@@ -37,6 +37,7 @@ from harnessreducer.reducer_runner import (
     get_dynamic_reference_crash_site,
     get_last_interesting_file,
     get_normal_reference_stack_depth,
+    get_poc_runtime_args,
     get_reference_crash_pattern_symbolize_1,
     get_symbolized_reference_stack_depth,
     check_harness_compilation,
@@ -50,6 +51,7 @@ from harnessreducer.reducer_runner import (
     HarnessCrashDetected,
     reset_stack_trace_state,
     reset_last_interesting_state,
+    reset_poc_runtime_args,
     resolve_amortized_link_inputs,
     run_treereducer,
     run_command,
@@ -118,6 +120,7 @@ class ReductionResult:
     tagged_harness: str
     fdp_trace: str | None
     generated_headers: tuple[str, ...] = ()
+    poc_runtime_args: tuple[str, ...] = ()
     success: bool = True
 
 
@@ -769,6 +772,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     set_current_exec_timeout_ms(DEFAULT_EXEC_TIMEOUT_MS)
     reset_stack_trace_state()
     reset_last_interesting_state()
+    reset_poc_runtime_args()
     reset_check_state()
     if config.statistics:
         from harnessreducer.reducer_runner import reset_statistics_state
@@ -981,6 +985,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 debug_stage="post_reduction_tree_harness_symbolize_1",
                 retry_oom_without_rss_limit=True,
             )
+    reset_poc_runtime_args()
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
         reduced_harness,
         fdp_trace_file,
@@ -1015,6 +1020,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
         generated_headers=generated_headers,
+        poc_runtime_args=get_poc_runtime_args(),
         success=True
     )
 

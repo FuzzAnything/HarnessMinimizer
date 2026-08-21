@@ -28,6 +28,7 @@ from harnessreducer.reducer_runner import (
     get_dynamic_crash_site_file,
     get_dynamic_reference_crash_site,
     get_normal_reference_stack_depth,
+    get_poc_runtime_args,
     get_reference_crash_pattern_symbolize_0,
     get_reference_crash_pattern_symbolize_1,
     get_symbolized_crash_location_file,
@@ -38,6 +39,7 @@ from harnessreducer.reducer_runner import (
     infer_target_dynamic_library_hints,
     normalize_crash_signature,
     get_stack_trace_file,
+    reset_poc_runtime_args,
     reset_stack_trace_state,
     set_dynamic_reference_crash_site,
     set_symbolized_reference_crash_location_pattern,
@@ -45,6 +47,7 @@ from harnessreducer.reducer_runner import (
     set_symbolized_reference_stack_depth,
     stack_depth_tester_args,
     symbolized_crash_location_tester_args,
+    validate_crash_pattern,
     validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
     validate_stack_trace,
@@ -843,6 +846,28 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             },
         )()
         self.assertTrue(ct_stack_depth_is_advisory(args, use_symbolize=True))
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_records_verified_poc_runtime_args(self, mock_run):
+        reset_stack_trace_state()
+        reset_poc_runtime_args()
+        mock_run.return_value = SimpleNamespace(
+            returncode=77,
+            stdout="HARNESSREDUCER_POC_RUNTIME_ARG=-rss_limit_mb=0\n",
+            stderr="",
+        )
+
+        ok = validate_crash_pattern(
+            "candidate.cpp",
+            "AddressSanitizer",
+            "seed.bin",
+            "-O2",
+            "-lm",
+            retry_oom_without_rss_limit=True,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(get_poc_runtime_args(), ("-rss_limit_mb=0",))
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):

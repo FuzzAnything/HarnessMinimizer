@@ -49,6 +49,7 @@ CALIBRATION_PROBE_RUNS = 5
 CALIBRATION_WARMUP_RUNS = 1
 CALIBRATED_EXEC_TIMEOUT_MULTIPLIER = 8
 EXEC_TIME_MARKER_PREFIX = "HARNESSREDUCER_EXEC_TIME_MS="
+POC_RUNTIME_ARG_MARKER_PREFIX = "HARNESSREDUCER_POC_RUNTIME_ARG="
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
 CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
@@ -67,6 +68,7 @@ DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
 CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
 REDUCTION_DEBUG_LOG_PATH: str | None = None
+POC_RUNTIME_ARGS: list[str] = []
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
@@ -226,6 +228,28 @@ def set_current_exec_timeout_ms(timeout_ms: int | None) -> None:
 
 def get_current_exec_timeout_ms() -> int | None:
     return CURRENT_EXEC_TIMEOUT_MS
+
+
+def reset_poc_runtime_args() -> None:
+    POC_RUNTIME_ARGS.clear()
+
+
+def get_poc_runtime_args() -> tuple[str, ...]:
+    return tuple(POC_RUNTIME_ARGS)
+
+
+def _record_poc_runtime_args_from_validation(
+    proc: subprocess.CompletedProcess[str],
+) -> None:
+    if proc.returncode != 77:
+        return
+    output = f"{proc.stdout}\n{proc.stderr}"
+    for line in output.splitlines():
+        if not line.startswith(POC_RUNTIME_ARG_MARKER_PREFIX):
+            continue
+        runtime_arg = line[len(POC_RUNTIME_ARG_MARKER_PREFIX):].strip()
+        if runtime_arg and runtime_arg not in POC_RUNTIME_ARGS:
+            POC_RUNTIME_ARGS.append(runtime_arg)
 
 
 def append_exec_timeout_tester_args(
@@ -3455,6 +3479,7 @@ def validate_crash_pattern(
         "Fast crash-pattern validation failed.",
         ignore_errors=True,
     )
+    _record_poc_runtime_args_from_validation(proc)
     if proc.returncode != 77:
         _write_validation_failure_log(validation_log_path, proc)
     return proc.returncode == 77
@@ -3531,6 +3556,7 @@ def validate_stack_trace(
         cmd.extend(debug_tester_args(debug_stage))
 
     proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
+    _record_poc_runtime_args_from_validation(proc)
     if validation_log_path is not None and proc.returncode != 77:
         _write_validation_failure_log(validation_log_path, proc)
     return proc.returncode == 77
@@ -3586,6 +3612,7 @@ def validate_symbolized_crash_pattern_depth_location(
         "Symbolized crash-location validation failed.",
         ignore_errors=True,
     )
+    _record_poc_runtime_args_from_validation(proc)
     if validation_log_path is not None and proc.returncode != 77:
         _write_validation_failure_log(validation_log_path, proc)
     return proc.returncode == 77
