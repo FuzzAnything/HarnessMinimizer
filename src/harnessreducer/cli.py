@@ -5,6 +5,19 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
+from harnessreducer.reducer_runner import get_debug_log_path
+
+
+def _stage_debug_log(output: str) -> None:
+    debug_log = get_debug_log_path()
+    if not debug_log or not Path(debug_log).is_file():
+        return
+
+    destination = Path(output).resolve().parent / Path(debug_log).name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if Path(debug_log).resolve() != destination:
+        shutil.copy2(debug_log, destination)
+    print(f"Debug log saved to: {destination}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +99,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "Follow the normal reduction path while recording every candidate's "
+            "compile and crash-oracle result in reduction_debug.log."
+        ),
+    )
+    parser.add_argument(
         "--symbolize",
         action="store_true",
         help=(
@@ -141,6 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.amortize_link and args.phase3_mode == "direct":
         parser.error("--amortize-link cannot be combined with --direct/--single-step")
+    if args.debug and args.check:
+        parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
 
     config = ReductionConfig(
         harness_path=args.harness,
@@ -155,10 +178,15 @@ def main(argv: list[str] | None = None) -> int:
         statistics=args.statistics,
         slice_enabled=args.slice,
         check=args.check,
+        debug=args.debug,
         snapshot=args.snapshot,
         symbolize=args.symbolize,
     )
-    result = reduce_with_config(config)
+    try:
+        result = reduce_with_config(config)
+    finally:
+        if args.debug:
+            _stage_debug_log(args.output)
     if not result.success:
         print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
         return 0

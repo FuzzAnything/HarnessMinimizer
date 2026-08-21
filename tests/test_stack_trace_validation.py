@@ -8,6 +8,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from harnessreducer.reducer_runner import (
@@ -74,6 +75,7 @@ ct_check_crash_location = _ct_module._check_crash_location
 ct_check_dynamic_crash_site = _ct_module._check_dynamic_crash_site
 ct_stack_depth_is_advisory = _ct_module._stack_depth_is_advisory
 ct_compile_error_mentions_uninitialized = _ct_module.compile_error_mentions_uninitialized
+ct_append_debug_record = _ct_module._append_debug_record
 
 
 # --- Sample ASan output for testing ---
@@ -1025,6 +1027,45 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--symbolize", symbolized_cmd)
             self.assertIn("--skip-crash-pattern", symbolized_cmd)
             self.assertIn(".*", symbolized_cmd)
+
+    def test_crash_tester_debug_record_contains_candidate_oracle_details(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            debug_log = Path(tmpdir) / "reduction_debug.log"
+            source = Path(tmpdir) / "candidate.cpp"
+            source.write_text("int main() { return 0; }\n", encoding="utf-8")
+            args = SimpleNamespace(
+                debug_log=str(debug_log),
+                debug_stage="reduction_candidate",
+                source=str(source),
+                _debug_compile_success=True,
+                _debug_execution_return_code=77,
+                _debug_crash_pattern_matched=True,
+                _debug_dynamic_crash_site_found=True,
+                _debug_dynamic_crash_site_matched=True,
+                _debug_dynamic_crash_site=DynamicCrashSite(
+                    library_path="/tmp/libtarget.so",
+                    library_name="libtarget.so",
+                    offset="0x1234",
+                ),
+                _debug_first_stack_trace="#0 0x1234 in target /src/target.c:10:2",
+                _last_compile_error=None,
+                _last_compile_cmd=["clang++", str(source)],
+            )
+
+            ct_append_debug_record(args, 77)
+
+            text = debug_log.read_text(encoding="utf-8")
+            self.assertIn("stage: reduction_candidate", text)
+            self.assertIn(f"source_path: {source}", text)
+            self.assertIn("compile_success: yes", text)
+            self.assertIn("execution_return_code: 77", text)
+            self.assertIn("tester_return_code: 77", text)
+            self.assertIn("returned_77: yes", text)
+            self.assertIn("crash_pattern_matched: yes", text)
+            self.assertIn("dynamic_crash_site_found: yes", text)
+            self.assertIn("dynamic_crash_site_matched: yes", text)
+            self.assertIn("/tmp/libtarget.so+0x1234", text)
+            self.assertIn("#0 0x1234 in target", text)
 
 
 if __name__ == "__main__":

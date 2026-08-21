@@ -110,6 +110,7 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--symbolize` | No | Ablation mode. Runs reduction candidates with sanitizer `symbolize=1` and validates the symbolized crash pattern, symbolized first-stack-trace depth, and symbolized crash location instead of the default fast `symbolize=0` oracle. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
+| `--debug` | No | Keep the normal reduction oracle and write detailed records for every candidate and post-reduction validation to `reduction_debug.log`. Cannot be combined with `--check`. |
 | `--snapshot` | No | Enable `last_interesting.cpp` snapshotting during tree reduction and allow snapshot-based retry/fallback after reduction if inline validation fails. Disabled by default. |
 | `--direct`, `--single-step` | No | Use the single-step compile+link path. `--single-step` is the clearer alias; `--direct` is kept for compatibility. |
 | `--split` | No | Use two-step mode: compile the full source to an object, then link it. No PCH is used. This is the default when no Phase 3 mode is specified. |
@@ -234,6 +235,17 @@ When enabled, HarnessReducer:
 - writes each candidate's extracted full first stack trace and pre-harness comparison trace to `check_candidate_stack_traces.log` in the work directory for manual inspection; when a candidate returns `77`, its source code is also pasted into that log entry
 
 This mode is for diagnostics only; it does not change the normal reducer's stored fast-path and symbolized reference depths. It is separate from public `--symbolize` ablation mode, which uses crash-location matching rather than full-stack drift statistics. During `--check`, each candidate log entry also records whether compilation failed and whether the failure matched an uninitialized-variable diagnostic.
+
+### `--debug`
+
+`--debug` keeps the normal candidate path, including the selected Phase 3 mode,
+stable mode, and amortized linking. It does not use the separate `--check`
+oracle. Each candidate and post-reduction validation appends a locked record to
+`reduction_debug.log` containing the source path, compile result, executable and
+tester return codes, crash-pattern result, dynamic crash-site result, and first
+stack trace. Candidate records may appear out of order because tree reduction
+runs multiple workers concurrently. The CLI copies the log next to the requested
+`--output`, so it remains available when no fixed `--work-dir` was supplied.
 
 ### `--snapshot`
 
@@ -496,6 +508,7 @@ During reduction, the work directory may also contain artifacts such as:
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `symbolized_crash_location.pattern` — stored normalized source location recorded for `--symbolize` reduction; candidate checks receive the same pattern directly as an argument
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
+- `reduction_debug.log` — per-candidate and post-reduction oracle details when `--debug` is enabled
 - `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
 - `reduced_harness.cpp` — tree-reducer output before final copy
 - `*.inline.cpp` — FDP-inlined variant

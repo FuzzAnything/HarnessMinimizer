@@ -41,6 +41,7 @@ from harnessreducer.reducer_runner import (
     get_symbolized_reference_stack_depth,
     check_harness_compilation,
     compile_dump_mode_harness,
+    configure_debug_logging,
     configure_work_dir,
     dump_fdp_trace,
     format_reduced_harness,
@@ -53,8 +54,10 @@ from harnessreducer.reducer_runner import (
     run_treereducer,
     run_command,
     set_current_exec_timeout_ms,
+    validate_crash_pattern,
     validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
+    validate_stack_trace,
     validate_phase3_mode,
     DEFAULT_EXEC_TIMEOUT_MS,
 )
@@ -103,6 +106,7 @@ class ReductionConfig:
     statistics: bool = False
     slice_enabled: bool = False
     check: bool = False
+    debug: bool = False
     snapshot: bool = False
     amortize_link: bool = False
     symbolize: bool = False
@@ -517,6 +521,7 @@ def _inline_direct_input_in_reduced_harness(
                 fdp_trace_file=None,
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
+                debug_stage="post_reduction_direct_input_inline",
             )
         else:
             crash_preserved = validate_crash_pattern_and_stack_trace(
@@ -529,6 +534,7 @@ def _inline_direct_input_in_reduced_harness(
                 fdp_trace_file=None,
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
+                debug_stage="post_reduction_direct_input_inline",
             )
         if crash_preserved:
             print("[+] Direct-input inline reduction preserved crash behavior.")
@@ -681,6 +687,7 @@ def inline_literals_in_reduced_harness(
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
+                debug_stage="post_reduction_fdp_inline",
             )
         else:
             crash_preserved = validate_crash_pattern_and_stack_trace(
@@ -693,6 +700,7 @@ def inline_literals_in_reduced_harness(
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=phase3_mode,
                 validation_log_path=validation_log_path,
+                debug_stage="post_reduction_fdp_inline",
             )
         if crash_preserved:
             print("[+] Inline reduction preserved crash behavior.")
@@ -751,6 +759,9 @@ def inline_literals_in_reduced_harness(
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
+    if config.debug and config.check:
+        raise ValueError("debug and check modes cannot be enabled together.")
+    configure_debug_logging(config.debug)
     set_current_exec_timeout_ms(DEFAULT_EXEC_TIMEOUT_MS)
     reset_stack_trace_state()
     reset_last_interesting_state()
@@ -925,6 +936,44 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             symbolize=config.symbolize,
         )
     format_reduced_harness(reduced_harness)
+    if config.debug:
+        print(
+            "[DEBUG] Recording direct post-reduction validation for the "
+            "tree-reduced harness."
+        )
+        if config.symbolize:
+            validate_symbolized_crash_pattern_depth_location(
+                reduced_harness,
+                crash_pattern_symbolize_1,
+                config.crash_input,
+                config.compile_flags,
+                config.link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=validation_phase3_mode,
+                debug_stage="post_reduction_tree_harness_symbolize_1",
+            )
+        else:
+            validate_crash_pattern(
+                reduced_harness,
+                crash_pattern_symbolize_0,
+                config.crash_input,
+                config.compile_flags,
+                config.link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=validation_phase3_mode,
+                debug_stage="post_reduction_tree_harness_symbolize_0",
+            )
+            validate_stack_trace(
+                reduced_harness,
+                crash_pattern_symbolize_1,
+                config.crash_input,
+                config.compile_flags,
+                config.link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=validation_phase3_mode,
+                require_crash_pattern=crash_pattern_symbolize_1 is not None,
+                debug_stage="post_reduction_tree_harness_symbolize_1",
+            )
     post_inline_harness, generated_headers = inline_literals_in_reduced_harness(
         reduced_harness,
         fdp_trace_file,
@@ -974,6 +1023,7 @@ def process(
     statistics: bool = False,
     slice_enabled: bool = False,
     check: bool = False,
+    debug: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = False,
@@ -990,6 +1040,7 @@ def process(
         statistics=statistics,
         slice_enabled=slice_enabled,
         check=check,
+        debug=debug,
         snapshot=snapshot,
         symbolize=symbolize,
     )

@@ -35,6 +35,12 @@ class TestCliPhase3Mode(unittest.TestCase):
         )
         self.assertTrue(args.symbolize)
 
+    def test_debug_argument_is_available(self):
+        args = build_parser().parse_args(
+            ["harness.cpp", "-o", "reduced.cpp", "--debug"]
+        )
+        self.assertTrue(args.debug)
+
     def test_amortize_link_rejects_direct(self):
         with self.assertRaisesRegex(SystemExit, "2"):
             main(
@@ -44,6 +50,18 @@ class TestCliPhase3Mode(unittest.TestCase):
                     "reduced.cpp",
                     "--amortize-link",
                     "--direct",
+                ]
+            )
+
+    def test_debug_rejects_check_mode(self):
+        with self.assertRaisesRegex(SystemExit, "2"):
+            main(
+                [
+                    "harness.cpp",
+                    "-o",
+                    "reduced.cpp",
+                    "--debug",
+                    "--check",
                 ]
             )
 
