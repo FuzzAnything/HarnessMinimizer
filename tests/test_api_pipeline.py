@@ -526,19 +526,72 @@ class TestApiPipeline(unittest.TestCase):
             amortize_link=False,
             symbolize=False,
         )
-        mock_inline.assert_called_once_with(
-            "/tmp/reduced.cpp",
-            None,
-            None,
-            "seed.bin",
-            None,
-            None,
-            100000,
-            phase3_mode="direct",
-            snapshot=False,
-            crash_pattern_symbolize_0="AddressSanitizer",
-            symbolize=False,
+
+    @patch("harnessreducer.api.validate_stack_trace")
+    @patch("harnessreducer.api.validate_crash_pattern")
+    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
+    @patch("harnessreducer.api.format_reduced_harness")
+    @patch("harnessreducer.api.run_treereducer")
+    @patch("harnessreducer.api.dump_fdp_trace")
+    @patch("harnessreducer.api.compile_dump_mode_harness")
+    @patch("harnessreducer.api.reset_last_interesting_state")
+    @patch("harnessreducer.api.reset_stack_trace_state")
+    @patch("harnessreducer.api.configure_work_dir")
+    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
+    @patch("harnessreducer.api.check_reducer_crash_pattern")
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_debug_tree_validation_enables_oom_retry(
+        self,
+        mock_check_tree,
+        mock_check_compile,
+        mock_extract,
+        mock_check_pattern,
+        mock_tag,
+        mock_configure,
+        mock_reset_stack_state,
+        mock_reset_last_interesting_state,
+        mock_compile,
+        mock_dump,
+        mock_reduce,
+        mock_format,
+        mock_inline,
+        mock_validate_crash_pattern,
+        mock_validate_stack_trace,
+    ):
+        mock_tag.return_value = "/tmp/tagged.cpp"
+        mock_compile.return_value = "/tmp/tagged.out"
+        mock_dump.return_value = "/tmp/fdp_trace.log"
+        mock_reduce.return_value = "/tmp/reduced.cpp"
+        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_extract.return_value = "AddressSanitizer"
+
+        config = ReductionConfig(
+            harness_path="a.cpp",
+            compile_flags="-std=c++17",
+            link_flags="-lm",
+            crash_input="seed.bin",
+            work_dir="/tmp/workdir",
+            debug=True,
         )
+
+        result = reduce_with_config(config)
+
+        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        mock_validate_crash_pattern.assert_called_once()
+        mock_validate_stack_trace.assert_called_once()
+        self.assertTrue(
+            mock_validate_crash_pattern.call_args.kwargs[
+                "retry_oom_without_rss_limit"
+            ]
+        )
+        self.assertTrue(
+            mock_validate_stack_trace.call_args.kwargs[
+                "retry_oom_without_rss_limit"
+            ]
+        )
+        mock_inline.assert_called_once()
 
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")

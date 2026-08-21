@@ -31,3 +31,10 @@ harnessreducer harness.cpp \
   --amortize-link \
   --stable \
   -o reduced.cpp
+
+-rss_limit_mb=0
+
+clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
+    reduced.cpp -o reduce \
+    -I$(pwd)/build/sanitizer/include \
+    -Wl,--as-needed $(pwd)/build/sanitizer/lib/libtiffxx.so $(pwd)/build/sanitizer/lib/libtiff.so -Wl,--no-as-needed -lz -ljpeg -ljbig -llzma -lzstd -lwebp -lsharpyuv -lLerc -ldeflate -lstdc++ -lm

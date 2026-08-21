@@ -39,6 +39,7 @@ UNINITIALIZED_COMPILE_ERROR_PATTERN = re.compile(r"(?i)(?:\[-Wuninitialized\]|un
 AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
     r"dlopen candidate failed: .*undefined symbol:"
 )
+LIBFUZZER_OOM_PATTERN = re.compile(r"ERROR:\s*libFuzzer:\s*out-of-memory\b")
 AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL = 1000
 
 
@@ -178,7 +179,9 @@ def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> N
         f"pid: {os.getpid()}",
         f"source_path: {Path(args.source).resolve()}",
         f"compile_success: {_debug_field(getattr(args, '_debug_compile_success', None))}",
+        f"first_execution_return_code: {_debug_field(getattr(args, '_debug_first_execution_return_code', None))}",
         f"execution_return_code: {_debug_field(getattr(args, '_debug_execution_return_code', None))}",
+        f"oom_retry_attempted: {_debug_field(getattr(args, '_debug_oom_retry_attempted', None))}",
         f"tester_return_code: {tester_return_code}",
         f"returned_77: {_debug_field(tester_return_code == 77)}",
         f"crash_pattern_matched: {_debug_field(getattr(args, '_debug_crash_pattern_matched', None))}",
@@ -641,6 +644,49 @@ def run_executable(
     return status, run_log, elapsed_ms
 
 
+def _standalone_retry_exec_cmd_without_rss_limit(exec_cmd: list[str]) -> list[str]:
+    if not exec_cmd:
+        return exec_cmd
+    return [exec_cmd[0], "-rss_limit_mb=0", *exec_cmd[1:]]
+
+
+def _should_retry_without_rss_limit(
+    args: argparse.Namespace,
+    run_log: str,
+) -> bool:
+    return bool(
+        getattr(args, "retry_oom_without_rss_limit", False)
+        and LIBFUZZER_OOM_PATTERN.search(run_log)
+    )
+
+
+def run_standalone_candidate(
+    args: argparse.Namespace,
+    exec_cmd: list[str],
+    *,
+    env: dict[str, str],
+) -> tuple[int, str, int]:
+    status, run_log, exec_time_ms = run_executable(
+        exec_cmd,
+        env=env,
+        exec_timeout_ms=args.exec_timeout_ms,
+    )
+    args._debug_first_execution_return_code = status
+    args._debug_oom_retry_attempted = False
+
+    if not _should_retry_without_rss_limit(args, run_log):
+        return status, run_log, exec_time_ms
+
+    args._debug_oom_retry_attempted = True
+    retry_cmd = _standalone_retry_exec_cmd_without_rss_limit(exec_cmd)
+    retry_status, retry_log, retry_exec_time_ms = run_executable(
+        retry_cmd,
+        env=env,
+        exec_timeout_ms=args.exec_timeout_ms,
+    )
+    return retry_status, retry_log, retry_exec_time_ms
+
+
 def should_retry_amortized_plugin_with_fallback(status: int, run_log: str) -> bool:
     return status == 125 and bool(AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN.search(run_log))
 
@@ -846,6 +892,7 @@ def main() -> int:
     parser.add_argument("--print-exec-time-ms", action="store_true", help="Print the measured execution time marker")
     parser.add_argument("--debug-log", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--debug-stage", type=str, default="unspecified", help=argparse.SUPPRESS)
+    parser.add_argument("--retry-oom-without-rss-limit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
         "--amortized-plugin-link-flags",
@@ -857,7 +904,9 @@ def main() -> int:
     args = parser.parse_args()
     args._last_exec_time_ms = None
     args._debug_compile_success = None
+    args._debug_first_execution_return_code = None
     args._debug_execution_return_code = None
+    args._debug_oom_retry_attempted = None
     args._debug_crash_pattern_matched = None
     args._debug_dynamic_crash_site_found = None
     args._debug_dynamic_crash_site_matched = None
@@ -920,10 +969,10 @@ def main() -> int:
                 return _finalize_result(args, -1)
         else:
             exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-            status, run_log, exec_time_ms = run_executable(
+            status, run_log, exec_time_ms = run_standalone_candidate(
+                args,
                 exec_cmd,
                 env=env,
-                exec_timeout_ms=args.exec_timeout_ms,
             )
             args._last_exec_time_ms = exec_time_ms
 

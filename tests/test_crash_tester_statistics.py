@@ -45,6 +45,60 @@ class TestCrashTesterStatistics(unittest.TestCase):
             self.assertIn("-fsanitize=address,undefined", compile_cmd)
             self.assertNotIn("-fsanitize=address,fuzzer,undefined", compile_cmd)
 
+    def test_run_standalone_candidate_retries_libfuzzer_oom_without_rss_limit(self):
+        args = Namespace(
+            exec_timeout_ms=1234,
+            retry_oom_without_rss_limit=True,
+            _debug_first_execution_return_code=None,
+            _debug_oom_retry_attempted=None,
+        )
+
+        with patch(
+            "tests.crash_tester.run_executable",
+            side_effect=[
+                (71, "ERROR: libFuzzer: out-of-memory (malloc(42))", 10),
+                (77, "SUMMARY: AddressSanitizer: heap-buffer-overflow", 11),
+            ],
+        ) as mock_run:
+            status, run_log, exec_time_ms = crash_tester.run_standalone_candidate(
+                args,
+                ["/tmp/poc.out", "seed.bin"],
+                env={},
+            )
+
+        self.assertEqual(status, 77)
+        self.assertIn("AddressSanitizer", run_log)
+        self.assertEqual(exec_time_ms, 11)
+        self.assertEqual(args._debug_first_execution_return_code, 71)
+        self.assertTrue(args._debug_oom_retry_attempted)
+        self.assertEqual(mock_run.call_count, 2)
+        retry_cmd = mock_run.call_args_list[1].args[0]
+        self.assertEqual(retry_cmd, ["/tmp/poc.out", "-rss_limit_mb=0", "seed.bin"])
+
+    def test_run_standalone_candidate_does_not_retry_when_disabled(self):
+        args = Namespace(
+            exec_timeout_ms=1234,
+            retry_oom_without_rss_limit=False,
+            _debug_first_execution_return_code=None,
+            _debug_oom_retry_attempted=None,
+        )
+
+        with patch(
+            "tests.crash_tester.run_executable",
+            return_value=(71, "ERROR: libFuzzer: out-of-memory (malloc(42))", 10),
+        ) as mock_run:
+            status, _run_log, exec_time_ms = crash_tester.run_standalone_candidate(
+                args,
+                ["/tmp/poc.out", "seed.bin"],
+                env={},
+            )
+
+        self.assertEqual(status, 71)
+        self.assertEqual(exec_time_ms, 10)
+        self.assertEqual(args._debug_first_execution_return_code, 71)
+        self.assertFalse(args._debug_oom_retry_attempted)
+        mock_run.assert_called_once()
+
     def test_update_statistics_file_accumulates_counts_and_probabilities(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             stats_path = Path(tmpdir) / "statistics.txt"
