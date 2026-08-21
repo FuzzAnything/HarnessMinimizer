@@ -40,6 +40,7 @@ SOURCE_COVERAGE_DATA_FILE_NAME = "coverage.profdata"
 SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
 SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
 STATISTICS_FILE_NAME = "statistics.txt"
+DEBUG_LOG_FILE_NAME = "reduction_debug.log"
 SLICED_HARNESS_SUFFIX = ".sliced"
 DEFAULT_EXEC_TIMEOUT_MS = 300_000
 CALIBRATED_EXEC_TIMEOUT_MIN_MS = 2_000
@@ -65,6 +66,7 @@ SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
 DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
 CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
+REDUCTION_DEBUG_LOG_PATH: str | None = None
 # Matches symbolized stack frames like:
 #   #0 0x5ea4dfe78fe6 in av1_func /root/src/file.c:444:18
 #   #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/path/fuzzer+0x46068f)
@@ -1809,6 +1811,40 @@ def get_work_dir() -> str:
     return configure_work_dir(None)
 
 
+def configure_debug_logging(enabled: bool) -> str | None:
+    global REDUCTION_DEBUG_LOG_PATH
+
+    if not enabled:
+        REDUCTION_DEBUG_LOG_PATH = None
+        return None
+
+    debug_log_path = str(Path(get_work_dir()) / DEBUG_LOG_FILE_NAME)
+    Path(debug_log_path).write_text(
+        "===== HarnessMinimizer normal-path reduction debug log =====\n"
+        "Candidate records can be out of order because treereduce-c runs "
+        "multiple workers concurrently.\n",
+        encoding="utf-8",
+    )
+    REDUCTION_DEBUG_LOG_PATH = debug_log_path
+    print(f"[DEBUG] Reduction candidate log: {debug_log_path}")
+    return debug_log_path
+
+
+def get_debug_log_path() -> str | None:
+    return REDUCTION_DEBUG_LOG_PATH
+
+
+def debug_tester_args(stage: str) -> list[str]:
+    if REDUCTION_DEBUG_LOG_PATH is None:
+        return []
+    return [
+        "--debug-log",
+        REDUCTION_DEBUG_LOG_PATH,
+        "--debug-stage",
+        stage,
+    ]
+
+
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         cmd,
@@ -1835,6 +1871,7 @@ def _run_restore_transition_stack_diagnostic(
     phase3_mode: str,
     pch_artifacts: PchArtifacts | None,
     symbolize: bool,
+    debug_stage: str,
 ) -> tuple[int, str, str | None]:
     cmd = [
         get_crash_tester_path(),
@@ -1849,6 +1886,7 @@ def _run_restore_transition_stack_diagnostic(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if symbolize:
         cmd.append("--symbolize")
+    cmd.extend(debug_tester_args(debug_stage))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
 
@@ -1905,6 +1943,9 @@ def _append_restore_transition_stack_diagnostics(
             phase3_mode=phase3_mode,
             pch_artifacts=pch_artifacts,
             symbolize=symbolize,
+            debug_stage=(
+                f"post_reduction_{section_label}_symbolize_{int(symbolize)}"
+            ),
         )
         mode_label = f"symbolize={int(symbolize)}"
         lines.append(f"{mode_label} returncode: {returncode}")
@@ -3150,6 +3191,7 @@ def run_treereducer(
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(debug_tester_args("reduction_candidate"))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
     if symbolize:
@@ -3358,6 +3400,7 @@ def validate_crash_pattern(
     fdp_trace_file: str | None = None,
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
+    debug_stage: str | None = None,
 ) -> bool:
     """Run a fast symbolize=0 crash-pattern/depth validation."""
     validate_phase3_mode(phase3_mode)
@@ -3385,6 +3428,8 @@ def validate_crash_pattern(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
+    if debug_stage:
+        cmd.extend(debug_tester_args(debug_stage))
 
     proc = run_command(
         cmd,
@@ -3406,6 +3451,7 @@ def validate_stack_trace(
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     require_crash_pattern: bool = True,
+    debug_stage: str | None = None,
 ) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
@@ -3460,6 +3506,8 @@ def validate_stack_trace(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
+    if debug_stage:
+        cmd.extend(debug_tester_args(debug_stage))
 
     proc = run_command(cmd, "Stack trace validation failed.", ignore_errors=True)
     if validation_log_path is not None and proc.returncode != 77:
@@ -3476,6 +3524,7 @@ def validate_symbolized_crash_pattern_depth_location(
     fdp_trace_file: str | None = None,
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
+    debug_stage: str | None = None,
 ) -> bool:
     """Run a symbolize=1 crash-pattern/depth/location validation."""
     if not crash_pattern:
@@ -3506,6 +3555,8 @@ def validate_symbolized_crash_pattern_depth_location(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
+    if debug_stage:
+        cmd.extend(debug_tester_args(debug_stage))
 
     proc = run_command(
         cmd,
@@ -3527,6 +3578,7 @@ def validate_crash_pattern_and_stack_trace(
     fdp_trace_file: str | None = None,
     phase3_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
+    debug_stage: str | None = None,
 ) -> bool:
     """Validate crash identity with symbolize=0, then stack identity with symbolize=1."""
     if not validate_crash_pattern(
@@ -3538,6 +3590,7 @@ def validate_crash_pattern_and_stack_trace(
         fdp_trace_file=fdp_trace_file,
         phase3_mode=phase3_mode,
         validation_log_path=validation_log_path,
+        debug_stage=(f"{debug_stage}_symbolize_0" if debug_stage else None),
     ):
         return False
 
@@ -3556,6 +3609,7 @@ def validate_crash_pattern_and_stack_trace(
         phase3_mode=phase3_mode,
         validation_log_path=validation_log_path,
         require_crash_pattern=crash_pattern_symbolize_1 is not None,
+        debug_stage=(f"{debug_stage}_symbolize_1" if debug_stage else None),
     )
 
 

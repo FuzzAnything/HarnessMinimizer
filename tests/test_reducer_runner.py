@@ -25,6 +25,7 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner.set_symbolized_reference_stack_depth(None)
         reducer_runner.set_dynamic_reference_crash_site(None)
         reducer_runner.set_symbolized_reference_crash_location_pattern(None)
+        reducer_runner.configure_debug_logging(False)
 
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_command_success(self, mock_run):
@@ -201,6 +202,30 @@ class TestReducerRunner(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--statistics-file", cmd)
         self.assertIn("/tmp/work/statistics.txt", cmd)
+
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_adds_normal_path_debug_log(self, mock_run, mock_exists):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            debug_log = reducer_runner.configure_debug_logging(True)
+            reducer_runner.run_treereducer(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file=None,
+                crash_pattern="AddressSanitizer",
+                compile_flags=None,
+                link_flags=None,
+                crash_input=None,
+            )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--debug-log", cmd)
+        self.assertIn(debug_log, cmd)
+        self.assertIn("--debug-stage", cmd)
+        self.assertIn("reduction_candidate", cmd)
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")

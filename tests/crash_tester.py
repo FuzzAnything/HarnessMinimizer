@@ -29,6 +29,7 @@ from harnessreducer.reducer_runner import (
     _frame_matches_harness_source,
     count_first_stack_trace_frames,
     extract_first_dynamic_library_crash_site,
+    extract_first_sanitizer_stack_trace,
     extract_symbolized_crash_location,
     runtime_library_env,
 )
@@ -137,12 +138,74 @@ def _update_statistics_file(statistics_file: str, result_code: int) -> None:
 
 
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
+    try:
+        _append_debug_record(args, result_code)
+    except Exception as exc:
+        print(f"[DEBUG] Failed to append candidate record: {exc}", file=sys.stderr)
     if args.statistics_file:
         _update_statistics_file(args.statistics_file, result_code)
     exec_time_ms = getattr(args, "_last_exec_time_ms", None)
     if getattr(args, "print_exec_time_ms", False) and exec_time_ms is not None:
         print(f"HARNESSREDUCER_EXEC_TIME_MS={exec_time_ms}")
     return result_code
+
+
+def _debug_field(value) -> str:
+    if value is None:
+        return "not-evaluated"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
+
+
+def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> None:
+    debug_log = getattr(args, "debug_log", None)
+    if not debug_log:
+        return
+
+    actual_site = getattr(args, "_debug_dynamic_crash_site", None)
+    if actual_site is None:
+        actual_site_text = "not-found"
+    else:
+        actual_site_text = f"{actual_site.library_path}+{actual_site.offset}"
+
+    trace = getattr(args, "_debug_first_stack_trace", None)
+    compile_error = getattr(args, "_last_compile_error", None)
+    compile_cmd = getattr(args, "_last_compile_cmd", None)
+    lines = [
+        "===== candidate =====",
+        f"stage: {getattr(args, 'debug_stage', 'unspecified')}",
+        f"pid: {os.getpid()}",
+        f"source_path: {Path(args.source).resolve()}",
+        f"compile_success: {_debug_field(getattr(args, '_debug_compile_success', None))}",
+        f"execution_return_code: {_debug_field(getattr(args, '_debug_execution_return_code', None))}",
+        f"tester_return_code: {tester_return_code}",
+        f"returned_77: {_debug_field(tester_return_code == 77)}",
+        f"crash_pattern_matched: {_debug_field(getattr(args, '_debug_crash_pattern_matched', None))}",
+        f"dynamic_crash_site_found: {_debug_field(getattr(args, '_debug_dynamic_crash_site_found', None))}",
+        f"dynamic_crash_site_matched: {_debug_field(getattr(args, '_debug_dynamic_crash_site_matched', None))}",
+        f"dynamic_crash_site: {actual_site_text}",
+    ]
+    if compile_cmd:
+        lines.append(f"compile_command: {' '.join(compile_cmd)}")
+    if compile_error:
+        lines.extend(["compile_error:", compile_error])
+    lines.extend(
+        [
+            "first_stack_trace:",
+            trace or "<no-first-stack-trace-found>",
+            "===== end candidate =====",
+            "",
+        ]
+    )
+
+    debug_path = Path(debug_log)
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
+    with debug_path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.write("\n".join(lines))
+        handle.flush()
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -> None:
@@ -773,6 +836,8 @@ def main() -> int:
     parser.add_argument("--amortized-runner-socket", type=str, default=None, help="Unix socket for persistent amortized-link execution")
     parser.add_argument("--exec-timeout-ms", type=int, default=None, help="Execution-only timeout in milliseconds")
     parser.add_argument("--print-exec-time-ms", action="store_true", help="Print the measured execution time marker")
+    parser.add_argument("--debug-log", type=str, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--debug-stage", type=str, default="unspecified", help=argparse.SUPPRESS)
     parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
         "--amortized-plugin-link-flags",
@@ -783,6 +848,15 @@ def main() -> int:
     )
     args = parser.parse_args()
     args._last_exec_time_ms = None
+    args._debug_compile_success = None
+    args._debug_execution_return_code = None
+    args._debug_crash_pattern_matched = None
+    args._debug_dynamic_crash_site_found = None
+    args._debug_dynamic_crash_site_matched = None
+    args._debug_dynamic_crash_site = None
+    args._debug_first_stack_trace = None
+    args._last_compile_error = None
+    args._last_compile_cmd = None
     pid = os.getpid()
 
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir="/tmp") as out_file:
@@ -807,7 +881,9 @@ def main() -> int:
         else:
             compile_status, object_path = compile_direct(args, output_path)
         if compile_status != 0:
+            args._debug_compile_success = False
             return _finalize_result(args, -1)
+        args._debug_compile_success = True
 
         use_symbolize = args.symbolize
 
@@ -842,6 +918,29 @@ def main() -> int:
                 exec_timeout_ms=args.exec_timeout_ms,
             )
             args._last_exec_time_ms = exec_time_ms
+
+        if args.debug_log:
+            args._debug_execution_return_code = status
+            args._debug_crash_pattern_matched = (
+                None
+                if args.skip_crash_pattern
+                else re.search(args.crash_pattern, run_log) is not None
+            )
+            args._debug_dynamic_crash_site = extract_first_dynamic_library_crash_site(
+                run_log,
+                args.link_flags,
+                expected_library=args.dynamic_crash_site_library,
+            )
+            args._debug_dynamic_crash_site_found = (
+                args._debug_dynamic_crash_site is not None
+            )
+            if args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
+                args._debug_dynamic_crash_site_matched = bool(
+                    args._debug_dynamic_crash_site is not None
+                    and args._debug_dynamic_crash_site.offset.lower()
+                    == args.dynamic_crash_site_offset.lower()
+                )
+            args._debug_first_stack_trace = extract_first_sanitizer_stack_trace(run_log)
 
         if status != 77:
             print(
