@@ -59,7 +59,7 @@ class TestCrashTesterStatistics(unittest.TestCase):
                 (71, "ERROR: libFuzzer: out-of-memory (malloc(42))", 10),
                 (77, "SUMMARY: AddressSanitizer: heap-buffer-overflow", 11),
             ],
-        ) as mock_run:
+        ) as mock_run, patch("builtins.print") as mock_print:
             status, run_log, exec_time_ms = crash_tester.run_standalone_candidate(
                 args,
                 ["/tmp/poc.out", "seed.bin"],
@@ -74,6 +74,9 @@ class TestCrashTesterStatistics(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 2)
         retry_cmd = mock_run.call_args_list[1].args[0]
         self.assertEqual(retry_cmd, ["/tmp/poc.out", "-rss_limit_mb=0", "seed.bin"])
+        mock_print.assert_called_once_with(
+            "HARNESSREDUCER_POC_RUNTIME_ARG=-rss_limit_mb=0"
+        )
 
     def test_run_standalone_candidate_does_not_retry_when_disabled(self):
         args = Namespace(

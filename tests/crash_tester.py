@@ -40,6 +40,7 @@ AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
     r"dlopen candidate failed: .*undefined symbol:"
 )
 LIBFUZZER_OOM_PATTERN = re.compile(r"ERROR:\s*libFuzzer:\s*out-of-memory\b")
+POC_RUNTIME_ARG_MARKER = "HARNESSREDUCER_POC_RUNTIME_ARG="
 AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL = 1000
 
 
@@ -684,6 +685,8 @@ def run_standalone_candidate(
         env=env,
         exec_timeout_ms=args.exec_timeout_ms,
     )
+    if retry_status == 77:
+        print(f"{POC_RUNTIME_ARG_MARKER}-rss_limit_mb=0")
     return retry_status, retry_log, retry_exec_time_ms
 
 
