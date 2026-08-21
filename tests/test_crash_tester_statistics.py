@@ -8,6 +8,43 @@ from tests import crash_tester
 
 
 class TestCrashTesterStatistics(unittest.TestCase):
+    def test_compile_with_pch_uses_amortized_pch_compile_flags(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pch_path = Path(tmpdir) / "harness_prefix.pch"
+            source_path = Path(tmpdir) / "candidate.cpp"
+            pch_path.write_text("", encoding="utf-8")
+            source_path.write_text("int main() { return 0; }\n", encoding="utf-8")
+
+            args = Namespace(
+                pch_path=str(pch_path),
+                pch_amortized_link=True,
+                fdp_trace=None,
+                compile_flags="-I/tmp/include",
+                link_flags="-lm",
+                source=str(source_path),
+            )
+
+            compile_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            link_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with patch(
+                "tests.crash_tester.subprocess.run",
+                side_effect=[compile_proc, link_proc],
+            ) as mock_run:
+                status, object_path = crash_tester.compile_with_pch(
+                    args,
+                    str(Path(tmpdir) / "candidate.out"),
+                )
+
+            self.assertEqual(status, 0)
+            self.assertIsNotNone(object_path)
+            compile_cmd = mock_run.call_args_list[0].args[0]
+            self.assertIn("-include-pch", compile_cmd)
+            self.assertIn(str(pch_path), compile_cmd)
+            self.assertIn("-fPIC", compile_cmd)
+            self.assertIn("-fsanitize=address,undefined", compile_cmd)
+            self.assertNotIn("-fsanitize=address,fuzzer,undefined", compile_cmd)
+
     def test_update_statistics_file_accumulates_counts_and_probabilities(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             stats_path = Path(tmpdir) / "statistics.txt"

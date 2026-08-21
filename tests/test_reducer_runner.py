@@ -297,6 +297,25 @@ class TestReducerRunner(unittest.TestCase):
         self.assertEqual(reducer_runner.PHASE3_PCH_OPT_FLAGS, ["-O0", "-gline-tables-only"])
         self.assertEqual(reducer_runner.PHASE3_WARNING_FLAGS, ["-Werror=uninitialized"])
 
+    def test_pch_tester_args_preserve_amortized_link_compile_mode(self):
+        artifacts = reducer_runner.PchArtifacts(
+            body_source="/tmp/body.cpp",
+            prefix_header="/tmp/harness_prefix.h",
+            pch_file="/tmp/harness_prefix.pch",
+            restore_prefix="#include <demo.h>\n",
+            amortize_link=True,
+        )
+
+        self.assertEqual(
+            reducer_runner.pch_tester_args(artifacts, reducer_runner.PHASE3_PCH),
+            [
+                "--pch",
+                "--pch-path",
+                "/tmp/harness_prefix.pch",
+                "--pch-amortized-link",
+            ],
+        )
+
     def test_initialize_statistics_file_writes_zeroed_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
