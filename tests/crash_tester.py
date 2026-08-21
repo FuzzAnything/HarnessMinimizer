@@ -429,15 +429,22 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
         object_path = obj_file.name
 
+    sanitizer_flags = (
+        PHASE3_PLUGIN_SANITIZER_FLAGS
+        if getattr(args, "pch_amortized_link", False)
+        else PHASE3_SANITIZER_FLAGS
+    )
+
     compile_cmd = [
         "clang++",
         "-Qunused-arguments",
         "-include-pch",
         args.pch_path,
         *phase3_replay_flags(args.fdp_trace),
-        *PHASE3_SANITIZER_FLAGS,
+        *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *(["-fPIC"] if getattr(args, "pch_amortized_link", False) else []),
         "-c",
         *split_flags(args.compile_flags),
         args.source,
@@ -822,6 +829,7 @@ def main() -> int:
     mode_group.add_argument("--split", action="store_true", help="Use split Phase 3 mode: compile the full source to an object, then link")
     mode_group.add_argument("--pch", action="store_true", help="Use PCH Phase 3 mode: compile object with -include-pch, then link")
     parser.add_argument("--pch-path", type=str, default=None, help="Path to harness_prefix.pch when --pch is used")
+    parser.add_argument("--pch-amortized-link", action="store_true", help=argparse.SUPPRESS)
     # Stack trace validation arguments
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")

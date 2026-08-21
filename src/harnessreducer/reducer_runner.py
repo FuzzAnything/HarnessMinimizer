@@ -100,6 +100,7 @@ class PchArtifacts:
     prefix_header: str
     pch_file: str
     restore_prefix: str
+    amortize_link: bool = False
 
 
 @dataclass(frozen=True)
@@ -1767,6 +1768,7 @@ def prepare_phase3_pch_harness(
         prefix_header=str(prefix_header),
         pch_file=str(pch_file),
         restore_prefix=restore_prefix,
+        amortize_link=amortize_link,
     )
 
 
@@ -1788,7 +1790,10 @@ def pch_tester_args(artifacts: PchArtifacts | None, phase3_mode: str) -> list[st
         return ["--split"]
     if artifacts is None:
         raise ValueError("PCH Phase 3 mode requires prepared PCH artifacts.")
-    return ["--pch", "--pch-path", artifacts.pch_file]
+    args = ["--pch", "--pch-path", artifacts.pch_file]
+    if artifacts.amortize_link:
+        args.append("--pch-amortized-link")
+    return args
 
 
 def configure_work_dir(work_dir: str | None) -> str:

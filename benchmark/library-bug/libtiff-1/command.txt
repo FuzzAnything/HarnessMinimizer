@@ -21,3 +21,13 @@ clang++ -g -O0 -fsanitize=fuzzer,address,undefined \
     harness.cpp -o harness \
     -I$(pwd)/build/sanitizer/include \
     $(pwd)/build/sanitizer/lib/libtiff.a $(pwd)/build/sanitizer/lib/libtiffxx.a -ljbig -ljpeg -llzma -lz
+
+harnessreducer harness.cpp \
+  --compile-flags="-I$(pwd)/build/sanitizer/include" \
+  --link-flags="-Wl,--as-needed $(pwd)/build/sanitizer/lib/libtiffxx.so $(pwd)/build/sanitizer/lib/libtiff.so -Wl,--no-as-needed -lz -ljpeg -ljbig -llzma -lzstd -lwebp -lsharpyuv -lLerc -ldeflate -lstdc++ -lm" \
+  --work-dir ./pch-amorlink-nosymbol \
+  --crash-input crash-input \
+  --pch \
+  --amortize-link \
+  --stable \
+  -o reduced.cpp
