@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
+from harnessreducer.reduction_profile import write_profile_summary
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -41,8 +42,13 @@ SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
 SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
 STATISTICS_FILE_NAME = "statistics.txt"
 DEBUG_LOG_FILE_NAME = "reduction_debug.log"
+CANDIDATE_PROFILE_EVENTS_FILE_NAME = "candidate_profile.jsonl"
+REDUCTION_PROFILE_JSON_FILE_NAME = "reduction_profile.json"
+REDUCTION_PROFILE_TEXT_FILE_NAME = "reduction_profile.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 DEFAULT_EXEC_TIMEOUT_MS = 300_000
+DEFAULT_TREEREDUCE_JOBS = 60
+MAX_TREEREDUCE_JOBS = 63
 CALIBRATED_EXEC_TIMEOUT_MIN_MS = 2_000
 CALIBRATED_EXEC_TIMEOUT_MAX_MS = 60_000
 CALIBRATION_PROBE_RUNS = 5
@@ -2390,6 +2396,24 @@ def get_statistics_file() -> str:
     return os.path.join(get_work_dir(), STATISTICS_FILE_NAME)
 
 
+def get_candidate_profile_events_file() -> str:
+    return os.path.join(get_work_dir(), CANDIDATE_PROFILE_EVENTS_FILE_NAME)
+
+
+def get_reduction_profile_json_file() -> str:
+    return os.path.join(get_work_dir(), REDUCTION_PROFILE_JSON_FILE_NAME)
+
+
+def get_reduction_profile_text_file() -> str:
+    return os.path.join(get_work_dir(), REDUCTION_PROFILE_TEXT_FILE_NAME)
+
+
+def initialize_candidate_profile_events_file() -> str:
+    path = Path(get_candidate_profile_events_file())
+    path.write_text("", encoding="utf-8")
+    return str(path)
+
+
 def reset_stack_trace_state() -> None:
     """Remove persisted stack-trace validation artifacts from the work dir."""
     set_reference_crash_patterns()
@@ -3124,6 +3148,8 @@ def run_treereducer(
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = False,
+    jobs: int = DEFAULT_TREEREDUCE_JOBS,
+    profile: bool = False,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -3131,6 +3157,10 @@ def run_treereducer(
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
     validate_phase3_mode(phase3_mode)
+    if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
+        raise ValueError(
+            f"treereduce jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+        )
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
     reference_executable = (
@@ -3199,7 +3229,7 @@ def run_treereducer(
     cmd = [
         "treereduce-c",
         "-j",
-        "60",
+        str(jobs),
         "-s",
         reducer_source,
         "-o",
@@ -3233,6 +3263,10 @@ def run_treereducer(
     cmd.extend(debug_tester_args("reduction_candidate"))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
+    profile_events_path: str | None = None
+    if profile:
+        profile_events_path = initialize_candidate_profile_events_file()
+        cmd.extend(["--profile-file", profile_events_path])
     if symbolize:
         cmd.append("--symbolize")
         if not amortize_link:
@@ -3294,12 +3328,41 @@ def run_treereducer(
             if not symbolize:
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
+        reduction_started_ns = time.perf_counter_ns()
         proc = subprocess.run(
             cmd,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
         )
+        reduction_wall_ns = time.perf_counter_ns() - reduction_started_ns
+    if profile and profile_events_path is not None:
+        profile_summary = write_profile_summary(
+            profile_events_path,
+            get_reduction_profile_json_file(),
+            get_reduction_profile_text_file(),
+            wall_ns=reduction_wall_ns,
+            jobs=jobs,
+            returncode=proc.returncode,
+            configuration={
+                "jobs": jobs,
+                "phase3_mode": phase3_mode,
+                "amortize_link": amortize_link,
+                "symbolize": symbolize,
+                "stable": stable,
+                "source": str(Path(reducer_source).resolve()),
+                "source_bytes": Path(reducer_source).stat().st_size,
+            },
+        )
+        reducer_summary = profile_summary["reducer"]
+        assert isinstance(reducer_summary, dict)
+        print(
+            "[+] Tree-reduction profile: "
+            f"{reducer_summary['profiled_checks']} checks in "
+            f"{float(reducer_summary['wall_seconds']):.3f}s "
+            f"({float(reducer_summary['checks_per_second']):.3f} checks/s)"
+        )
+        print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
     if not os.path.exists(reduced_harness):

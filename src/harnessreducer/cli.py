@@ -5,7 +5,14 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
-from harnessreducer.reducer_runner import get_debug_log_path
+from harnessreducer.reducer_runner import (
+    DEFAULT_TREEREDUCE_JOBS,
+    MAX_TREEREDUCE_JOBS,
+    get_candidate_profile_events_file,
+    get_debug_log_path,
+    get_reduction_profile_json_file,
+    get_reduction_profile_text_file,
+)
 
 
 def _stage_debug_log(output: str) -> None:
@@ -18,6 +25,23 @@ def _stage_debug_log(output: str) -> None:
     if Path(debug_log).resolve() != destination:
         shutil.copy2(debug_log, destination)
     print(f"Debug log saved to: {destination}")
+
+
+def _stage_profile(output: str) -> None:
+    destination_dir = Path(output).resolve().parent
+    for source_name in (
+        get_candidate_profile_events_file(),
+        get_reduction_profile_json_file(),
+        get_reduction_profile_text_file(),
+    ):
+        source = Path(source_name)
+        if not source.is_file():
+            continue
+        destination = destination_dir / source.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != destination:
+            shutil.copy2(source, destination)
+        print(f"Profile artifact saved to: {destination}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,11 +97,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use stable reduction mode (no randomization, deterministic output).",
     )
     parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=DEFAULT_TREEREDUCE_JOBS,
+        help=(
+            "Number of concurrent treereduce interestingness checks "
+            f"(default: {DEFAULT_TREEREDUCE_JOBS}; maximum: {MAX_TREEREDUCE_JOBS})."
+        ),
+    )
+    parser.add_argument(
         "--statistics",
         action="store_true",
         help=(
             "Collect crash_tester return-code statistics during treereduce and "
             "write them to statistics.txt in the work directory."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "Record low-overhead per-candidate timings and tree-reduction "
+            "throughput in candidate_profile.jsonl and reduction_profile.*."
         ),
     )
     parser.add_argument(
@@ -164,6 +206,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--amortize-link cannot be combined with --direct/--single-step")
     if args.debug and args.check:
         parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
+    if args.profile and args.check:
+        parser.error("--profile currently measures the normal oracle and cannot be combined with --check")
+    if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
+        parser.error(f"--jobs must be between 1 and {MAX_TREEREDUCE_JOBS}")
 
     config = ReductionConfig(
         harness_path=args.harness,
@@ -181,12 +227,16 @@ def main(argv: list[str] | None = None) -> int:
         debug=args.debug,
         snapshot=args.snapshot,
         symbolize=args.symbolize,
+        jobs=args.jobs,
+        profile=args.profile,
     )
     try:
         result = reduce_with_config(config)
     finally:
         if args.debug:
             _stage_debug_log(args.output)
+        if args.profile:
+            _stage_profile(args.output)
     if not result.success:
         print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
         return 0

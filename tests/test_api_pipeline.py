@@ -147,6 +147,7 @@ class TestApiPipeline(unittest.TestCase):
             amortize_link=False,
             crash_pattern_symbolize_0="AddressSanitizer",
             require_crash_pattern=False,
+            jobs=60,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -257,6 +258,8 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             amortize_link=False,
             symbolize=False,
+            jobs=60,
+            profile=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -525,6 +528,8 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             amortize_link=False,
             symbolize=False,
+            jobs=60,
+            profile=False,
         )
 
     @patch("harnessreducer.api.validate_stack_trace")
@@ -665,6 +670,8 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             amortize_link=False,
             symbolize=True,
+            jobs=60,
+            profile=False,
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",

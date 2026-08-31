@@ -203,6 +203,58 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--statistics-file", cmd)
         self.assertIn("/tmp/work/statistics.txt", cmd)
 
+    @patch("harnessreducer.reducer_runner.write_profile_summary")
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.subprocess.run")
+    def test_run_treereducer_profiles_candidates_and_uses_requested_jobs(
+        self,
+        mock_run,
+        mock_exists,
+        mock_write_profile,
+    ):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+        mock_write_profile.return_value = {
+            "reducer": {
+                "profiled_checks": 3,
+                "wall_seconds": 1.0,
+                "checks_per_second": 3.0,
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reducer_runner.configure_work_dir(tmpdir)
+            source = Path(tmpdir) / "in.cpp"
+            source.write_text("int main() { return 0; }\n", encoding="utf-8")
+            reducer_runner.run_treereducer(
+                harness_path=str(source),
+                fdp_trace_file=None,
+                crash_pattern="AddressSanitizer",
+                compile_flags=None,
+                link_flags=None,
+                crash_input=None,
+                jobs=7,
+                profile=True,
+            )
+
+        cmd = mock_run.call_args.args[0]
+        jobs_index = cmd.index("-j")
+        self.assertEqual(cmd[jobs_index + 1], "7")
+        self.assertIn("--profile-file", cmd)
+        mock_write_profile.assert_called_once()
+
+    def test_run_treereducer_rejects_out_of_range_jobs(self):
+        with self.assertRaisesRegex(ValueError, "between 1 and 63"):
+            reducer_runner.run_treereducer(
+                harness_path="/tmp/in.cpp",
+                fdp_trace_file=None,
+                crash_pattern="AddressSanitizer",
+                compile_flags=None,
+                link_flags=None,
+                crash_input=None,
+                jobs=64,
+            )
+
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_adds_normal_path_debug_log(self, mock_run, mock_exists):

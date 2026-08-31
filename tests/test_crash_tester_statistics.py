@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
@@ -129,6 +130,40 @@ class TestCrashTesterStatistics(unittest.TestCase):
 
             self.assertEqual(result, 77)
             self.assertTrue(stats_path.exists())
+
+    def test_profile_record_is_append_only_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "candidate.cpp"
+            profile = Path(tmpdir) / "candidate_profile.jsonl"
+            source.write_text("int main() { return 0; }\n", encoding="utf-8")
+            args = Namespace(
+                profile_file=str(profile),
+                source=str(source),
+                direct=False,
+                pch=True,
+                split=False,
+                amortized_runner_socket="/tmp/runner.sock",
+                symbolize=False,
+                _debug_compile_success=True,
+                _profile_compile_ns=100,
+                _profile_compile_link_ns=0,
+                _profile_link_ns=200,
+                _profile_execute_ns=300,
+                _profile_oracle_ns=400,
+                _profile_oracle_started_ns=None,
+            )
+
+            crash_tester._append_profile_record(args, 77)
+            crash_tester._append_profile_record(args, 1)
+
+            records = [
+                json.loads(line)
+                for line in profile.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([record["result_code"] for record in records], [77, 1])
+            self.assertEqual(records[0]["mode"], "pch")
+            self.assertTrue(records[0]["amortized_link"])
+            self.assertEqual(records[0]["durations_ns"]["compile_ns"], 100)
 
     def test_update_last_interesting_file_copies_only_when_content_changes(self):
         with tempfile.TemporaryDirectory() as tmpdir:

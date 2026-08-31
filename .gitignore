@@ -37,3 +37,5 @@ benchmark/*/*/time-*/*
 !benchmark/*/*/time-*/time.txt
 *crash_triage_report.md
 dummy_file
+
+workflow-*/

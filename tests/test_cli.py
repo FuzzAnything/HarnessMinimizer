@@ -41,6 +41,13 @@ class TestCliPhase3Mode(unittest.TestCase):
         )
         self.assertTrue(args.debug)
 
+    def test_jobs_and_profile_arguments_are_available(self):
+        args = build_parser().parse_args(
+            ["harness.cpp", "-o", "reduced.cpp", "--jobs", "8", "--profile"]
+        )
+        self.assertEqual(args.jobs, 8)
+        self.assertTrue(args.profile)
+
     def test_amortize_link_rejects_direct(self):
         with self.assertRaisesRegex(SystemExit, "2"):
             main(
@@ -62,6 +69,30 @@ class TestCliPhase3Mode(unittest.TestCase):
                     "reduced.cpp",
                     "--debug",
                     "--check",
+                ]
+            )
+
+    def test_profile_rejects_check_mode(self):
+        with self.assertRaisesRegex(SystemExit, "2"):
+            main(
+                [
+                    "harness.cpp",
+                    "-o",
+                    "reduced.cpp",
+                    "--profile",
+                    "--check",
+                ]
+            )
+
+    def test_jobs_rejects_out_of_range_value(self):
+        with self.assertRaisesRegex(SystemExit, "2"):
+            main(
+                [
+                    "harness.cpp",
+                    "-o",
+                    "reduced.cpp",
+                    "--jobs",
+                    "64",
                 ]
             )
 

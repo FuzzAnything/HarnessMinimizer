@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
+import time
+
+_PROCESS_ENTRY_MONOTONIC_NS = time.perf_counter_ns()
+_PROCESS_ENTRY_WALL_NS = time.time_ns()
+
 import fcntl
 import os
 import filecmp
+import json
 import re
+import resource
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
-import time
 import argparse
 from pathlib import Path
 
@@ -42,6 +48,97 @@ AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
 LIBFUZZER_OOM_PATTERN = re.compile(r"ERROR:\s*libFuzzer:\s*out-of-memory\b")
 POC_RUNTIME_ARG_MARKER = "HARNESSREDUCER_POC_RUNTIME_ARG="
 AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL = 1000
+
+
+def _add_profile_duration(args: argparse.Namespace, field: str, started_ns: int) -> None:
+    elapsed_ns = time.perf_counter_ns() - started_ns
+    setattr(args, field, int(getattr(args, field, 0)) + elapsed_ns)
+
+
+def _run_profiled_subprocess(
+    args: argparse.Namespace,
+    field: str,
+    command: list[str],
+    **kwargs,
+) -> subprocess.CompletedProcess:
+    if not getattr(args, "profile_file", None):
+        return subprocess.run(command, **kwargs)
+    started_ns = time.perf_counter_ns()
+    try:
+        return subprocess.run(command, **kwargs)
+    finally:
+        _add_profile_duration(args, field, started_ns)
+
+
+def _append_profile_record(args: argparse.Namespace, result_code: int) -> None:
+    profile_file = getattr(args, "profile_file", None)
+    if not profile_file:
+        return
+
+    oracle_started_ns = getattr(args, "_profile_oracle_started_ns", None)
+    if oracle_started_ns is not None:
+        _add_profile_duration(args, "_profile_oracle_ns", oracle_started_ns)
+        args._profile_oracle_started_ns = None
+
+    end_monotonic_ns = time.perf_counter_ns()
+    end_wall_ns = time.time_ns()
+    main_started_ns = int(
+        getattr(args, "_profile_main_started_ns", _PROCESS_ENTRY_MONOTONIC_NS)
+    )
+    build_started_ns = int(getattr(args, "_profile_build_started_ns", main_started_ns))
+    self_usage = resource.getrusage(resource.RUSAGE_SELF)
+    child_usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+    try:
+        source_bytes = os.path.getsize(args.source)
+    except OSError:
+        source_bytes = 0
+
+    record = {
+        "schema_version": 1,
+        "pid": os.getpid(),
+        "start_wall_ns": _PROCESS_ENTRY_WALL_NS,
+        "end_wall_ns": end_wall_ns,
+        "source_bytes": source_bytes,
+        "result_code": result_code,
+        "compile_success": getattr(args, "_debug_compile_success", None),
+        "mode": (
+            "pch"
+            if args.pch
+            else "split"
+            if args.split
+            else "direct"
+        ),
+        "amortized_link": bool(args.amortized_runner_socket),
+        "symbolize": bool(args.symbolize),
+        "durations_ns": {
+            "python_import_ns": max(0, main_started_ns - _PROCESS_ENTRY_MONOTONIC_NS),
+            "argument_setup_ns": max(0, build_started_ns - main_started_ns),
+            "compile_ns": int(getattr(args, "_profile_compile_ns", 0)),
+            "compile_link_ns": int(getattr(args, "_profile_compile_link_ns", 0)),
+            "link_ns": int(getattr(args, "_profile_link_ns", 0)),
+            "execute_ns": int(getattr(args, "_profile_execute_ns", 0)),
+            "oracle_ns": int(getattr(args, "_profile_oracle_ns", 0)),
+            "total_ns": max(0, end_monotonic_ns - _PROCESS_ENTRY_MONOTONIC_NS),
+        },
+        "cpu_ns": {
+            "self_user_ns": int(self_usage.ru_utime * 1_000_000_000),
+            "self_system_ns": int(self_usage.ru_stime * 1_000_000_000),
+            "children_user_ns": int(child_usage.ru_utime * 1_000_000_000),
+            "children_system_ns": int(child_usage.ru_stime * 1_000_000_000),
+        },
+    }
+    payload = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
+    descriptor = os.open(
+        profile_file,
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o644,
+    )
+    try:
+        # O_APPEND plus one small write keeps concurrent candidate records
+        # independent on the Linux filesystems used by the reducer.
+        os.write(descriptor, payload)
+    finally:
+        os.close(descriptor)
 
 
 def get_project_root():
@@ -140,6 +237,10 @@ def _update_statistics_file(statistics_file: str, result_code: int) -> None:
 
 
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
+    try:
+        _append_profile_record(args, result_code)
+    except Exception as exc:
+        print(f"[PROFILE] Failed to append candidate record: {exc}", file=sys.stderr)
     try:
         _append_debug_record(args, result_code)
     except Exception as exc:
@@ -342,7 +443,9 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
         *split_flags(args.link_flags),
     ]
 
-    compile_proc = subprocess.run(
+    compile_proc = _run_profiled_subprocess(
+        args,
+        "_profile_compile_link_ns",
         compile_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -377,7 +480,9 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         object_path,
     ]
 
-    compile_proc = subprocess.run(
+    compile_proc = _run_profiled_subprocess(
+        args,
+        "_profile_compile_ns",
         compile_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -399,7 +504,9 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         output_path,
         *split_flags(args.link_flags),
     ]
-    link_proc = subprocess.run(
+    link_proc = _run_profiled_subprocess(
+        args,
+        "_profile_link_ns",
         link_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -456,7 +563,9 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         object_path,
     ]
 
-    compile_proc = subprocess.run(
+    compile_proc = _run_profiled_subprocess(
+        args,
+        "_profile_compile_ns",
         compile_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -478,7 +587,9 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         output_path,
         *split_flags(args.link_flags),
     ]
-    link_proc = subprocess.run(
+    link_proc = _run_profiled_subprocess(
+        args,
+        "_profile_link_ns",
         link_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -532,7 +643,9 @@ def compile_amortized_plugin(
             object_path,
         ]
     )
-    compile_proc = subprocess.run(
+    compile_proc = _run_profiled_subprocess(
+        args,
+        "_profile_compile_ns",
         compile_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -567,7 +680,9 @@ def link_amortized_plugin(
         "-o",
         output_path,
     ]
-    link_proc = subprocess.run(
+    link_proc = _run_profiled_subprocess(
+        args,
+        "_profile_link_ns",
         link_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -866,6 +981,7 @@ def _stack_depth_is_advisory(
 
 
 def main() -> int:
+    main_started_ns = time.perf_counter_ns()
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
     parser.add_argument("crash_pattern", type=str, help="Regex pattern to identify the crash in the output")
@@ -895,6 +1011,7 @@ def main() -> int:
     parser.add_argument("--print-exec-time-ms", action="store_true", help="Print the measured execution time marker")
     parser.add_argument("--debug-log", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--debug-stage", type=str, default="unspecified", help=argparse.SUPPRESS)
+    parser.add_argument("--profile-file", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--retry-oom-without-rss-limit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
@@ -905,6 +1022,13 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    args._profile_main_started_ns = main_started_ns
+    args._profile_compile_ns = 0
+    args._profile_compile_link_ns = 0
+    args._profile_link_ns = 0
+    args._profile_execute_ns = 0
+    args._profile_oracle_ns = 0
+    args._profile_oracle_started_ns = None
     args._last_exec_time_ms = None
     args._debug_compile_success = None
     args._debug_first_execution_return_code = None
@@ -922,6 +1046,7 @@ def main() -> int:
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir="/tmp") as out_file:
         output_path = out_file.name
     object_path = None
+    args._profile_build_started_ns = time.perf_counter_ns()
 
     try:
         if args.amortized_runner_socket:
@@ -957,27 +1082,37 @@ def main() -> int:
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
 
-        if args.amortized_runner_socket:
-            try:
-                status, run_log, exec_time_ms = run_with_amortized_runner_maybe_fallback_timed(
+        execution_started_ns = (
+            time.perf_counter_ns() if args.profile_file else None
+        )
+        try:
+            if args.amortized_runner_socket:
+                try:
+                    status, run_log, exec_time_ms = run_with_amortized_runner_maybe_fallback_timed(
+                        args,
+                        output_path,
+                        object_path,
+                    )
+                    args._last_exec_time_ms = exec_time_ms
+                except Exception as exc:
+                    print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
+                    return _finalize_result(args, 1)
+                if status is None:
+                    return _finalize_result(args, -1)
+            else:
+                exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
+                status, run_log, exec_time_ms = run_standalone_candidate(
                     args,
-                    output_path,
-                    object_path,
+                    exec_cmd,
+                    env=env,
                 )
                 args._last_exec_time_ms = exec_time_ms
-            except Exception as exc:
-                print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
-                return _finalize_result(args, 1)
-            if status is None:
-                return _finalize_result(args, -1)
-        else:
-            exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-            status, run_log, exec_time_ms = run_standalone_candidate(
-                args,
-                exec_cmd,
-                env=env,
-            )
-            args._last_exec_time_ms = exec_time_ms
+        finally:
+            if execution_started_ns is not None:
+                _add_profile_duration(args, "_profile_execute_ns", execution_started_ns)
+
+        if args.profile_file:
+            args._profile_oracle_started_ns = time.perf_counter_ns()
 
         if args.debug_log:
             args._debug_execution_return_code = status

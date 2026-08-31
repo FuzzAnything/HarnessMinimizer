@@ -11,6 +11,8 @@ from pathlib import Path
 
 from harnessreducer.reducer_runner import (
     DEFAULT_EXEC_TIMEOUT_MS,
+    DEFAULT_TREEREDUCE_JOBS,
+    MAX_TREEREDUCE_JOBS,
     PHASE3_DIRECT,
     PHASE3_PCH,
     PHASE3_SPLIT,
@@ -343,12 +345,17 @@ def run_treereducer_with_check(
     amortize_link: bool = False,
     crash_pattern_symbolize_0: str | None = None,
     require_crash_pattern: bool = True,
+    jobs: int = DEFAULT_TREEREDUCE_JOBS,
 ) -> str:
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
 
     validate_phase3_mode(phase3_mode)
+    if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
+        raise ValueError(
+            f"treereduce jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+        )
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
     reference_executable = (
@@ -453,7 +460,7 @@ def run_treereducer_with_check(
     cmd = [
         "treereduce-c",
         "-j",
-        "60",
+        str(jobs),
         "-s",
         reducer_source,
         "-o",

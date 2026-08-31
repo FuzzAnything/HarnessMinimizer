@@ -23,6 +23,8 @@ from harnessreducer.fdp_transform import (
 from harnessreducer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_SPLIT,
+    DEFAULT_TREEREDUCE_JOBS,
+    MAX_TREEREDUCE_JOBS,
     apply_coverage_guided_slice,
     append_exec_timeout_tester_args,
     candidate_files_match,
@@ -112,6 +114,8 @@ class ReductionConfig:
     snapshot: bool = False
     amortize_link: bool = False
     symbolize: bool = False
+    jobs: int = DEFAULT_TREEREDUCE_JOBS
+    profile: bool = False
 
 
 @dataclass(frozen=True)
@@ -768,7 +772,13 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     if config.debug and config.check:
         raise ValueError("debug and check modes cannot be enabled together.")
+    if config.profile and config.check:
+        raise ValueError("profile and check modes cannot be enabled together.")
     configure_debug_logging(config.debug)
+    if not 1 <= config.jobs <= MAX_TREEREDUCE_JOBS:
+        raise ValueError(
+            f"jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+        )
     set_current_exec_timeout_ms(DEFAULT_EXEC_TIMEOUT_MS)
     reset_stack_trace_state()
     reset_last_interesting_state()
@@ -926,6 +936,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             amortize_link=config.amortize_link,
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
             require_crash_pattern=recorded_symbolized_pattern is not None,
+            jobs=config.jobs,
         )
         emit_check_statistics_summary()
     else:
@@ -942,6 +953,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             snapshot=config.snapshot,
             amortize_link=config.amortize_link,
             symbolize=config.symbolize,
+            jobs=config.jobs,
+            profile=config.profile,
         )
     format_reduced_harness(reduced_harness)
     if config.debug:
@@ -1040,6 +1053,8 @@ def process(
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = False,
+    jobs: int = DEFAULT_TREEREDUCE_JOBS,
+    profile: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -1056,6 +1071,8 @@ def process(
         debug=debug,
         snapshot=snapshot,
         symbolize=symbolize,
+        jobs=jobs,
+        profile=profile,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

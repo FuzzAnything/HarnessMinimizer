@@ -106,8 +106,10 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--crash-input <file>` | No | Crash input passed to the harness binary. |
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
 | `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
+| `-j`, `--jobs <1..63>` | No | Number of concurrent `treereduce-c` interestingness checks. Defaults to 60 for compatibility; benchmark this value because more workers can increase speculative/retried work. |
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
+| `--profile` | No | Record candidate-stage timings, result counts, concurrency, tree-reduction wall time, and checks/s. Writes `candidate_profile.jsonl` and `reduction_profile.{json,txt}`. |
 | `--symbolize` | No | Ablation mode. Runs reduction candidates with sanitizer `symbolize=1` and validates the symbolized crash pattern, symbolized first-stack-trace depth, and symbolized crash location instead of the default fast `symbolize=0` oracle. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--debug` | No | Keep the normal reduction oracle and write detailed records for every candidate and post-reduction validation to `reduction_debug.log`. Cannot be combined with `--check`. |
@@ -191,6 +193,39 @@ When enabled, HarnessReducer records how many tree-reducer candidate checks ende
 - `-1` — candidate could not be compiled or linked, including `-Werror=uninitialized` failures
 
 The counts and probabilities are written to `statistics.txt` in the work directory.
+
+`--statistics` uses a locked read/update/fsync for every candidate. Do not use it
+for throughput measurements: `--profile` records the same logical result counts
+with one append-only JSON write per candidate and no fsync.
+
+### `--profile` and `--jobs`
+
+`--profile` measures the actual tree-reduction hot loop. It records:
+
+- completed interestingness checks and checks per second;
+- result counts for `77`, `1`, and `-1`;
+- compile, direct compile+link, link, execution, oracle, Python setup, and total tester time;
+- mean and maximum in-flight checks; and
+- estimated worker utilization.
+
+Use it with a fixed work directory while sweeping worker counts:
+
+```bash
+for jobs in 1 2 4 8 16; do
+  harnessreducer harness.cpp \
+    --compile-flags="-I/path/to/include" \
+    --link-flags="/path/to/libtarget.a" \
+    --crash-input crash-input \
+    --pch --amortize-link --stable \
+    --jobs "$jobs" --profile \
+    --work-dir "profile-j${jobs}" \
+    -o "reduced-j${jobs}.cpp"
+done
+```
+
+Compare both `checks_per_second` and total `wall_seconds`. A larger job count can
+raise raw checks/s while making the reduction slower if many concurrently tested
+candidates become stale after another worker accepts a reduction.
 
 ### `--symbolize`
 
@@ -466,6 +501,8 @@ config = ReductionConfig(
     phase3_mode="pch",      # or "split" / "direct"
     amortize_link=False,     # requires split/PCH and shared or static target libraries
     statistics=False,         # optional
+    profile=False,            # optional low-overhead hot-loop profile
+    jobs=8,                   # benchmark for the target and machine; valid range 1..63
     check=False,              # optional insight-only mode
     snapshot=False,           # optional snapshot-based fallback
     stable=False,
@@ -489,6 +526,8 @@ reduced = process(
     crash_input="crash-input",
     phase3_mode="split",    # default; "direct" / "single-step" are also available
     statistics=False,
+    profile=False,
+    jobs=8,
     check=False,
     snapshot=False,
 )
@@ -508,6 +547,8 @@ During reduction, the work directory may also contain artifacts such as:
 - `stack_trace.pattern` — stored normalized reference stack trace
 - `symbolized_crash_location.pattern` — stored normalized source location recorded for `--symbolize` reduction; candidate checks receive the same pattern directly as an argument
 - `statistics.txt` — optional crash-tester return-code statistics when `--statistics` is enabled
+- `candidate_profile.jsonl` — one append-only per-check timing record when `--profile` is enabled
+- `reduction_profile.json` and `reduction_profile.txt` — aggregate tree-reduction throughput and stage timing when `--profile` is enabled
 - `reduction_debug.log` — per-candidate and post-reduction oracle details when `--debug` is enabled
 - `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
 - `reduced_harness.cpp` — tree-reducer output before final copy
@@ -520,3 +561,37 @@ During reduction, the work directory may also contain artifacts such as:
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
 - If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. By default, inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, inline validation uses the symbolized crash pattern, symbolized stack depth, and recorded crash location.
 - If LLM validation fails, the tool falls back to the non-LLM harness.
+
+## Reducer throughput baseline
+
+[`measure_treereduce.py`](measure_treereduce.py) compares two direct
+`treereduce-c` workloads using the dependency-free
+[`compile_success.cpp`](benchmark/treereduce-throughput/compile_success.cpp)
+fixture:
+
+- `compile`: the normal documented workflow, with `clang++ @@.cpp -o /dev/null`
+  as the interestingness check; and
+- `grep`: a cheap stdin oracle that isolates reducer/process-launch overhead.
+
+Run a worker sweep with:
+
+```bash
+./measure_treereduce.py --checker both --jobs 1,2,4,8,16 --repetitions 3
+```
+
+The timestamped result directory contains `summary.txt`, `summary.json`, each
+reduced source, and failure tails. Add `--keep-logs` only when raw reducer traces
+are needed; debug JSON can become very large when high worker counts cause many
+retries. Retained logs are gzip-compressed.
+
+Use this baseline together with [`measure_time.py`](measure_time.py):
+
+- `measure_treereduce.py` answers how many real checks the reducer schedules,
+  how quickly they complete, and how worker count affects convergence;
+- `harnessreducer --profile` measures the same quantities in the real crash
+  oracle; and
+- `measure_time.py` decomposes unchanged-harness compile, link, load, execution,
+  fork, socket, and Python oracle costs without a reduction run.
+
+See [`PERFORMANCE_ANALYSIS.md`](PERFORMANCE_ANALYSIS.md) for the observed worker
+sweep, interpretation guidance, and a profiling checklist.
