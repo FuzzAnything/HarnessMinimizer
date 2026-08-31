@@ -64,6 +64,7 @@ DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 SYMBOLIZED_CRASH_LOCATION_FILE_NAME = "symbolized_crash_location.pattern"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
+FDP_REPLAY_RUNTIME_SOURCE_NAME = "fdp_replay_runtime.cpp"
 HARNESS_RUNNER_BINARY_NAME = "harness_runner"
 AMORTIZED_FALLBACK_STATE_SUFFIX = ".fallback-state"
 CRASH_PATTERN_SYMBOLIZE_0: str | None = None
@@ -1357,7 +1358,10 @@ def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
         opt_flags = PHASE3_SPLIT_OPT_FLAGS
     cmd.extend(
         [
-            *_phase3_replay_flags(config.use_replay),
+            *_phase3_replay_flags(
+                config.use_replay,
+                external_replay_runtime=config.use_replay,
+            ),
             *PHASE3_PLUGIN_SANITIZER_FLAGS,
             *opt_flags,
             *PHASE3_WARNING_FLAGS,
@@ -1378,6 +1382,7 @@ def _compile_harness_runner(
     static_root_config: StaticArchiveRootConfig | None = None,
 ) -> str:
     source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
+    replay_runtime_source = SCRIPT_DIR / FDP_REPLAY_RUNTIME_SOURCE_NAME
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
     static_root_object = (
         compile_static_archive_root_object(static_root_config)
@@ -1389,11 +1394,14 @@ def _compile_harness_runner(
         [
             "clang++",
             "-std=c++17",
+            f"-I{get_fdp_header_dir()}",
             *PHASE3_PLUGIN_SANITIZER_FLAGS,
             "-O1",
             "-gline-tables-only",
             "-fno-omit-frame-pointer",
+            "-Wl,--export-dynamic",
             str(source),
+            str(replay_runtime_source),
             *link_tail,
             "-ldl",
             "-o",
@@ -1555,10 +1563,17 @@ def run_amortized_reference_candidate(
     return output
 
 
-def _phase3_replay_flags(use_replay: bool) -> list[str]:
+def _phase3_replay_flags(
+    use_replay: bool,
+    *,
+    external_replay_runtime: bool = False,
+) -> list[str]:
     if not use_replay:
         return []
-    return [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
+    flags = [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
+    if external_replay_runtime:
+        flags.append("-DFDP_MIN_EXTERNAL_REPLAY_RUNTIME")
+    return flags
 
 
 def _build_pch_compile_command(
@@ -1574,7 +1589,10 @@ def _build_pch_compile_command(
     cmd = [
         "clang++",
         "-Qunused-arguments",
-        *_phase3_replay_flags(use_replay),
+        *_phase3_replay_flags(
+            use_replay,
+            external_replay_runtime=use_replay and amortize_link,
+        ),
         *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,

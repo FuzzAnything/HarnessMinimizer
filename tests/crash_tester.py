@@ -152,10 +152,17 @@ def split_flags(flags: str | None) -> list[str]:
     return flags.split() if flags else []
 
 
-def phase3_replay_flags(fdp_trace: str | None) -> list[str]:
+def phase3_replay_flags(
+    fdp_trace: str | None,
+    *,
+    external_replay_runtime: bool = False,
+) -> list[str]:
     if not fdp_trace:
         return []
-    return [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
+    flags = [f"-I{get_fdp_header_dir()}", "-DFDP_MIN_MODE_REPLAY"]
+    if external_replay_runtime:
+        flags.append("-DFDP_MIN_EXTERNAL_REPLAY_RUNTIME")
+    return flags
 
 
 def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
@@ -551,7 +558,13 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         "-Qunused-arguments",
         "-include-pch",
         args.pch_path,
-        *phase3_replay_flags(args.fdp_trace),
+        *phase3_replay_flags(
+            args.fdp_trace,
+            external_replay_runtime=bool(
+                args.amortized_runner_socket
+                or getattr(args, "pch_amortized_link", False)
+            ),
+        ),
         *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
@@ -631,7 +644,10 @@ def compile_amortized_plugin(
         opt_flags = PHASE3_SPLIT_OPT_FLAGS
     compile_cmd.extend(
         [
-            *phase3_replay_flags(args.fdp_trace),
+            *phase3_replay_flags(
+                args.fdp_trace,
+                external_replay_runtime=bool(args.amortized_runner_socket),
+            ),
             *PHASE3_PLUGIN_SANITIZER_FLAGS,
             *opt_flags,
             *PHASE3_WARNING_FLAGS,
