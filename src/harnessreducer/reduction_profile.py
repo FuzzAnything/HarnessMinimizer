@@ -22,6 +22,8 @@ STAGE_FIELDS: tuple[tuple[str, str], ...] = (
     ("total_ns", "Tester total before cleanup"),
 )
 
+BUILD_SUCCESS_ONLY_STAGE_FIELDS = frozenset({"compile_ns", "compile_link_ns"})
+
 
 def _percentile(values: Sequence[int], percentile: float) -> int:
     if not values:
@@ -124,6 +126,12 @@ def build_profile_summary(
         duration_values = event.get("durations_ns")
         if isinstance(duration_values, dict):
             for field, _ in STAGE_FIELDS:
+                if (
+                    field in BUILD_SUCCESS_ONLY_STAGE_FIELDS
+                    and "compile_success" in event
+                    and event.get("compile_success") is not True
+                ):
+                    continue
                 try:
                     value = int(duration_values.get(field, 0))
                 except (TypeError, ValueError):
@@ -238,6 +246,7 @@ def render_profile_text(summary: dict[str, object]) -> str:
             "Notes",
             "-----",
             "- Profiled checks include treereduce's initial verification check.",
+            "- Compile-related rows use only candidates with compile_success=yes when that field is recorded.",
             "- Python startup before the first executed module statement is not observable here.",
             "- Candidate execution can overlap a fallback plugin link when fallback is triggered.",
             "- Profiling appends one small JSON record per check without fsync.",

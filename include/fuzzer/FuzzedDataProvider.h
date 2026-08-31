@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#if !defined(FDP_MIN_MODE_REPLAY) || !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
 #include <cmath>
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -411,6 +413,21 @@ class FuzzedDataProvider {
   size_t remaining_bytes_;
 };
 
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+#define FDP_REPLAY_BYTES(wanted_size) \
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
+    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
+    if constexpr (std::is_same_v<T, uint8_t>) { \
+      return bs; \
+    } \
+    return std::vector<T>(bs.begin(), bs.end()); \
+  }
+
+#define FDP_REPLAY_STR(wanted_size) \
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
+    return fdp_min_internal::ReplayStringValue(line, wanted_size); \
+  }
+#else
 #define FDP_REPLAY_BYTES(wanted_size) \
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
     auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
@@ -422,6 +439,7 @@ class FuzzedDataProvider {
     auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
     return std::string((const char*)bs.data(), bs.size()); \
   }
+#endif
 
 #define FDP_REPLAY_SCALAR(type) \
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
@@ -666,6 +684,63 @@ std::vector<T> FuzzedDataProvider::ConsumeBytesIter(size_t size, size_t num_byte
   result.shrink_to_fit();
   return result;
 }
+
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+template <>
+inline std::vector<uint8_t>
+FuzzedDataProvider::ConsumeBytes<uint8_t>(size_t num_bytes, int line) {
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
+  }
+  num_bytes = std::min(num_bytes, remaining_bytes_);
+  std::vector<uint8_t> result(num_bytes);
+  if (num_bytes == 0) {
+    if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
+      fdp_min_internal::DumpBytes(line, result.data(), 0);
+    }
+    return result;
+  }
+  CopyAndAdvance(result.data(), num_bytes);
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
+    fdp_min_internal::DumpBytes(line, result.data(), result.size());
+  }
+  return result;
+}
+
+template <>
+inline std::vector<uint8_t>
+FuzzedDataProvider::ConsumeBytesWithTerminator<uint8_t>(
+    size_t num_bytes, uint8_t terminator, int line) {
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
+  }
+  num_bytes = std::min(num_bytes, remaining_bytes_);
+  std::vector<uint8_t> result(num_bytes + 1, terminator);
+  if (num_bytes != 0) {
+    CopyAndAdvance(result.data(), num_bytes);
+  }
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
+    fdp_min_internal::DumpBytes(line, result.data(), result.size());
+  }
+  return result;
+}
+
+template <>
+inline std::vector<uint8_t>
+FuzzedDataProvider::ConsumeRemainingBytes<uint8_t>(int line) {
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
+  }
+  std::vector<uint8_t> result(remaining_bytes_);
+  if (remaining_bytes_ != 0) {
+    CopyAndAdvance(result.data(), remaining_bytes_);
+  }
+  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
+    fdp_min_internal::DumpBytes(line, result.data(), result.size());
+  }
+  return result;
+}
+#endif
 
 template <typename TS, typename TU>
 TS FuzzedDataProvider::ConvertUnsignedToSigned(TU value) {

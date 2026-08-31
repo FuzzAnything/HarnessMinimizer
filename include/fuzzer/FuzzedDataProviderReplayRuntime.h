@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace fdp_min_internal {
@@ -11,6 +12,7 @@ void EnsureReplayTraceLoaded();
 long double ReplayScalarValue(int line);
 size_t ReplayRemainingValue(int line);
 std::vector<uint8_t> ReplayBytesValue(int line, size_t wanted_size);
+std::string ReplayStringValue(int line, size_t wanted_size);
 
 } // namespace fdp_min_internal
 

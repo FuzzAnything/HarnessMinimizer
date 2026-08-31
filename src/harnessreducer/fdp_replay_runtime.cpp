@@ -140,4 +140,12 @@ std::vector<uint8_t> ReplayBytesValue(int line, size_t wanted_size) {
   return ReplayTraceStore::Instance().ReplayBytesValue(line, wanted_size);
 }
 
+std::string ReplayStringValue(int line, size_t wanted_size) {
+  std::vector<uint8_t> bytes =
+      ReplayTraceStore::Instance().ReplayBytesValue(line, wanted_size);
+  if (bytes.empty())
+    return {};
+  return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+
 } // namespace fdp_min_internal

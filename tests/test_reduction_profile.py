@@ -17,8 +17,10 @@ def _event(
     end: int,
     result: int,
     compile_ns: int,
+    compile_link_ns: int = 0,
+    compile_success: bool | None = True,
 ) -> dict[str, object]:
-    return {
+    event: dict[str, object] = {
         "start_wall_ns": start,
         "end_wall_ns": end,
         "result_code": result,
@@ -27,7 +29,7 @@ def _event(
             "python_import_ns": 10,
             "argument_setup_ns": 20,
             "compile_ns": compile_ns,
-            "compile_link_ns": 0,
+            "compile_link_ns": compile_link_ns,
             "link_ns": 30,
             "execute_ns": 40,
             "oracle_ns": 50,
@@ -38,13 +40,30 @@ def _event(
             "children_system_ns": 70,
         },
     }
+    if compile_success is not None:
+        event["compile_success"] = compile_success
+    return event
 
 
 class TestReductionProfile(unittest.TestCase):
     def test_summary_reports_throughput_results_and_parallelism(self):
         events = [
-            _event(start=100, end=300, result=77, compile_ns=80),
-            _event(start=200, end=400, result=1, compile_ns=100),
+            _event(
+                start=100,
+                end=300,
+                result=77,
+                compile_ns=80,
+                compile_link_ns=55,
+                compile_success=True,
+            ),
+            _event(
+                start=200,
+                end=400,
+                result=1,
+                compile_ns=100,
+                compile_link_ns=65,
+                compile_success=False,
+            ),
         ]
 
         summary = build_profile_summary(
@@ -63,8 +82,12 @@ class TestReductionProfile(unittest.TestCase):
         self.assertAlmostEqual(reducer["mean_in_flight_checks"], 400 / 1_000_000_000)
 
         compile_stats = summary["candidate_timing"]["compile_ns"]
-        self.assertEqual(compile_stats["count"], 2)
-        self.assertEqual(compile_stats["mean_ns"], 90.0)
+        self.assertEqual(compile_stats["count"], 1)
+        self.assertEqual(compile_stats["mean_ns"], 80.0)
+
+        compile_link_stats = summary["candidate_timing"]["compile_link_ns"]
+        self.assertEqual(compile_link_stats["count"], 1)
+        self.assertEqual(compile_link_stats["mean_ns"], 55.0)
 
     def test_reader_skips_malformed_lines_and_writer_emits_both_reports(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -101,6 +124,10 @@ class TestReductionProfile(unittest.TestCase):
             self.assertTrue(text_path.is_file())
             self.assertEqual(summary["reducer"]["malformed_event_lines"], 1)
             self.assertIn("checks_per_second", render_profile_text(summary))
+            self.assertIn(
+                "Compile-related rows use only candidates with compile_success=yes",
+                render_profile_text(summary),
+            )
 
 
 if __name__ == "__main__":
