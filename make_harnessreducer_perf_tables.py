@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Create plain-text HarnessReducer performance tables from profile outputs."""
+"""Create TXT and CSV HarnessReducer performance tables from profile outputs."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime
 import json
 from pathlib import Path
@@ -243,72 +244,136 @@ def safe_divide(numerator: float | None, denominator: float | None) -> float | N
     return numerator / denominator
 
 
+def comparison_metric_values(
+    optimized_row: dict[str, object],
+    split_symbolize_row: dict[str, object],
+) -> list[tuple[str, str, float | None, float | None, float | None]]:
+    """Return raw values and speedups in one consistent representation.
+
+    Each tuple is (metric, unit, optimized value, non-optimized value,
+    optimized speedup). For times, speedup is non-optimized / optimized. For
+    throughput, it is optimized / non-optimized. A result above 1.0 therefore
+    always means that the optimized configuration is faster.
+    """
+    opt_reducer = get_reducer(optimized_row)
+    split_reducer = get_reducer(split_symbolize_row)
+    opt_summary = optimized_row["summary"]
+    split_summary = split_symbolize_row["summary"]
+    assert isinstance(opt_summary, dict)
+    assert isinstance(split_summary, dict)
+
+    opt_reduction_wall = float(opt_reducer.get("wall_seconds", 0.0))
+    split_reduction_wall = float(split_reducer.get("wall_seconds", 0.0))
+    opt_full_wall = optimized_row.get("full_wall")
+    split_full_wall = split_symbolize_row.get("full_wall")
+    assert opt_full_wall is None or isinstance(opt_full_wall, float)
+    assert split_full_wall is None or isinstance(split_full_wall, float)
+    opt_checks_per_second = float(opt_reducer.get("checks_per_second", 0.0))
+    split_checks_per_second = float(split_reducer.get("checks_per_second", 0.0))
+
+    values: list[tuple[str, str, float | None, float | None, float | None]] = [
+        (
+            "reduction_wall_time",
+            "seconds",
+            opt_reduction_wall,
+            split_reduction_wall,
+            safe_divide(split_reduction_wall, opt_reduction_wall),
+        ),
+        (
+            "full_command_wall_time",
+            "seconds",
+            opt_full_wall,
+            split_full_wall,
+            safe_divide(split_full_wall, opt_full_wall),
+        ),
+        (
+            "checks_per_second",
+            "checks/second",
+            opt_checks_per_second,
+            split_checks_per_second,
+            safe_divide(opt_checks_per_second, split_checks_per_second),
+        ),
+    ]
+
+    for metric, field in (
+        ("python_setup_time", "python_import_ns"),
+        ("compile_time", "compile_ns"),
+        ("link_time", "link_ns"),
+        ("execute_time", "execute_ns"),
+        ("total_per_check_time", "total_ns"),
+    ):
+        opt_value = timing_mean_ms(opt_summary, field)
+        split_value = timing_mean_ms(split_summary, field)
+        values.append(
+            (
+                metric,
+                "milliseconds",
+                opt_value,
+                split_value,
+                safe_divide(split_value, opt_value),
+            )
+        )
+    return values
+
+
 def comparison_rows(
     optimized: dict[int, dict[str, object]],
     split_symbolize: dict[int, dict[str, object]],
 ) -> list[list[str]]:
     rows: list[list[str]] = []
     for jobs in sorted(set(optimized) & set(split_symbolize)):
-        opt_row = optimized[jobs]
-        split_row = split_symbolize[jobs]
-        opt_reducer = get_reducer(opt_row)
-        split_reducer = get_reducer(split_row)
-        opt_summary = opt_row["summary"]
-        split_summary = split_row["summary"]
-        assert isinstance(opt_summary, dict)
-        assert isinstance(split_summary, dict)
-
+        metrics = comparison_metric_values(optimized[jobs], split_symbolize[jobs])
         rows.append(
             [
                 str(jobs),
-                format_speedup(
-                    safe_divide(
-                        float(split_reducer.get("wall_seconds", 0.0)),
-                        float(opt_reducer.get("wall_seconds", 0.0)),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(split_row.get("full_wall"), opt_row.get("full_wall"))  # type: ignore[arg-type]
-                ),
-                format_speedup(
-                    safe_divide(
-                        float(opt_reducer.get("checks_per_second", 0.0)),
-                        float(split_reducer.get("checks_per_second", 0.0)),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(
-                        timing_mean_ms(split_summary, "python_import_ns"),
-                        timing_mean_ms(opt_summary, "python_import_ns"),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(
-                        timing_mean_ms(split_summary, "compile_ns"),
-                        timing_mean_ms(opt_summary, "compile_ns"),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(
-                        timing_mean_ms(split_summary, "link_ns"),
-                        timing_mean_ms(opt_summary, "link_ns"),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(
-                        timing_mean_ms(split_summary, "execute_ns"),
-                        timing_mean_ms(opt_summary, "execute_ns"),
-                    )
-                ),
-                format_speedup(
-                    safe_divide(
-                        timing_mean_ms(split_summary, "total_ns"),
-                        timing_mean_ms(opt_summary, "total_ns"),
-                    )
-                ),
+                *(format_speedup(metric[4]) for metric in metrics),
             ]
         )
     return rows
+
+
+def write_comparison_csv(
+    output_path: Path,
+    optimized: dict[int, dict[str, object]],
+    split_symbolize: dict[int, dict[str, object]],
+) -> None:
+    """Write three compact rows of metrics for each worker count."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            [
+                "jobs",
+                "result_type",
+                "reduction_wall_seconds",
+                "full_command_wall_seconds",
+                "checks_per_second",
+                "python_setup_milliseconds",
+                "compile_milliseconds",
+                "link_milliseconds",
+                "execute_milliseconds",
+                "total_per_check_milliseconds",
+            ]
+        )
+        for jobs in sorted(set(optimized) & set(split_symbolize)):
+            metrics = comparison_metric_values(
+                optimized[jobs], split_symbolize[jobs]
+            )
+            for result_type, value_index in (
+                ("optimized", 2),
+                ("non_optimized_split_symbolize", 3),
+                ("optimized_speedup_x", 4),
+            ):
+                writer.writerow(
+                    [
+                        jobs,
+                        result_type,
+                        *(
+                            "" if metric[value_index] is None else repr(metric[value_index])
+                            for metric in metrics
+                        ),
+                    ]
+                )
 
 
 def variant_dirs_from_manifest(results_dir: Path) -> dict[str, str]:
@@ -329,7 +394,7 @@ def variant_dirs_from_manifest(results_dir: Path) -> dict[str, str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Render TXT tables from HarnessReducer performance sweep results."
+        description="Render TXT and CSV tables from HarnessReducer performance sweep results."
     )
     parser.add_argument(
         "--dir",
@@ -351,6 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Output TXT path. Default: <results-dir>/performance_tables.txt.",
+    )
+    parser.add_argument(
+        "--csv-output",
+        default=None,
+        help="Output CSV path. Default: <results-dir>/performance_comparison.csv.",
     )
     return parser
 
@@ -380,6 +450,11 @@ def main() -> int:
         else results_dir / "performance_tables.txt"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_output_path = (
+        Path(args.csv_output).expanduser().resolve()
+        if args.csv_output
+        else results_dir / "performance_comparison.csv"
+    )
 
     lines = [
         "HarnessReducer Performance Tables",
@@ -467,7 +542,9 @@ def main() -> int:
     )
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
+    write_comparison_csv(csv_output_path, optimized, split_symbolize)
     print(output_path)
+    print(csv_output_path)
     return 0
 
 
