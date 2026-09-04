@@ -39,3 +39,5 @@ benchmark/*/*/time-*/*
 dummy_file
 
 workflow-*/
+profile-*/
+latest_profile_split_symbolize_path.txt
