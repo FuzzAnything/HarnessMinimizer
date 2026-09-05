@@ -30,15 +30,15 @@
 #include <utility>
 #include <vector>
 
-#if defined(FDP_MIN_MODE_DUMP) || \
-    (defined(FDP_MIN_MODE_REPLAY) && !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
+#if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
+                                   !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
 #include <fstream>
 #include <iomanip>
 #include <mutex>
 #endif
 
-#if defined(FDP_MIN_MODE_DUMP) || \
-    (defined(FDP_MIN_MODE_REPLAY) && !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
+#if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
+                                   !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
 #include <deque>
 #include <map>
 #include <sstream>
@@ -88,11 +88,11 @@ inline const std::string &GetTracePath() {
   return path;
 }
 
-#if defined(FDP_MIN_MODE_DUMP) || \
-    (defined(FDP_MIN_MODE_REPLAY) && !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
+#if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
+                                   !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
 
 class TraceStore {
- public:
+public:
   static TraceStore &Instance() {
     static TraceStore store;
     return store;
@@ -194,7 +194,7 @@ class TraceStore {
     return value;
   }
 
- private:
+private:
   TraceStore() {
     if (kMode != Mode::kReplay)
       return;
@@ -284,9 +284,7 @@ inline std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
 
 #elif defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
 
-inline void InitializeReplayStore() {
-  EnsureReplayTraceLoaded();
-}
+inline void InitializeReplayStore() { EnsureReplayTraceLoaded(); }
 
 inline void DumpScalar(int, long double) {}
 
@@ -296,29 +294,61 @@ inline void DumpBytes(int, const uint8_t *, size_t) {}
 
 template <typename T> T ReplayScalar(int line, T fallback) {
   (void)fallback;
-  long double value = ReplayScalarValue(line);
+  if constexpr (std::is_same_v<T, bool>) {
+    return ReplayBoolValue(line);
+  } else if constexpr (std::is_same_v<T, char>) {
+    return ReplayCharValue(line);
+  } else if constexpr (std::is_same_v<T, signed char>) {
+    return ReplaySignedCharValue(line);
+  } else if constexpr (std::is_same_v<T, unsigned char>) {
+    return ReplayUnsignedCharValue(line);
+  } else if constexpr (std::is_same_v<T, short>) {
+    return ReplayShortValue(line);
+  } else if constexpr (std::is_same_v<T, unsigned short>) {
+    return ReplayUnsignedShortValue(line);
+  } else if constexpr (std::is_same_v<T, int>) {
+    return ReplayIntValue(line);
+  } else if constexpr (std::is_same_v<T, unsigned int>) {
+    return ReplayUnsignedIntValue(line);
+  } else if constexpr (std::is_same_v<T, long>) {
+    return ReplayLongValue(line);
+  } else if constexpr (std::is_same_v<T, unsigned long>) {
+    return ReplayUnsignedLongValue(line);
+  } else if constexpr (std::is_same_v<T, long long>) {
+    return ReplayLongLongValue(line);
+  } else if constexpr (std::is_same_v<T, unsigned long long>) {
+    return ReplayUnsignedLongLongValue(line);
+  } else if constexpr (std::is_same_v<T, float>) {
+    return ReplayFloatValue(line);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return ReplayDoubleValue(line);
+  } else if constexpr (std::is_same_v<T, long double>) {
+    return ReplayLongDoubleValue(line);
+  } else {
+    long double value = ReplayScalarValue(line);
 
-  if constexpr (std::is_integral_v<T>) {
-    const long double lo =
-        static_cast<long double>(std::numeric_limits<T>::lowest());
-    const long double hi =
-        static_cast<long double>(std::numeric_limits<T>::max());
-    if (value < lo)
-      value = lo;
-    if (value > hi)
-      value = hi;
-  } else if constexpr (std::is_enum_v<T>) {
-    using UT = std::underlying_type_t<T>;
-    const long double lo =
-        static_cast<long double>(std::numeric_limits<UT>::lowest());
-    const long double hi =
-        static_cast<long double>(std::numeric_limits<UT>::max());
-    if (value < lo)
-      value = lo;
-    if (value > hi)
-      value = hi;
+    if constexpr (std::is_integral_v<T>) {
+      const long double lo =
+          static_cast<long double>(std::numeric_limits<T>::lowest());
+      const long double hi =
+          static_cast<long double>(std::numeric_limits<T>::max());
+      if (value < lo)
+        value = lo;
+      if (value > hi)
+        value = hi;
+    } else if constexpr (std::is_enum_v<T>) {
+      using UT = std::underlying_type_t<T>;
+      const long double lo =
+          static_cast<long double>(std::numeric_limits<UT>::lowest());
+      const long double hi =
+          static_cast<long double>(std::numeric_limits<UT>::max());
+      if (value < lo)
+        value = lo;
+      if (value > hi)
+        value = hi;
+    }
+    return static_cast<T>(value);
   }
-  return static_cast<T>(value);
 }
 
 inline size_t ReplayRemaining(int line, size_t fallback) {
@@ -340,24 +370,18 @@ inline void DumpRemaining(int, size_t) {}
 
 inline void DumpBytes(int, const uint8_t *, size_t) {}
 
-template <typename T> T ReplayScalar(int, T fallback) {
-  return fallback;
-}
+template <typename T> T ReplayScalar(int, T fallback) { return fallback; }
 
-inline size_t ReplayRemaining(int, size_t fallback) {
-  return fallback;
-}
+inline size_t ReplayRemaining(int, size_t fallback) { return fallback; }
 
-inline std::vector<uint8_t> ReplayBytes(int, size_t) {
-  return {};
-}
+inline std::vector<uint8_t> ReplayBytes(int, size_t) { return {}; }
 
 #endif
 
 } // namespace fdp_min_internal
 
 class FuzzedDataProvider {
- public:
+public:
   FuzzedDataProvider(const uint8_t *data, size_t size)
       : data_ptr_(data), remaining_bytes_(size) {
     if (fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
@@ -367,46 +391,68 @@ class FuzzedDataProvider {
   }
   ~FuzzedDataProvider() = default;
 
-  template <typename T> std::vector<T> ConsumeBytes(size_t num_bytes, int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T> std::vector<T> ConsumeBytesWithTerminator(size_t num_bytes, T terminator = 0, int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T> std::vector<T> ConsumeRemainingBytes(int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  std::vector<T> ConsumeBytes(size_t num_bytes,
+                              int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  std::vector<T> ConsumeBytesWithTerminator(size_t num_bytes, T terminator = 0,
+                                            int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  std::vector<T> ConsumeRemainingBytes(int line = FDP_MIN_DEFAULT_SITE_ID);
 
-  std::string ConsumeBytesAsString(size_t num_bytes, int line = FDP_MIN_DEFAULT_SITE_ID);
-  std::string ConsumeRandomLengthString(size_t max_length, int line = FDP_MIN_DEFAULT_SITE_ID);
+  std::string ConsumeBytesAsString(size_t num_bytes,
+                                   int line = FDP_MIN_DEFAULT_SITE_ID);
+  std::string ConsumeRandomLengthString(size_t max_length,
+                                        int line = FDP_MIN_DEFAULT_SITE_ID);
   std::string ConsumeRandomLengthString(int line = FDP_MIN_DEFAULT_SITE_ID);
   std::string ConsumeRemainingBytesAsString(int line = FDP_MIN_DEFAULT_SITE_ID);
 
   template <typename T> T ConsumeIntegral(int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T> T ConsumeIntegralInRange(T min, T max, int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  T ConsumeIntegralInRange(T min, T max, int line = FDP_MIN_DEFAULT_SITE_ID);
 
-  template <typename T> T ConsumeFloatingPoint(int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T> T ConsumeFloatingPointInRange(T min, T max, int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  T ConsumeFloatingPoint(int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  T ConsumeFloatingPointInRange(T min, T max,
+                                int line = FDP_MIN_DEFAULT_SITE_ID);
 
-  template <typename T> T ConsumeProbability(int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  T ConsumeProbability(int line = FDP_MIN_DEFAULT_SITE_ID);
   bool ConsumeBool(int line = FDP_MIN_DEFAULT_SITE_ID);
   template <typename T> T ConsumeEnum(int line = FDP_MIN_DEFAULT_SITE_ID);
 
-  template <typename T, size_t size> T PickValueInArray(const T (&array)[size], int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T, size_t size> T PickValueInArray(const std::array<T, size> &array, int line = FDP_MIN_DEFAULT_SITE_ID);
-  template <typename T> T PickValueInArray(std::initializer_list<const T> list, int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T, size_t size>
+  T PickValueInArray(const T (&array)[size],
+                     int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T, size_t size>
+  T PickValueInArray(const std::array<T, size> &array,
+                     int line = FDP_MIN_DEFAULT_SITE_ID);
+  template <typename T>
+  T PickValueInArray(std::initializer_list<const T> list,
+                     int line = FDP_MIN_DEFAULT_SITE_ID);
 
-  size_t ConsumeData(void *destination, size_t num_bytes, int line = FDP_MIN_DEFAULT_SITE_ID);
+  size_t ConsumeData(void *destination, size_t num_bytes,
+                     int line = FDP_MIN_DEFAULT_SITE_ID);
 
   size_t remaining_bytes(int line = FDP_MIN_DEFAULT_SITE_ID) {
     if (line != -1) {
-      if (fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) return fdp_min_internal::ReplayRemaining(line, remaining_bytes_);
-      if (fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) fdp_min_internal::DumpRemaining(line, remaining_bytes_);
+      if (fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay)
+        return fdp_min_internal::ReplayRemaining(line, remaining_bytes_);
+      if (fdp_min_internal::kMode == fdp_min_internal::Mode::kDump)
+        fdp_min_internal::DumpRemaining(line, remaining_bytes_);
     }
     return remaining_bytes_;
   }
 
- private:
+private:
   FuzzedDataProvider(const FuzzedDataProvider &) = delete;
   FuzzedDataProvider &operator=(const FuzzedDataProvider &) = delete;
 
   void CopyAndAdvance(void *destination, size_t num_bytes);
   void Advance(size_t num_bytes);
-  template <typename T> std::vector<T> ConsumeBytesIter(size_t size, size_t num_bytes);
+  template <typename T>
+  std::vector<T> ConsumeBytesIter(size_t size, size_t num_bytes);
   template <typename TS, typename TU> TS ConvertUnsignedToSigned(TU value);
 
   const uint8_t *data_ptr_;
@@ -414,38 +460,42 @@ class FuzzedDataProvider {
 };
 
 #if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
-#define FDP_REPLAY_BYTES(wanted_size) \
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
-    if constexpr (std::is_same_v<T, uint8_t>) { \
-      return bs; \
-    } \
-    return std::vector<T>(bs.begin(), bs.end()); \
+#define FDP_REPLAY_BYTES(wanted_size)                                          \
+  if (line != -1 &&                                                            \
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
+    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size);                \
+    if constexpr (std::is_same_v<T, uint8_t>) {                                \
+      return bs;                                                               \
+    }                                                                          \
+    return std::vector<T>(bs.begin(), bs.end());                               \
   }
 
-#define FDP_REPLAY_STR(wanted_size) \
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    return fdp_min_internal::ReplayStringValue(line, wanted_size); \
+#define FDP_REPLAY_STR(wanted_size)                                            \
+  if (line != -1 &&                                                            \
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
+    return fdp_min_internal::ReplayStringValue(line, wanted_size);             \
   }
 #else
-#define FDP_REPLAY_BYTES(wanted_size) \
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
-    return std::vector<T>(bs.begin(), bs.end()); \
+#define FDP_REPLAY_BYTES(wanted_size)                                          \
+  if (line != -1 &&                                                            \
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
+    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size);                \
+    return std::vector<T>(bs.begin(), bs.end());                               \
   }
 
-#define FDP_REPLAY_STR(wanted_size) \
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size); \
-    return std::string((const char*)bs.data(), bs.size()); \
+#define FDP_REPLAY_STR(wanted_size)                                            \
+  if (line != -1 &&                                                            \
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
+    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size);                \
+    return std::string((const char *)bs.data(), bs.size());                    \
   }
 #endif
 
-#define FDP_REPLAY_SCALAR(type) \
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) { \
-    return fdp_min_internal::ReplayScalar<type>(line, static_cast<type>(0)); \
+#define FDP_REPLAY_SCALAR(type)                                                \
+  if (line != -1 &&                                                            \
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
+    return fdp_min_internal::ReplayScalar<type>(line, static_cast<type>(0));   \
   }
-
 
 template <typename T>
 std::vector<T> FuzzedDataProvider::ConsumeBytes(size_t num_bytes, int line) {
@@ -453,19 +503,23 @@ std::vector<T> FuzzedDataProvider::ConsumeBytes(size_t num_bytes, int line) {
   num_bytes = std::min(num_bytes, remaining_bytes_);
   auto res = ConsumeBytesIter<T>(num_bytes, num_bytes);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)res.data(), res.size() * sizeof(T));
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(),
+                                res.size() * sizeof(T));
   }
   return res;
 }
 
 template <typename T>
-std::vector<T> FuzzedDataProvider::ConsumeBytesWithTerminator(size_t num_bytes, T terminator, int line) {
+std::vector<T> FuzzedDataProvider::ConsumeBytesWithTerminator(size_t num_bytes,
+                                                              T terminator,
+                                                              int line) {
   FDP_REPLAY_BYTES((size_t)-1);
   num_bytes = std::min(num_bytes, remaining_bytes_);
   std::vector<T> result = ConsumeBytesIter<T>(num_bytes + 1, num_bytes);
   result.back() = terminator;
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)result.data(), result.size() * sizeof(T));
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)result.data(),
+                                result.size() * sizeof(T));
   }
   return result;
 }
@@ -475,23 +529,67 @@ std::vector<T> FuzzedDataProvider::ConsumeRemainingBytes(int line) {
   FDP_REPLAY_BYTES(-1);
   auto res = ConsumeBytes<T>(remaining_bytes_, -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)res.data(), res.size() * sizeof(T));
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(),
+                                res.size() * sizeof(T));
   }
   return res;
 }
 
-inline std::string FuzzedDataProvider::ConsumeBytesAsString(size_t num_bytes, int line) {
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+inline std::string FuzzedDataProvider::ConsumeBytesAsString(size_t num_bytes,
+                                                            int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayStringValue(line, static_cast<size_t>(-1));
+  }
+  return fdp_min_internal::NativeConsumeBytesAsStringValue(num_bytes, data_ptr_,
+                                                           remaining_bytes_);
+}
+
+inline std::string
+FuzzedDataProvider::ConsumeRandomLengthString(size_t max_length, int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayStringValue(line, static_cast<size_t>(-1));
+  }
+  return fdp_min_internal::NativeConsumeRandomLengthStringValue(
+      max_length, data_ptr_, remaining_bytes_);
+}
+
+inline std::string FuzzedDataProvider::ConsumeRandomLengthString(int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayStringValue(line, static_cast<size_t>(-1));
+  }
+  return fdp_min_internal::NativeConsumeRandomLengthStringValue(
+      remaining_bytes_, data_ptr_, remaining_bytes_);
+}
+
+inline std::string FuzzedDataProvider::ConsumeRemainingBytesAsString(int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayStringValue(line, static_cast<size_t>(-1));
+  }
+  return fdp_min_internal::NativeConsumeBytesAsStringValue(
+      remaining_bytes_, data_ptr_, remaining_bytes_);
+}
+#else
+inline std::string FuzzedDataProvider::ConsumeBytesAsString(size_t num_bytes,
+                                                            int line) {
   FDP_REPLAY_STR((size_t)-1);
   num_bytes = std::min(num_bytes, remaining_bytes_);
-  std::string result(reinterpret_cast<const std::string::value_type *>(data_ptr_), num_bytes);
+  std::string result(
+      reinterpret_cast<const std::string::value_type *>(data_ptr_), num_bytes);
   Advance(num_bytes);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)result.data(), result.size());
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)result.data(),
+                                result.size());
   }
   return result;
 }
 
-inline std::string FuzzedDataProvider::ConsumeRandomLengthString(size_t max_length, int line) {
+inline std::string
+FuzzedDataProvider::ConsumeRandomLengthString(size_t max_length, int line) {
   FDP_REPLAY_STR(-1);
   std::string result;
   result.reserve(std::min(max_length, remaining_bytes_));
@@ -501,13 +599,15 @@ inline std::string FuzzedDataProvider::ConsumeRandomLengthString(size_t max_leng
     if (next == '\\' && remaining_bytes_ != 0) {
       next = ConvertUnsignedToSigned<char>(data_ptr_[0]);
       Advance(1);
-      if (next != '\\') break;
+      if (next != '\\')
+        break;
     }
     result += next;
   }
   result.shrink_to_fit();
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)result.data(), result.size());
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)result.data(),
+                                result.size());
   }
   return result;
 }
@@ -516,7 +616,7 @@ inline std::string FuzzedDataProvider::ConsumeRandomLengthString(int line) {
   FDP_REPLAY_STR(-1);
   auto res = ConsumeRandomLengthString(remaining_bytes_, -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)res.data(), res.size());
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(), res.size());
   }
   return res;
 }
@@ -525,14 +625,16 @@ inline std::string FuzzedDataProvider::ConsumeRemainingBytesAsString(int line) {
   FDP_REPLAY_STR(-1);
   auto res = ConsumeBytesAsString(remaining_bytes_, -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)res.data(), res.size());
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(), res.size());
   }
   return res;
 }
+#endif
 
 template <typename T> T FuzzedDataProvider::ConsumeIntegral(int line) {
   FDP_REPLAY_SCALAR(T);
-  auto res = ConsumeIntegralInRange<T>(std::numeric_limits<T>::min(), std::numeric_limits<T>::max(), -1);
+  auto res = ConsumeIntegralInRange<T>(std::numeric_limits<T>::min(),
+                                       std::numeric_limits<T>::max(), -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
     fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
   }
@@ -541,17 +643,20 @@ template <typename T> T FuzzedDataProvider::ConsumeIntegral(int line) {
 
 template <typename T>
 T FuzzedDataProvider::ConsumeIntegralInRange(T min, T max, int line) {
-  if (min > max) abort();
+  if (min > max)
+    abort();
   FDP_REPLAY_SCALAR(T);
   uint64_t range = static_cast<uint64_t>(max) - static_cast<uint64_t>(min);
   uint64_t result = 0;
   size_t offset = 0;
-  while (offset < sizeof(T) * CHAR_BIT && (range >> offset) > 0 && remaining_bytes_ != 0) {
+  while (offset < sizeof(T) * CHAR_BIT && (range >> offset) > 0 &&
+         remaining_bytes_ != 0) {
     --remaining_bytes_;
     result = (result << CHAR_BIT) | data_ptr_[remaining_bytes_];
     offset += CHAR_BIT;
   }
-  if (range != std::numeric_limits<decltype(range)>::max()) result = result % (range + 1);
+  if (range != std::numeric_limits<decltype(range)>::max())
+    result = result % (range + 1);
   T final = static_cast<T>(static_cast<uint64_t>(min) + result);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
     fdp_min_internal::DumpScalar(line, static_cast<long double>(final));
@@ -561,7 +666,8 @@ T FuzzedDataProvider::ConsumeIntegralInRange(T min, T max, int line) {
 
 template <typename T> T FuzzedDataProvider::ConsumeFloatingPoint(int line) {
   FDP_REPLAY_SCALAR(T);
-  auto res = ConsumeFloatingPointInRange<T>(std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max(), -1);
+  auto res = ConsumeFloatingPointInRange<T>(std::numeric_limits<T>::lowest(),
+                                            std::numeric_limits<T>::max(), -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
     fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
   }
@@ -570,14 +676,16 @@ template <typename T> T FuzzedDataProvider::ConsumeFloatingPoint(int line) {
 
 template <typename T>
 T FuzzedDataProvider::ConsumeFloatingPointInRange(T min, T max, int line) {
-  if (min > max) abort();
+  if (min > max)
+    abort();
   FDP_REPLAY_SCALAR(T);
   T range = .0;
   T result = min;
   constexpr T zero(.0);
   if (max > zero && min < zero && max > min + std::numeric_limits<T>::max()) {
     range = (max / 2.0) - (min / 2.0);
-    if (ConsumeBool(-1)) result += range;
+    if (ConsumeBool(-1))
+      result += range;
   } else {
     range = max - min;
   }
@@ -590,7 +698,9 @@ T FuzzedDataProvider::ConsumeFloatingPointInRange(T min, T max, int line) {
 
 template <typename T> T FuzzedDataProvider::ConsumeProbability(int line) {
   FDP_REPLAY_SCALAR(T);
-  using IntegralType = typename std::conditional_t<(sizeof(T) <= sizeof(uint32_t)), uint32_t, uint64_t>;
+  using IntegralType =
+      typename std::conditional_t<(sizeof(T) <= sizeof(uint32_t)), uint32_t,
+                                  uint64_t>;
   T result = static_cast<T>(ConsumeIntegral<IntegralType>(-1));
   result /= static_cast<T>(std::numeric_limits<IntegralType>::max());
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
@@ -599,6 +709,98 @@ template <typename T> T FuzzedDataProvider::ConsumeProbability(int line) {
   return result;
 }
 
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+#define FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(Type)                        \
+  template <>                                                                  \
+  inline Type FuzzedDataProvider::ConsumeIntegral<Type>(int line) {            \
+    if (line != -1 &&                                                          \
+        fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {          \
+      return fdp_min_internal::ReplayScalar<Type>(line, static_cast<Type>(0)); \
+    }                                                                          \
+    uint64_t raw = fdp_min_internal::NativeConsumeIntegralInRangeValue(        \
+        static_cast<uint64_t>(std::numeric_limits<Type>::min()),               \
+        static_cast<uint64_t>(std::numeric_limits<Type>::max()),               \
+        sizeof(Type) * CHAR_BIT, data_ptr_, remaining_bytes_);                 \
+    return static_cast<Type>(raw);                                             \
+  }                                                                            \
+  template <>                                                                  \
+  inline Type FuzzedDataProvider::ConsumeIntegralInRange<Type>(                \
+      Type min, Type max, int line) {                                          \
+    if (min > max)                                                             \
+      abort();                                                                 \
+    if (line != -1 &&                                                          \
+        fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {          \
+      return fdp_min_internal::ReplayScalar<Type>(line, static_cast<Type>(0)); \
+    }                                                                          \
+    uint64_t raw = fdp_min_internal::NativeConsumeIntegralInRangeValue(        \
+        static_cast<uint64_t>(min), static_cast<uint64_t>(max),                \
+        sizeof(Type) * CHAR_BIT, data_ptr_, remaining_bytes_);                 \
+    return static_cast<Type>(raw);                                             \
+  }
+
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(char)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(signed char)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(unsigned char)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(short)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(unsigned short)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(int)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(unsigned int)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(long)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(unsigned long)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(long long)
+FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION(unsigned long long)
+
+#undef FDP_DEFINE_INTEGRAL_REPLAY_SPECIALIZATION
+
+#define FDP_DEFINE_FLOATING_REPLAY_SPECIALIZATION(Type, Suffix)                \
+  template <>                                                                  \
+  inline Type FuzzedDataProvider::ConsumeFloatingPoint<Type>(int line) {       \
+    if (line != -1 &&                                                          \
+        fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {          \
+      return fdp_min_internal::ReplayScalar<Type>(line, static_cast<Type>(0)); \
+    }                                                                          \
+    return fdp_min_internal::NativeConsumeFloatingPointInRange##Suffix(        \
+        std::numeric_limits<Type>::lowest(), std::numeric_limits<Type>::max(), \
+        data_ptr_, remaining_bytes_);                                          \
+  }                                                                            \
+  template <>                                                                  \
+  inline Type FuzzedDataProvider::ConsumeFloatingPointInRange<Type>(           \
+      Type min, Type max, int line) {                                          \
+    if (min > max)                                                             \
+      abort();                                                                 \
+    if (line != -1 &&                                                          \
+        fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {          \
+      return fdp_min_internal::ReplayScalar<Type>(line, static_cast<Type>(0)); \
+    }                                                                          \
+    return fdp_min_internal::NativeConsumeFloatingPointInRange##Suffix(        \
+        min, max, data_ptr_, remaining_bytes_);                                \
+  }                                                                            \
+  template <>                                                                  \
+  inline Type FuzzedDataProvider::ConsumeProbability<Type>(int line) {         \
+    if (line != -1 &&                                                          \
+        fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {          \
+      return fdp_min_internal::ReplayScalar<Type>(line, static_cast<Type>(0)); \
+    }                                                                          \
+    return fdp_min_internal::NativeConsumeProbability##Suffix(                 \
+        data_ptr_, remaining_bytes_);                                          \
+  }
+
+FDP_DEFINE_FLOATING_REPLAY_SPECIALIZATION(float, Float)
+FDP_DEFINE_FLOATING_REPLAY_SPECIALIZATION(double, Double)
+FDP_DEFINE_FLOATING_REPLAY_SPECIALIZATION(long double, LongDouble)
+
+#undef FDP_DEFINE_FLOATING_REPLAY_SPECIALIZATION
+#endif
+
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+inline bool FuzzedDataProvider::ConsumeBool(int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayScalar<bool>(line, false);
+  }
+  return fdp_min_internal::NativeConsumeBoolValue(data_ptr_, remaining_bytes_);
+}
+#else
 inline bool FuzzedDataProvider::ConsumeBool(int line) {
   FDP_REPLAY_SCALAR(bool);
   bool res = 1 & ConsumeIntegral<uint8_t>(-1);
@@ -607,10 +809,12 @@ inline bool FuzzedDataProvider::ConsumeBool(int line) {
   }
   return res;
 }
+#endif
 
 template <typename T> T FuzzedDataProvider::ConsumeEnum(int line) {
   FDP_REPLAY_SCALAR(T);
-  T res = static_cast<T>(ConsumeIntegralInRange<uint32_t>(0, static_cast<uint32_t>(T::kMaxValue), -1));
+  T res = static_cast<T>(ConsumeIntegralInRange<uint32_t>(
+      0, static_cast<uint32_t>(T::kMaxValue), -1));
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
     fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
   }
@@ -628,7 +832,8 @@ T FuzzedDataProvider::PickValueInArray(const T (&array)[size], int line) {
 }
 
 template <typename T, size_t size>
-T FuzzedDataProvider::PickValueInArray(const std::array<T, size> &array, int line) {
+T FuzzedDataProvider::PickValueInArray(const std::array<T, size> &array,
+                                       int line) {
   FDP_REPLAY_SCALAR(T);
   T res = array[ConsumeIntegralInRange<size_t>(0, size - 1, -1)];
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
@@ -638,46 +843,62 @@ T FuzzedDataProvider::PickValueInArray(const std::array<T, size> &array, int lin
 }
 
 template <typename T>
-T FuzzedDataProvider::PickValueInArray(std::initializer_list<const T> list, int line) {
-  if (!list.size()) abort();
+T FuzzedDataProvider::PickValueInArray(std::initializer_list<const T> list,
+                                       int line) {
+  if (!list.size())
+    abort();
   FDP_REPLAY_SCALAR(T);
-  T res = *(list.begin() + ConsumeIntegralInRange<size_t>(0, list.size() - 1, -1));
+  T res =
+      *(list.begin() + ConsumeIntegralInRange<size_t>(0, list.size() - 1, -1));
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
     fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
   }
   return res;
 }
 
-inline size_t FuzzedDataProvider::ConsumeData(void *destination, size_t num_bytes, int line) {
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+inline size_t FuzzedDataProvider::ConsumeData(void *destination,
+                                              size_t num_bytes, int line) {
+#if defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    return fdp_min_internal::ReplayBytesToBuffer(line, destination);
+  }
+#else
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
     auto bs = fdp_min_internal::ReplayBytes(line, (size_t)-1);
     std::memcpy(destination, bs.data(), bs.size());
     return bs.size();
   }
+#endif
   num_bytes = std::min(num_bytes, remaining_bytes_);
   CopyAndAdvance(destination, num_bytes);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t*)destination, num_bytes);
+    fdp_min_internal::DumpBytes(line, (const uint8_t *)destination, num_bytes);
   }
   return num_bytes;
 }
 
-inline void FuzzedDataProvider::CopyAndAdvance(void *destination, size_t num_bytes) {
+inline void FuzzedDataProvider::CopyAndAdvance(void *destination,
+                                               size_t num_bytes) {
   std::memcpy(destination, data_ptr_, num_bytes);
   Advance(num_bytes);
 }
 
 inline void FuzzedDataProvider::Advance(size_t num_bytes) {
-  if (num_bytes > remaining_bytes_) abort();
+  if (num_bytes > remaining_bytes_)
+    abort();
   data_ptr_ += num_bytes;
   remaining_bytes_ -= num_bytes;
 }
 
 template <typename T>
-std::vector<T> FuzzedDataProvider::ConsumeBytesIter(size_t size, size_t num_bytes) {
+std::vector<T> FuzzedDataProvider::ConsumeBytesIter(size_t size,
+                                                    size_t num_bytes) {
   std::vector<T> result(size);
   if (size == 0) {
-    if (num_bytes != 0) abort();
+    if (num_bytes != 0)
+      abort();
     return result;
   }
   CopyAndAdvance(result.data(), num_bytes);
@@ -689,63 +910,45 @@ std::vector<T> FuzzedDataProvider::ConsumeBytesIter(size_t size, size_t num_byte
 template <>
 inline std::vector<uint8_t>
 FuzzedDataProvider::ConsumeBytes<uint8_t>(size_t num_bytes, int line) {
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
     return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
   }
-  num_bytes = std::min(num_bytes, remaining_bytes_);
-  std::vector<uint8_t> result(num_bytes);
-  if (num_bytes == 0) {
-    if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-      fdp_min_internal::DumpBytes(line, result.data(), 0);
-    }
-    return result;
-  }
-  CopyAndAdvance(result.data(), num_bytes);
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, result.data(), result.size());
-  }
-  return result;
+  return fdp_min_internal::NativeConsumeBytesValue(num_bytes, data_ptr_,
+                                                   remaining_bytes_);
 }
 
 template <>
 inline std::vector<uint8_t>
-FuzzedDataProvider::ConsumeBytesWithTerminator<uint8_t>(
-    size_t num_bytes, uint8_t terminator, int line) {
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+FuzzedDataProvider::ConsumeBytesWithTerminator<uint8_t>(size_t num_bytes,
+                                                        uint8_t terminator,
+                                                        int line) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
     return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
   }
-  num_bytes = std::min(num_bytes, remaining_bytes_);
-  std::vector<uint8_t> result(num_bytes + 1, terminator);
-  if (num_bytes != 0) {
-    CopyAndAdvance(result.data(), num_bytes);
-  }
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, result.data(), result.size());
-  }
-  return result;
+  return fdp_min_internal::NativeConsumeBytesWithTerminatorValue(
+      num_bytes, terminator, data_ptr_, remaining_bytes_);
 }
 
 template <>
 inline std::vector<uint8_t>
 FuzzedDataProvider::ConsumeRemainingBytes<uint8_t>(int line) {
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
     return fdp_min_internal::ReplayBytes(line, static_cast<size_t>(-1));
   }
-  std::vector<uint8_t> result(remaining_bytes_);
-  if (remaining_bytes_ != 0) {
-    CopyAndAdvance(result.data(), remaining_bytes_);
-  }
-  if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, result.data(), result.size());
-  }
-  return result;
+  return fdp_min_internal::NativeConsumeBytesValue(remaining_bytes_, data_ptr_,
+                                                   remaining_bytes_);
 }
 #endif
 
 template <typename TS, typename TU>
 TS FuzzedDataProvider::ConvertUnsignedToSigned(TU value) {
-  if (std::numeric_limits<TS>::is_modulo) return static_cast<TS>(value);
-  if (value <= std::numeric_limits<TS>::max()) return static_cast<TS>(value);
+  if (std::numeric_limits<TS>::is_modulo)
+    return static_cast<TS>(value);
+  if (value <= std::numeric_limits<TS>::max())
+    return static_cast<TS>(value);
   constexpr auto TS_min = std::numeric_limits<TS>::min();
   return TS_min + static_cast<TS>(value - TS_min);
 }

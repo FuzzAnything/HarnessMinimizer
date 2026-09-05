@@ -561,7 +561,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         *phase3_replay_flags(
             args.fdp_trace,
             external_replay_runtime=bool(
-                args.amortized_runner_socket
+                getattr(args, "amortized_runner_socket", None)
                 or getattr(args, "pch_amortized_link", False)
             ),
         ),

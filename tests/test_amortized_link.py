@@ -710,6 +710,155 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     assert "AddressSanitizer" in pch_tester.stdout + pch_tester.stderr
 
 
+def test_amortized_runner_replay_runtime_supports_common_fdp_helpers(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-fdp-common"))
+    target_source = tmp_path / "fdp_common_target.cpp"
+    target_library = tmp_path / "libfdp_common_target_asan.so"
+    harness_source = tmp_path / "fdp_common_harness.cpp"
+    trace_path = tmp_path / "fdp_trace.log"
+    trace_path.write_text(
+        "\n".join(
+            [
+                "S 101 1",
+                "S 102 42",
+                "S 103 9",
+                "S 104 3.5",
+                "S 105 0.25",
+                "S 106 0.5",
+                "S 107 22",
+                "B 201 4 5 6 7 99",
+                "B 202 3 97 98 99",
+                "R 301 1234",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    target_source.write_text(
+        """
+extern "C" __attribute__((noinline)) void replay_target_crash(int trigger) {
+  if (!trigger) {
+    return;
+  }
+  volatile int *values = new int[1];
+  values[4] = 7;
+}
+""",
+        encoding="utf-8",
+    )
+    harness_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include "fuzzer/FuzzedDataProvider.h"
+extern "C" void replay_target_crash(int);
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  FuzzedDataProvider fdp(data, size);
+  int choices[] = {11, 22, 33};
+  bool trigger = fdp.ConsumeBool(101);
+  int whole = fdp.ConsumeIntegral<int>(102);
+  unsigned int ranged = fdp.ConsumeIntegralInRange<unsigned int>(0, 10, 103);
+  double number = fdp.ConsumeFloatingPoint<double>(104);
+  float probability = fdp.ConsumeProbability<float>(105);
+  float ranged_number = fdp.ConsumeFloatingPointInRange<float>(-1.0f, 1.0f, 106);
+  int choice = fdp.PickValueInArray(choices, 107);
+  std::vector<uint8_t> terminated =
+      fdp.ConsumeBytesWithTerminator<uint8_t>(3, 99, 201);
+  char copied[3] = {};
+  size_t copied_size = fdp.ConsumeData(copied, sizeof(copied), 202);
+  size_t remaining = fdp.remaining_bytes(301);
+  bool matches = trigger && whole == 42 && ranged == 9 && number == 3.5 &&
+                 probability == 0.25f && ranged_number == 0.5f &&
+                 choice == 22 && terminated.size() == 4 &&
+                 terminated[0] == 5 && terminated[1] == 6 &&
+                 terminated[2] == 7 && terminated[3] == 99 &&
+                 copied_size == 3 && copied[0] == 'a' && copied[1] == 'b' &&
+                 copied[2] == 'c' && remaining == 1234;
+  if (matches) {
+    replay_target_crash(1);
+  }
+  return 0;
+}
+""",
+        encoding="utf-8",
+    )
+
+    compile_target = subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            "-fsanitize=address,undefined",
+            "-O1",
+            "-gline-tables-only",
+            str(target_source),
+            "-o",
+            str(target_library),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_target.returncode == 0, compile_target.stderr
+
+    with reducer_runner.start_amortized_runner(
+        str(target_library),
+        None,
+        str(trace_path),
+        symbolize=False,
+    ) as runner:
+        split_tester = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                str(harness_source),
+                "AddressSanitizer",
+                "--split",
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        pch = reducer_runner.prepare_phase3_pch_harness(
+            str(harness_source),
+            compile_flags=None,
+            use_replay=True,
+            amortize_link=True,
+        )
+        pch_tester = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                pch.body_source,
+                "AddressSanitizer",
+                "--pch",
+                "--pch-path",
+                pch.pch_file,
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert split_tester.returncode == 77, split_tester.stdout + split_tester.stderr
+    assert "AddressSanitizer" in split_tester.stdout + split_tester.stderr
+    assert pch_tester.returncode == 77, pch_tester.stdout + pch_tester.stderr
+    assert "AddressSanitizer" in pch_tester.stdout + pch_tester.stderr
+
+
 def test_amortized_runner_executes_candidate_against_multiple_static_targets(
     tmp_path: Path,
 ) -> None:
