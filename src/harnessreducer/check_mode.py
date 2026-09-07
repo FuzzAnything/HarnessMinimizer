@@ -143,7 +143,7 @@ def _run_check_reference_harness(
     if crash_input:
         cmd.append(crash_input)
 
-    env = runtime_library_env(link_flags)
+    env = runtime_library_env(link_flags, symbolize=symbolize)
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"

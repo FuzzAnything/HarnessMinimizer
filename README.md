@@ -19,6 +19,7 @@ Use Linux with the following tools available in `PATH`:
 - `clang-format`
 - `llvm-profdata`
 - `llvm-cov`
+- `llvm-symbolizer` (or an explicit `ASAN_SYMBOLIZER_PATH` / `UBSAN_SYMBOLIZER_PATH`)
 - `llvm-objcopy` (optional, used to export hidden static-archive symbols for faster `--amortize-link`)
 - Python 3.12+
 - a current stable Rust toolchain (`rustc` and `cargo`) to build the patched `treereduce-c`
@@ -145,6 +146,24 @@ headers and compiled libraries available in the execution environment. Supply
 their include paths with `--compile-flags` and their library paths/names with
 `--link-flags`, as shown below. The tool builds its native persistent runner
 when `--amortize-link` is requested; there is no separate runner install step.
+
+HarnessReducer automatically isolates external LLVM symbolizers from the
+target library directories it adds to `LD_LIBRARY_PATH`. This prevents a
+symbolizer that depends on libcurl, for example, from loading the instrumented
+benchmark libcurl. It keeps your selected `ASAN_SYMBOLIZER_PATH` and
+`UBSAN_SYMBOLIZER_PATH` tools (or finds `llvm-symbolizer` on `PATH`), and restores
+the original library search path only for those helper processes. The harness
+continues to load the target libraries. No manual wrapper, environment export,
+LLVM upgrade, or Docker rebuild is needed for this isolation.
+
+The bundled launchers exec the selected symbolizer without leaving a waiting
+shell process. The `symbolize=0` path skips symbolizer preparation; symbolized
+execution timings include the launcher cost in the existing measurement
+regions. PCH, amortized linking, timeout calibration, and crash validation rules
+are unchanged. If reference symbolization still fails, the work directory's
+`reference_symbolization_failure.log` contains the raw sanitizer report,
+including symbolizer startup errors. `--symbolize` still requires a valid
+symbolized crash location.
 
 ## Basic CLI Usage
 

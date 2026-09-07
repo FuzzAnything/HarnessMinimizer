@@ -46,7 +46,7 @@ update_last_interesting_file = _crash_tester._update_last_interesting_file
 
 
 def _execution_env(args: argparse.Namespace, *, symbolize: bool) -> dict[str, str]:
-    env = runtime_library_env(args.link_flags)
+    env = runtime_library_env(args.link_flags, symbolize=symbolize)
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
     env["UBSAN_OPTIONS"] = (

@@ -65,6 +65,7 @@ CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
 CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 SYMBOLIZED_CRASH_LOCATION_FILE_NAME = "symbolized_crash_location.pattern"
+SYMBOLIZATION_FAILURE_LOG_NAME = "reference_symbolization_failure.log"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
 FDP_REPLAY_RUNTIME_SOURCE_NAME = "fdp_replay_runtime.cpp"
@@ -342,12 +343,17 @@ def runtime_library_directories(link_flags: str | None) -> tuple[str, ...]:
 def runtime_library_env(
     link_flags: str | None,
     base_env: dict[str, str] | None = None,
+    *,
+    symbolize: bool = True,
 ) -> dict[str, str]:
     """Build an execution environment that can locate dynamically linked targets."""
     env = dict(base_env) if base_env is not None else os.environ.copy()
     directories = runtime_library_directories(link_flags)
     if not directories:
         return env
+    if symbolize:
+        from harnessreducer.symbolizer import isolate_symbolizer_environment
+        isolate_symbolizer_environment(env)
     existing = env.get("LD_LIBRARY_PATH", "")
     prefix = os.pathsep.join(directories)
     env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
@@ -1445,7 +1451,7 @@ def start_amortized_runner(
     runner_binary = _compile_harness_runner(link_inputs, static_root_config)
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
     socket_path = str(Path(socket_dir) / "runner.sock")
-    env = runtime_library_env(link_flags)
+    env = runtime_library_env(link_flags, symbolize=symbolize)
     env["HARNESSREDUCER_RUNNER_PARENT_PID"] = str(os.getpid())
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = sanitizer_asan_options(
@@ -1461,6 +1467,9 @@ def start_amortized_runner(
         env.pop("FDP_TRACE_PATH", None)
     library_dirs = tuple(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
     if library_dirs:
+        if symbolize:
+            from harnessreducer.symbolizer import isolate_symbolizer_environment
+            isolate_symbolizer_environment(env)
         existing = env.get("LD_LIBRARY_PATH", "")
         prefix = os.pathsep.join(library_dirs)
         env["LD_LIBRARY_PATH"] = prefix + (os.pathsep + existing if existing else "")
@@ -2448,6 +2457,7 @@ def reset_stack_trace_state() -> None:
         get_crash_pattern_file(symbolized=True),
         get_dynamic_crash_site_file(),
         get_symbolized_crash_location_file(),
+        str(Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME),
     ):
         try:
             os.remove(path)
@@ -2625,7 +2635,7 @@ def collect_harness_coverage(
     raw_path = _source_coverage_raw_path()
     profdata_path = _source_coverage_data_path()
 
-    env = runtime_library_env(link_flags)
+    env = runtime_library_env(link_flags, symbolize=False)
     env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
     env["LLVM_PROFILE_FILE"] = str(raw_path)
@@ -2737,7 +2747,7 @@ def _run_harness_for_crash_reference(
     cmd = [output_bin]
     if crash_input:
         cmd.append(crash_input)
-    env = runtime_library_env(link_flags)
+    env = runtime_library_env(link_flags, symbolize=symbolize)
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
@@ -2820,6 +2830,8 @@ def _record_symbolized_reference_crash_location(
         set_symbolized_reference_crash_location_pattern(None)
         _persist_symbolized_reference_crash_location(None)
         message = "No symbolized crash location found in the first pre-harness stack trace."
+        diagnostic = _save_symbolization_failure(output)
+        message += f" Raw sanitizer output: {diagnostic}"
         if required:
             raise ValueError(message)
         print(f"[!] {message}")
@@ -2830,6 +2842,12 @@ def _record_symbolized_reference_crash_location(
     _persist_symbolized_reference_crash_location(pattern)
     print(f"[+] Recorded symbolized crash location: {location}")
     return pattern
+
+
+def _save_symbolization_failure(output: str) -> str:
+    path = Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME
+    path.write_text(output, encoding="utf-8")
+    return str(path)
 
 
 def _extract_crash_signature_from_output(output: str) -> str | None:
@@ -2981,7 +2999,8 @@ def extract_crash_pattern_from_output(
             os.remove(get_stack_trace_file())
         except FileNotFoundError:
             pass
-        print("[!] No symbolized stack trace found in crash output.")
+        diagnostic = _save_symbolization_failure(symbolized_output)
+        print(f"[!] No symbolized stack trace found in crash output. Raw sanitizer output: {diagnostic}")
     if record_symbolized_crash_location:
         _record_symbolized_reference_crash_location(
             symbolized_output,

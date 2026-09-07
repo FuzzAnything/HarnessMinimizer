@@ -1093,7 +1093,7 @@ def main() -> int:
 
         use_symbolize = args.symbolize
 
-        env = runtime_library_env(args.link_flags)
+        env = runtime_library_env(args.link_flags, symbolize=use_symbolize)
         if use_symbolize:
             env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"

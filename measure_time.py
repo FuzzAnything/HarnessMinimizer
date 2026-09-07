@@ -483,7 +483,7 @@ def sanitizer_env(
     *,
     detect_odr_violation: bool = True,
 ) -> dict[str, str]:
-    env = rr.runtime_library_env(link_flags)
+    env = rr.runtime_library_env(link_flags, symbolize=symbolize)
     value = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = rr.sanitizer_asan_options(
         symbolize=symbolize,
