@@ -1,3 +1,4 @@
+#include "process_supervisor.h"
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -18,55 +19,6 @@
 namespace {
 
 using RunOneFn = int (*)(const uint8_t *, size_t);
-volatile sig_atomic_t TimedChild = -1;
-volatile sig_atomic_t ChildTimedOut = 0;
-
-void HandleTimeout(int) {
-  ChildTimedOut = 1;
-  if (TimedChild > 0)
-    kill(static_cast<pid_t>(TimedChild), SIGKILL);
-}
-
-bool WriteAll(int fd, const char *data, size_t size) {
-  while (size != 0) {
-    const ssize_t written = write(fd, data, size);
-    if (written < 0) {
-      if (errno == EINTR)
-        continue;
-      return false;
-    }
-    data += written;
-    size -= static_cast<size_t>(written);
-  }
-  return true;
-}
-
-std::string ReadPluginPath(int fd) {
-  std::string path;
-  char ch = '\0';
-  while (path.size() < 65536) {
-    const ssize_t count = read(fd, &ch, 1);
-    if (count == 0)
-      break;
-    if (count < 0) {
-      if (errno == EINTR)
-        continue;
-      return {};
-    }
-    if (ch == '\n')
-      break;
-    path.push_back(ch);
-  }
-  return path;
-}
-
-int WaitStatusToExitCode(int status) {
-  if (WIFEXITED(status))
-    return WEXITSTATUS(status);
-  if (WIFSIGNALED(status))
-    return 128 + WTERMSIG(status);
-  return 1;
-}
 
 void CloseHandles(std::vector<void *> &handles) {
   for (void *handle : handles) {
@@ -130,10 +82,11 @@ void HandleRequest(int connection, int listen_fd,
                    const std::vector<uint8_t> &crash_data,
                    int exec_timeout_seconds) {
   close(listen_fd);
-  const std::string plugin_path = ReadPluginPath(connection);
+  const uint64_t deadline = hrprocess::NowNs() + uint64_t(exec_timeout_seconds) * 1000000000;
+  const std::string plugin_path = hrprocess::ReadRequest(connection, deadline);
   if (plugin_path.empty()) {
     const std::string response = "1 0\n";
-    WriteAll(connection, response.data(), response.size());
+    hrprocess::Send(connection, response, deadline);
     close(connection);
     _exit(0);
   }
@@ -142,17 +95,18 @@ void HandleRequest(int connection, int listen_fd,
   if (pipe(output_pipe) != 0) {
     const std::string message = std::string("pipe failed: ") + strerror(errno) + "\n";
     const std::string header = "1 " + std::to_string(message.size()) + "\n";
-    WriteAll(connection, header.data(), header.size());
-    WriteAll(connection, message.data(), message.size());
+    hrprocess::Send(connection, header, deadline);
+    hrprocess::Send(connection, message, deadline);
     close(connection);
     _exit(0);
   }
 
   // The main server ignores SIGCHLD to avoid monitor zombies. The monitor must
   // restore normal handling so it can wait for the candidate executor.
-  signal(SIGCHLD, SIG_DFL);
+  const pid_t monitor = getpid();
   const pid_t child = fork();
   if (child == 0) {
+    hrprocess::PrepareExecutor(monitor);
     close(output_pipe[0]);
     dup2(output_pipe[1], STDOUT_FILENO);
     dup2(output_pipe[1], STDERR_FILENO);
@@ -177,40 +131,13 @@ void HandleRequest(int connection, int listen_fd,
     _exit(result & 0xff);
   }
 
-  TimedChild = child;
-  ChildTimedOut = 0;
-  signal(SIGALRM, HandleTimeout);
-  alarm(static_cast<unsigned int>(exec_timeout_seconds));
   close(output_pipe[1]);
-  std::string output;
-  char buffer[16384];
-  while (true) {
-    const ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
-    if (count == 0)
-      break;
-    if (count < 0) {
-      if (errno == EINTR)
-        continue;
-      break;
-    }
-    output.append(buffer, static_cast<size_t>(count));
-  }
-  close(output_pipe[0]);
-  alarm(0);
-  if (ChildTimedOut) {
-    output.append("Execution timed out after ");
-    output.append(std::to_string(exec_timeout_seconds));
-    output.append(" seconds.\n");
-  }
-
-  int wait_status = 0;
-  if (child < 0 || waitpid(child, &wait_status, 0) < 0)
-    wait_status = 1 << 8;
-  const int exit_code = ChildTimedOut ? 124 : WaitStatusToExitCode(wait_status);
-  const std::string header =
-      std::to_string(exit_code) + " " + std::to_string(output.size()) + "\n";
-  WriteAll(connection, header.data(), header.size());
-  WriteAll(connection, output.data(), output.size());
+  auto result = hrprocess::Supervise(child, output_pipe[0], connection, deadline);
+  const std::string header = std::to_string(result.status) + " " +
+                             std::to_string(result.output.size()) + "\n";
+  const uint64_t reply_deadline = hrprocess::NowNs() + 1000000000;
+  hrprocess::Send(connection, header, reply_deadline);
+  hrprocess::Send(connection, result.output, reply_deadline);
   close(connection);
   _exit(0);
 }
@@ -218,6 +145,7 @@ void HandleRequest(int connection, int listen_fd,
 } // namespace
 
 int main(int argc, char **argv) {
+  if (!hrprocess::FollowOwner()) return 125;
   if (argc < 4) {
     std::fprintf(stderr,
                  "usage: harness_runner SOCKET CRASH_INPUT EXEC_TIMEOUT_SECS "
@@ -282,6 +210,7 @@ int main(int argc, char **argv) {
   sigemptyset(&action.sa_mask);
   sigaction(SIGCHLD, &action, nullptr);
 
+  const pid_t server = getpid();
   while (true) {
     const int connection = accept(listen_fd, nullptr, nullptr);
     if (connection < 0) {
@@ -291,8 +220,10 @@ int main(int argc, char **argv) {
       break;
     }
     const pid_t monitor = fork();
-    if (monitor == 0)
+    if (monitor == 0) {
+      if (!hrprocess::PrepareMonitor(server)) _exit(125);
       HandleRequest(connection, listen_fd, crash_data, exec_timeout_seconds);
+    }
     close(connection);
   }
 

@@ -13,8 +13,7 @@ from pathlib import Path
 import platform
 import re
 import shlex
-import signal
-import socket
+import shutil
 import statistics
 import subprocess
 import sys
@@ -25,6 +24,10 @@ from typing import Iterable, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from harnessreducer.process_supervisor import (
+    run_supervised, termination_guard, terminate_process_group, runner_request,
+)
+
 from harnessreducer import reducer_runner as rr  # noqa: E402
 
 
@@ -34,6 +37,7 @@ AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
 
 
 TIMING_RUNNER_SOURCE = r'''
+#include "process_supervisor.h"
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -58,19 +62,10 @@ namespace {
 using RunOneFn = int (*)(const uint8_t *, size_t);
 using Clock = std::chrono::steady_clock;
 
-volatile sig_atomic_t TimedChild = -1;
-volatile sig_atomic_t ChildTimedOut = 0;
-
 uint64_t NowNs() {
   return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           Clock::now().time_since_epoch()).count());
-}
-
-void HandleTimeout(int) {
-  ChildTimedOut = 1;
-  if (TimedChild > 0)
-    kill(static_cast<pid_t>(TimedChild), SIGKILL);
 }
 
 bool WriteAll(int fd, const void *raw_data, size_t size) {
@@ -86,50 +81,6 @@ bool WriteAll(int fd, const void *raw_data, size_t size) {
     size -= static_cast<size_t>(written);
   }
   return true;
-}
-
-bool ReadAll(int fd, void *raw_data, size_t size) {
-  char *data = static_cast<char *>(raw_data);
-  while (size != 0) {
-    const ssize_t count = read(fd, data, size);
-    if (count == 0)
-      return false;
-    if (count < 0) {
-      if (errno == EINTR)
-        continue;
-      return false;
-    }
-    data += count;
-    size -= static_cast<size_t>(count);
-  }
-  return true;
-}
-
-std::string ReadPluginPath(int fd) {
-  std::string path;
-  char ch = '\0';
-  while (path.size() < 65536) {
-    const ssize_t count = read(fd, &ch, 1);
-    if (count == 0)
-      break;
-    if (count < 0) {
-      if (errno == EINTR)
-        continue;
-      return {};
-    }
-    if (ch == '\n')
-      break;
-    path.push_back(ch);
-  }
-  return path;
-}
-
-int WaitStatusToExitCode(int status) {
-  if (WIFEXITED(status))
-    return WEXITSTATUS(status);
-  if (WIFSIGNALED(status))
-    return 128 + WTERMSIG(status);
-  return 1;
 }
 
 void CloseHandles(std::vector<void *> &handles) {
@@ -218,10 +169,11 @@ void HandleRequest(int connection, int listen_fd,
   const uint64_t request_start_ns = NowNs();
   const uint64_t monitor_fork_ns = request_start_ns - monitor_fork_start_ns;
   close(listen_fd);
-  const std::string plugin_path = ReadPluginPath(connection);
+  const uint64_t deadline = hrprocess::NowNs() + uint64_t(timeout_seconds) * 1000000000;
+  const std::string plugin_path = hrprocess::ReadRequest(connection, deadline);
   if (plugin_path.empty()) {
     const std::string response = "1 0 0 0 0 0 0 0 0 0\n";
-    WriteAll(connection, response.data(), response.size());
+    hrprocess::Send(connection, response, deadline);
     close(connection);
     _exit(0);
   }
@@ -232,16 +184,17 @@ void HandleRequest(int connection, int listen_fd,
     const std::string message = std::string("pipe failed: ") + strerror(errno) + "\n";
     const std::string header = "1 " + std::to_string(message.size()) +
         " 0 0 0 0 0 0 0 0\n";
-    WriteAll(connection, header.data(), header.size());
-    WriteAll(connection, message.data(), message.size());
+    hrprocess::Send(connection, header, hrprocess::NowNs() + 1000000000);
+    hrprocess::Send(connection, message, deadline);
     close(connection);
     _exit(0);
   }
 
-  signal(SIGCHLD, SIG_DFL);
+  const pid_t monitor = getpid();
   const uint64_t executor_fork_start_ns = NowNs();
   const pid_t child = fork();
   if (child == 0) {
+    hrprocess::PrepareExecutor(monitor);
     close(output_pipe[0]);
     close(metrics_pipe[0]);
     dup2(output_pipe[1], STDOUT_FILENO);
@@ -284,44 +237,19 @@ void HandleRequest(int connection, int listen_fd,
   close(output_pipe[1]);
   close(metrics_pipe[1]);
 
-  TimedChild = child;
-  ChildTimedOut = 0;
-  signal(SIGALRM, HandleTimeout);
-  alarm(timeout_seconds);
-
+  auto supervised = hrprocess::Supervise(child, output_pipe[0], connection,
+                                         deadline, metrics_pipe[0], sizeof(PluginMetrics));
   PluginMetrics metrics;
-  if (!ReadAll(metrics_pipe[0], &metrics, sizeof(metrics)))
-    metrics = PluginMetrics{};
-  close(metrics_pipe[0]);
-
-  const uint64_t output_start_ns = NowNs();
-  std::string output;
-  char buffer[16384];
-  while (true) {
-    const ssize_t count = read(output_pipe[0], buffer, sizeof(buffer));
-    if (count == 0)
-      break;
-    if (count < 0) {
-      if (errno == EINTR)
-        continue;
-      break;
-    }
-    output.append(buffer, static_cast<size_t>(count));
-  }
-  close(output_pipe[0]);
-  const uint64_t output_pipe_ns = NowNs() - output_start_ns;
-  alarm(0);
-
-  const uint64_t wait_start_ns = NowNs();
-  int wait_status = 0;
-  if (child < 0 || waitpid(child, &wait_status, 0) < 0)
-    wait_status = 1 << 8;
-  const uint64_t waitpid_ns = NowNs() - wait_start_ns;
-  const uint64_t child_end_ns = NowNs();
-  const int exit_code = ChildTimedOut ? 124 : WaitStatusToExitCode(wait_status);
-  const uint64_t execute_to_exit_ns = metrics.execute_start_ns == 0
+  if (supervised.auxiliary.size() == sizeof(metrics))
+    std::memcpy(&metrics, supervised.auxiliary.data(), sizeof(metrics));
+  std::string &output = supervised.output;
+  const uint64_t output_pipe_ns = supervised.output_pipe_ns;
+  const uint64_t waitpid_ns = supervised.waitpid_ns;
+  const uint64_t child_end_ns = supervised.child_end_ns;
+  const int exit_code = supervised.status;
+  const uint64_t execute_to_exit_ns = metrics.execute_start_ns == 0 || child_end_ns < metrics.execute_start_ns
       ? 0 : child_end_ns - metrics.execute_start_ns;
-  const uint64_t monitor_total_ns = child_end_ns - request_start_ns;
+  const uint64_t monitor_total_ns = NowNs() - request_start_ns;
 
   const std::string header =
       std::to_string(exit_code) + " " + std::to_string(output.size()) + " " +
@@ -333,8 +261,8 @@ void HandleRequest(int connection, int listen_fd,
       std::to_string(output_pipe_ns) + " " +
       std::to_string(waitpid_ns) + " " +
       std::to_string(monitor_total_ns) + "\n";
-  WriteAll(connection, header.data(), header.size());
-  WriteAll(connection, output.data(), output.size());
+  hrprocess::Send(connection, header, hrprocess::NowNs() + 1000000000);
+  hrprocess::Send(connection, output, hrprocess::NowNs() + 1000000000);
   close(connection);
   _exit(0);
 }
@@ -342,6 +270,7 @@ void HandleRequest(int connection, int listen_fd,
 } // namespace
 
 int main(int argc, char **argv) {
+  if (!hrprocess::FollowOwner()) return 125;
   if (argc < 5) {
     std::fprintf(stderr,
                  "usage: timing_runner SOCKET CRASH_INPUT STARTUP_FILE "
@@ -426,6 +355,7 @@ int main(int argc, char **argv) {
   sigemptyset(&action.sa_mask);
   sigaction(SIGCHLD, &action, nullptr);
 
+  const pid_t server = getpid();
   while (true) {
     const int connection = accept(listen_fd, nullptr, nullptr);
     if (connection < 0) {
@@ -436,9 +366,11 @@ int main(int argc, char **argv) {
     }
     const uint64_t monitor_fork_start_ns = NowNs();
     const pid_t monitor = fork();
-    if (monitor == 0)
+    if (monitor == 0) {
+      if (!hrprocess::PrepareMonitor(server)) _exit(125);
       HandleRequest(connection, listen_fd, crash_data, monitor_fork_start_ns,
                     timeout_seconds);
+    }
     close(connection);
   }
 
@@ -489,7 +421,7 @@ def run_checked(
     *,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
+    proc = run_supervised(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -578,7 +510,7 @@ def measure_standalone_execution(
     for _ in range(iterations):
         start_ns = time.perf_counter_ns()
         try:
-            proc = subprocess.run(
+            proc = run_supervised(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -627,6 +559,7 @@ def start_timing_runner(
         pass
 
     env = sanitizer_env(link_flags, symbolize, detect_odr_violation=False)
+    env["HARNESSREDUCER_RUNNER_PARENT_PID"] = str(os.getpid())
     command = [
         str(runner_binary),
         str(socket_path),
@@ -644,35 +577,32 @@ def start_timing_runner(
         start_new_session=True,
     )
     deadline = time.monotonic() + 15.0
-    while not socket_path.exists() or not startup_file.exists():
-        return_code = process.poll()
-        if return_code is not None:
-            stdout, stderr = process.communicate()
-            raise RuntimeError(
-                "Timing runner failed during startup:\n"
-                + stdout.decode(errors="replace")
-                + stderr.decode(errors="replace")
-            )
-        if time.monotonic() >= deadline:
-            stop_runner(process, socket_path)
-            raise RuntimeError("Timed out waiting for the timing runner")
-        time.sleep(0.002)
-    wall_ns = time.perf_counter_ns() - start_ns
-    return process, wall_ns, parse_startup_file(startup_file)
+    try:
+        while not socket_path.exists() or not startup_file.exists():
+            return_code = process.poll()
+            if return_code is not None:
+                terminate_process_group(process)
+                stdout, stderr = process.communicate(timeout=1)
+                raise RuntimeError(
+                    "Timing runner failed during startup:\n"
+                    + stdout.decode(errors="replace")
+                    + stderr.decode(errors="replace")
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for the timing runner")
+            time.sleep(0.002)
+        wall_ns = time.perf_counter_ns() - start_ns
+        return process, wall_ns, parse_startup_file(startup_file)
+    except BaseException:
+        stop_runner(process, socket_path)
+        raise
 
 
 def stop_runner(process: subprocess.Popen[bytes], socket_path: Path) -> None:
-    if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=5)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=5)
+    terminate_process_group(process)
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            stream.close()
     try:
         socket_path.unlink()
     except FileNotFoundError:
@@ -694,24 +624,13 @@ RUNNER_METRIC_NAMES = (
 def timing_runner_request(
     socket_path: Path,
     plugin_path: Path,
+    timeout_seconds: float = 300,
 ) -> tuple[int, bytes, list[int], int]:
     start_ns = time.perf_counter_ns()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.connect(str(socket_path))
-        client.sendall(str(plugin_path).encode("utf-8") + b"\n")
-        stream = client.makefile("rb")
-        header = stream.readline()
-        if not header:
-            raise RuntimeError("Timing runner closed the connection")
-        fields = header.decode("ascii").strip().split()
-        if len(fields) != 10:
-            raise RuntimeError(f"Invalid timing runner response: {header!r}")
-        status = int(fields[0])
-        output_size = int(fields[1])
-        metric_values = [int(value) for value in fields[2:]]
-        output = read_exact(stream, output_size)
-    elapsed_ns = time.perf_counter_ns() - start_ns
-    return status, output, metric_values, elapsed_ns
+    header, output = runner_request(socket_path, plugin_path, timeout=timeout_seconds + 5)
+    if len(header) != 10:
+        raise RuntimeError("Invalid timing runner response")
+    return int(header[0]), output, [int(v) for v in header[2:]], time.perf_counter_ns() - start_ns
 
 
 def should_retry_timing_plugin_with_fallback(status: int, output: bytes) -> bool:
@@ -723,6 +642,7 @@ def measure_runner_requests(
     plugin_path: Path,
     iterations: int,
     fallback_plugin_path: Path | None = None,
+    timeout_seconds: float = 300,
 ) -> tuple[dict[str, list[int]], Counter[int], bytes | None, bool]:
     samples = {"end_to_end_ns": [], "fallback_trigger_request_ns": []}
     samples.update({name: [] for name in RUNNER_METRIC_NAMES})
@@ -735,6 +655,7 @@ def measure_runner_requests(
         status, output, metric_values, initial_elapsed_ns = timing_runner_request(
             socket_path,
             plugin_path,
+            timeout_seconds,
         )
         if should_retry_timing_plugin_with_fallback(status, output):
             fallback_needed = True
@@ -743,6 +664,7 @@ def measure_runner_requests(
                 status, output, metric_values, _ = timing_runner_request(
                     socket_path,
                     fallback_plugin_path,
+                    timeout_seconds,
                 )
         if representative_output is None:
             representative_output = output
@@ -976,7 +898,7 @@ def status_text(statuses: Counter[int]) -> str:
 
 
 def clang_version() -> str:
-    proc = subprocess.run(
+    proc = run_supervised(
         ["clang++", "--version"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -1023,6 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@termination_guard()
 def main() -> int:
     args = build_parser().parse_args()
     if args.iterations <= 0:
@@ -1228,6 +1151,7 @@ def main() -> int:
         timing_source = output_dir / "timing_runner.cpp"
         timing_runner = output_dir / "timing_runner"
         timing_source.write_text(TIMING_RUNNER_SOURCE, encoding="utf-8")
+        shutil.copy2(PROJECT_ROOT / "src/harnessreducer/process_supervisor.h", timing_source.parent / "process_supervisor.h")
         static_root_object = plugin_pch_object if link_inputs.static_libraries else None
         static_plan_start_ns = time.perf_counter_ns()
         static_link_plan = rr.plan_static_archive_runner_link(
@@ -1321,6 +1245,7 @@ def main() -> int:
                     probe_status, probe_output, _, _ = timing_runner_request(
                         socket_path,
                         plugin,
+                        args.timeout,
                     )
                     if should_retry_timing_plugin_with_fallback(
                         probe_status,
@@ -1340,6 +1265,7 @@ def main() -> int:
                     plugin,
                     args.iterations,
                     fallback_plugin_path,
+                    args.timeout,
                 )
             finally:
                 stop_runner(process, socket_path)
@@ -1831,7 +1757,7 @@ def main() -> int:
                     stats_row("dlsym(callback)", current["dlsym_ns"], "us"),
                     stats_row("Call to child termination", current["execute_to_exit_ns"], "us"),
                     stats_row("Output-pipe interval (overlaps call)", current["output_pipe_ns"], "us"),
-                    stats_row("waitpid after pipe EOF", current["waitpid_ns"], "us"),
+                    stats_row("executor reap (waitpid)", current["waitpid_ns"], "us"),
                     stats_row("Monitor internal total", current["monitor_total_ns"], "us"),
                 ],
             )

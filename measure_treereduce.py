@@ -16,7 +16,6 @@ import platform
 import re
 import shlex
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -27,6 +26,9 @@ from typing import Sequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from harnessreducer.process_supervisor import termination_guard, terminate_process_group, treereduce_binary
+
 DEFAULT_SOURCE = (
     PROJECT_ROOT / "benchmark" / "treereduce-throughput" / "compile_success.cpp"
 )
@@ -178,21 +180,7 @@ def command_version(command: str) -> str:
     return proc.stdout.splitlines()[0] if proc.stdout else "unknown"
 
 
-def terminate_process_group(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=5)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=5)
-
-
+@termination_guard()
 def run_command_with_timeout(
     command: Sequence[str],
     *,
@@ -239,9 +227,15 @@ def run_command_with_timeout(
     except subprocess.TimeoutExpired:
         timed_out = True
         terminate_process_group(process)
+    except BaseException:
+        terminate_process_group(process)
+        reader.join(timeout=5)
+        raise
     wall_ns = time.perf_counter_ns() - started_ns
     reader.join(timeout=30)
     if reader.is_alive():
+        terminate_process_group(process)
+        reader.join(timeout=5)
         raise RuntimeError("timed out while draining treereduce diagnostic output")
     return (
         process.returncode,
@@ -502,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", type=int, default=1, help="Runs per configuration")
     parser.add_argument("--stable", action="store_true", help="Use stable fixpoint reduction")
     parser.add_argument("--compiler", default="clang++", help="C++ compiler executable")
-    parser.add_argument("--treereduce", default="treereduce-c", help="treereduce executable")
+    parser.add_argument("--treereduce", default=treereduce_binary(), help="treereduce executable")
     parser.add_argument(
         "--check-timeout",
         type=int,

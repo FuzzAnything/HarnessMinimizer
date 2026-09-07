@@ -29,7 +29,7 @@ class TestCrashTesterStatistics(unittest.TestCase):
             link_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
             with patch(
-                "tests.crash_tester.subprocess.run",
+                "tests.crash_tester.run_supervised",
                 side_effect=[compile_proc, link_proc],
             ) as mock_run:
                 status, object_path = crash_tester.compile_with_pch(

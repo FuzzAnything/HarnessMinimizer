@@ -6,13 +6,16 @@ import filecmp
 import json
 import os
 import re
-import signal
 import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from harnessreducer.process_supervisor import (
+    run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
+)
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessreducer.reduction_profile import write_profile_summary
@@ -1052,7 +1055,7 @@ def _read_elf_dynamic_metadata(
     elf_path: str | Path,
 ) -> tuple[tuple[str, ...], str | None]:
     """Return an ELF file's DT_NEEDED names and optional DT_SONAME."""
-    proc = subprocess.run(
+    proc = run_supervised(
         ["readelf", "-dW", str(elf_path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1137,7 +1140,7 @@ def _nm_posix_symbols(
     error_prefix: str,
     symbol_types: set[str] | None = None,
 ) -> set[str]:
-    proc = subprocess.run(
+    proc = run_supervised(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1202,7 +1205,7 @@ def _archive_magic(path: str | Path) -> bytes:
 
 
 def _llvm_objcopy_supports_symbol_visibility(objcopy: str) -> bool:
-    proc = subprocess.run(
+    proc = run_supervised(
         [objcopy, "--help"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -1253,7 +1256,7 @@ def _prepare_visibility_exported_static_libraries(
         symbol_file = output_dir / f"{index}_{library_path.name}.symbols"
         rewritten_library = output_dir / f"{index}_{library_path.name}"
         symbol_file.write_text("\n".join(exported_symbols) + "\n", encoding="utf-8")
-        proc = subprocess.run(
+        proc = run_supervised(
             [
                 objcopy,
                 f"--set-symbols-visibility={symbol_file}=default",
@@ -1443,6 +1446,7 @@ def start_amortized_runner(
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
     socket_path = str(Path(socket_dir) / "runner.sock")
     env = runtime_library_env(link_flags)
+    env["HARNESSREDUCER_RUNNER_PARENT_PID"] = str(os.getpid())
     symbolized = "1" if symbolize else "0"
     env["ASAN_OPTIONS"] = sanitizer_asan_options(
         symbolize=symbolize,
@@ -1480,7 +1484,8 @@ def start_amortized_runner(
         while not os.path.exists(socket_path):
             return_code = process.poll()
             if return_code is not None:
-                stdout, stderr = process.communicate()
+                terminate_process_group(process)
+                stdout, stderr = process.communicate(timeout=1)
                 raise RuntimeError(
                     "Amortized-link runner failed during startup:\n"
                     f"{stdout}{stderr}\n"
@@ -1498,13 +1503,10 @@ def start_amortized_runner(
             plugin_link_flags=link_inputs.plugin_link_flags,
         )
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
+        terminate_process_group(process)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
         shutil.rmtree(socket_dir, ignore_errors=True)
 
 
@@ -1905,13 +1907,14 @@ def retry_oom_tester_args(enabled: bool) -> list[str]:
 
 
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
+    proc = run_supervised(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=env,
         check=False,
+        timeout=DEFAULT_COMMAND_TIMEOUT + 310,
     )
     if proc.returncode != 0 and not ignore_errors:
         err_msg = proc.stderr.strip() or proc.stdout.strip() or "Unknown error"
@@ -2035,8 +2038,8 @@ def _append_restore_transition_stack_diagnostics(
 def check_tree_reducer() -> None:
     print("[+] Checking for tree-reducer availability...")
     run_command(
-        ["treereduce-c", "--help"],
-        "tree-reducer is not available. Please ensure it is installed and in your PATH",
+        [treereduce_binary(), "--help"],
+        "tree-reducer is not available. Run python3 tools/treereduce/install.py or configure HARNESSREDUCER_TREEREDUCE",
     )
     print("[+] tree-reducer is available.")
 
@@ -3245,7 +3248,7 @@ def run_treereducer(
 
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
-        "treereduce-c",
+        treereduce_binary(),
         "-j",
         str(jobs),
         "-s",
@@ -3347,11 +3350,13 @@ def run_treereducer(
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
         reduction_started_ns = time.perf_counter_ns()
-        proc = subprocess.run(
+        proc = run_supervised(
             cmd,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
+            timeout=None,
+            private_tmpdir=True,
         )
         reduction_wall_ns = time.perf_counter_ns() - reduction_started_ns
     if profile and profile_events_path is not None:

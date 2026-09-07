@@ -11,7 +11,6 @@ import json
 import re
 import resource
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,10 @@ __script_dir__ = os.path.dirname(os.path.realpath(__file__))
 __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
+
+from harnessreducer.process_supervisor import (
+    run_supervised, termination_guard, runner_request, OutputLimitExceeded,
+)
 
 from harnessreducer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
@@ -61,13 +64,22 @@ def _run_profiled_subprocess(
     command: list[str],
     **kwargs,
 ) -> subprocess.CompletedProcess:
-    if not getattr(args, "profile_file", None):
-        return subprocess.run(command, **kwargs)
-    started_ns = time.perf_counter_ns()
+    started_ns = time.perf_counter_ns() if getattr(args, "profile_file", None) else None
     try:
-        return subprocess.run(command, **kwargs)
+        return run_supervised(command, **kwargs)
+    except (subprocess.TimeoutExpired, OutputLimitExceeded) as exc:
+        # A supervised build failure still goes through the normal checker
+        # finalizer, preserving outcome statistics and --profile records.
+        def as_text(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+        return subprocess.CompletedProcess(
+            command, 124 if isinstance(exc, subprocess.TimeoutExpired) else 125,
+            as_text(getattr(exc, "stdout", None)),
+            as_text(getattr(exc, "stderr", None)) + str(exc),
+        )
     finally:
-        _add_profile_duration(args, field, started_ns)
+        if started_ns is not None:
+            _add_profile_duration(args, field, started_ns)
 
 
 def _append_profile_record(args: argparse.Namespace, result_code: int) -> None:
@@ -470,7 +482,7 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
 def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     _reset_compile_failure_state(args)
     pid = os.getpid()
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as obj_file:
         object_path = obj_file.name
 
     compile_cmd = [
@@ -544,7 +556,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         return -1, None
 
     pid = os.getpid()
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp") as obj_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as obj_file:
         object_path = obj_file.name
 
     sanitizer_flags = (
@@ -627,7 +639,7 @@ def compile_amortized_plugin(
     args._amortized_plugin_fallback_linked = False
     pid = os.getpid()
     with tempfile.NamedTemporaryFile(
-        prefix=f"poc_{pid}_", suffix=".o", delete=False, dir="/tmp"
+        prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")
     ) as obj_file:
         object_path = obj_file.name
 
@@ -713,27 +725,12 @@ def link_amortized_plugin(
     return 0
 
 
-def run_with_amortized_runner(socket_path: str, plugin_path: str) -> tuple[int, str]:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.connect(socket_path)
-        client.sendall(os.path.abspath(plugin_path).encode("utf-8") + b"\n")
-        stream = client.makefile("rb")
-        header = stream.readline()
-        if not header:
-            raise RuntimeError("Amortized-link runner closed the connection without a response.")
-        try:
-            status_text, size_text = header.decode("ascii").strip().split(" ", 1)
-            status = int(status_text)
-            expected_size = int(size_text)
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise RuntimeError(f"Invalid amortized-link runner response: {header!r}") from exc
-        output = stream.read(expected_size)
-        if len(output) != expected_size:
-            raise RuntimeError(
-                "Amortized-link runner returned a truncated execution log: "
-                f"expected {expected_size} bytes, got {len(output)}."
-        )
-        return status, output.decode("utf-8", errors="replace")
+def run_with_amortized_runner(socket_path: str, plugin_path: str, exec_timeout_ms: int | None = None) -> tuple[int, str]:
+    timeout = 300 if exec_timeout_ms is None else max(1, (exec_timeout_ms + 999) // 1000)
+    header, output = runner_request(socket_path, plugin_path, timeout=timeout + 5)
+    if len(header) != 2:
+        raise RuntimeError("Invalid amortized-link runner response")
+    return int(header[0]), output.decode("utf-8", errors="replace")
 
 
 def run_executable(
@@ -749,7 +746,7 @@ def run_executable(
     )
     started_at = time.monotonic()
     try:
-        run_proc = subprocess.run(
+        run_proc = run_supervised(
             exec_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -772,6 +769,8 @@ def run_executable(
         else:
             parts.append(f"Execution timed out after {timeout_seconds:.3f} seconds.\n")
         run_log = "".join(parts)
+    except OutputLimitExceeded as exc:
+        status, run_log = 125, str(exc) + "\n"
     elapsed_ms = max(1, int((time.monotonic() - started_at) * 1000))
     return status, run_log, elapsed_ms
 
@@ -828,9 +827,10 @@ def should_retry_amortized_plugin_with_fallback(status: int, run_log: str) -> bo
 def run_with_amortized_runner_timed(
     socket_path: str,
     plugin_path: str,
+    exec_timeout_ms: int | None = None,
 ) -> tuple[int, str, int]:
     started_at = time.monotonic()
-    status, run_log = run_with_amortized_runner(socket_path, plugin_path)
+    status, run_log = run_with_amortized_runner(socket_path, plugin_path, exec_timeout_ms)
     elapsed_ms = max(1, int((time.monotonic() - started_at) * 1000))
     return status, run_log, elapsed_ms
 
@@ -843,6 +843,7 @@ def run_with_amortized_runner_maybe_fallback(
     status, run_log = run_with_amortized_runner(
         args.amortized_runner_socket,
         output_path,
+        getattr(args, "exec_timeout_ms", None),
     )
     fallback_link_flags = getattr(args, "amortized_plugin_fallback_link_flags", None)
     if (
@@ -863,6 +864,7 @@ def run_with_amortized_runner_maybe_fallback(
         status, run_log = run_with_amortized_runner(
             args.amortized_runner_socket,
             output_path,
+            getattr(args, "exec_timeout_ms", None),
         )
     return status, run_log
 
@@ -875,6 +877,7 @@ def run_with_amortized_runner_maybe_fallback_timed(
     status, run_log, exec_time_ms = run_with_amortized_runner_timed(
         args.amortized_runner_socket,
         output_path,
+        getattr(args, "exec_timeout_ms", None),
     )
     fallback_link_flags = getattr(args, "amortized_plugin_fallback_link_flags", None)
     if (
@@ -895,6 +898,7 @@ def run_with_amortized_runner_maybe_fallback_timed(
         status, run_log, exec_time_ms = run_with_amortized_runner_timed(
             args.amortized_runner_socket,
             output_path,
+            getattr(args, "exec_timeout_ms", None),
         )
     return status, run_log, exec_time_ms
 
@@ -996,6 +1000,7 @@ def _stack_depth_is_advisory(
     return bool(args.dynamic_crash_site_library and args.dynamic_crash_site_offset)
 
 
+@termination_guard()
 def main() -> int:
     main_started_ns = time.perf_counter_ns()
     parser = argparse.ArgumentParser()
@@ -1059,7 +1064,7 @@ def main() -> int:
     args._last_compile_cmd = None
     pid = os.getpid()
 
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir="/tmp") as out_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as out_file:
         output_path = out_file.name
     object_path = None
     args._profile_build_started_ns = time.perf_counter_ns()

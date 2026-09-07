@@ -11,7 +11,7 @@ ENV TZ=Asia/Shanghai
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        bash git sudo jq curl wget gzip locales \
+        bash git sudo jq curl wget gzip locales patch \
         build-essential cmake pkg-config lld ninja-build \
         binutils binutils-dev autoconf automake libtool libncurses5-dev libgdbm-dev libnss3-dev liblzma-dev zlib1g-dev libyaml-dev graphviz libgraphviz-dev \
         libicu-dev libcurl4-openssl-dev libssl-dev libsqlite3-dev ruby-dev libreadline-dev libffi-dev libbz2-dev libc++-dev libc++abi-dev libc6-dev libgcc-9-dev tzdata \
@@ -79,7 +79,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     echo 'source $HOME/.cargo/env' >> ~/.bashrc
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo install -F dojo casr
-RUN cargo install treereduce-c
+COPY tools/treereduce /tmp/harnessreducer-treereduce
+RUN python3 /tmp/harnessreducer-treereduce/install.py --root /usr/local && \
+    rm -rf /tmp/harnessreducer-treereduce
+ENV HARNESSREDUCER_TREEREDUCE="/usr/local/bin/treereduce-c"
 
 # Install Ruby
 # RUN git clone https://github.com/rbenv/rbenv.git ~/.rbenv && \

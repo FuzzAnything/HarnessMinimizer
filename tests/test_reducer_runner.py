@@ -27,13 +27,13 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner.set_symbolized_reference_crash_location_pattern(None)
         reducer_runner.configure_debug_logging(False)
 
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_command_success(self, mock_run):
         mock_run.return_value = _Proc(returncode=0, stdout="ok", stderr="")
         proc = reducer_runner.run_command(["echo", "ok"], "failed")
         self.assertEqual(proc.stdout, "ok")
 
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_command_failure(self, mock_run):
         mock_run.return_value = _Proc(returncode=2, stdout="", stderr="err")
         with self.assertRaises(RuntimeError):
@@ -53,7 +53,7 @@ class TestReducerRunner(unittest.TestCase):
         )
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_sets_env(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
@@ -79,7 +79,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("12", cmd)
         self.assertNotIn("--last-interesting-file", cmd)
 
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_symbolize_uses_symbolized_oracle(self, mock_run):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -121,7 +121,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.run_amortized_reference_candidate")
     @patch("harnessreducer.reducer_runner.start_amortized_runner")
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_uses_amortized_runner_and_calibrated_depth(
         self,
         mock_run,
@@ -158,7 +158,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_reference.assert_called_once()
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_passes_snapshot_flag_when_enabled(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
@@ -178,7 +178,7 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessreducer.reducer_runner.initialize_statistics_file")
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_adds_statistics_file_when_enabled(
         self,
         mock_run,
@@ -205,7 +205,7 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessreducer.reducer_runner.write_profile_summary")
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_profiles_candidates_and_uses_requested_jobs(
         self,
         mock_run,
@@ -256,7 +256,7 @@ class TestReducerRunner(unittest.TestCase):
             )
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_adds_normal_path_debug_log(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
@@ -280,7 +280,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("reduction_candidate", cmd)
 
     @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.subprocess.run")
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_uses_split_mode_flag(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True

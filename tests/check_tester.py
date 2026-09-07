@@ -15,6 +15,7 @@ sys.path.insert(0, str(__project_root__ / "src"))
 
 import importlib.util
 
+from harnessreducer.process_supervisor import termination_guard
 from harnessreducer.check_mode import (
     append_candidate_stack_trace,
     count_stack_trace_frames,
@@ -131,6 +132,7 @@ def _evaluate_check_candidate(
     )
 
 
+@termination_guard()
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=str, help="Source file to compile")
@@ -174,7 +176,7 @@ def main() -> int:
     args = parser.parse_args()
 
     pid = os.getpid()
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir="/tmp") as out_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as out_file:
         output_path = out_file.name
     object_path = None
 

@@ -1,0 +1,116 @@
+--- a/crates/treereduce/src/check.rs
++++ b/crates/treereduce/src/check.rs
+@@ -4,6 +4,10 @@
+ use std::os::unix::process::ExitStatusExt;
+ use std::path::PathBuf;
+ use std::process::{Child, Command, ExitStatus, Stdio};
++use std::os::unix::process::CommandExt;
++
++#[path = "process_cleanup.rs"]
++mod process_cleanup;
+ use std::time::Duration;
+ 
+ use regex::Regex;
+@@ -138,6 +142,7 @@
+         let child = if let Some(tf) = &mut temp_file {
+             tf.write_all(stdin_bytes)?;
+             Command::new(&self.cmd)
++                .process_group(0)
+                 .args(args)
+                 .stdin(Stdio::piped())
+                 .stdout(if self.inherit_stdout {
+@@ -157,6 +162,7 @@
+                 .spawn()?
+         } else {
+             let mut child = Command::new(&self.cmd)
++                .process_group(0)
+                 .args(args)
+                 .stdin(Stdio::piped())
+                 .stdout(if self.inherit_stdout {
+@@ -247,7 +253,7 @@
+             if let Some(s) = state.child.wait_timeout(to)? {
+                 s
+             } else {
+-                state.child.kill()?;
++                process_cleanup::terminate(&mut state.child)?;
+                 return Ok((false, None, Vec::new(), Vec::new())); // timeout
+             }
+         } else {
+@@ -266,7 +272,7 @@
+     }
+ 
+     fn cancel(&self, mut state: Self::State) -> io::Result<()> {
+-        state.child.kill()?;
++        process_cleanup::terminate(&mut state.child)?;
+         if let Some(tf) = state.temp_file {
+             tf.close()?;
+         }
+--- a/crates/treereduce-c/src/main.rs
++++ b/crates/treereduce-c/src/main.rs
+@@ -3,6 +3,10 @@
+ use anyhow::Result;
+ 
+ fn main() -> Result<()> {
++    if std::env::args().any(|arg| arg == "--harnessreducer-supervisor-version") {
++        println!("1");
++        return Ok(());
++    }
+     treereduce::cli::main(
+         tree_sitter_c::LANGUAGE.into(),
+         tree_sitter_c::NODE_TYPES,
+--- /dev/null
++++ b/crates/treereduce/src/process_cleanup.rs
+@@ -0,0 +1,53 @@
++//! HarnessReducer Linux process cleanup, only on timeout/cancellation.
++use std::collections::HashSet;
++use std::fs;
++use std::io;
++use std::process::Child;
++use std::time::Duration;
++use wait_timeout::ChildExt;
++
++unsafe extern "C" {
++    fn kill(pid: i32, signal: i32) -> i32;
++    fn getpgrp() -> i32;
++}
++
++fn groups(root: u32) -> HashSet<i32> {
++    let mut result = HashSet::from([root as i32]);
++    let mut seen = HashSet::new();
++    let mut pending = vec![root];
++    while let Some(pid) = pending.pop() {
++        if !seen.insert(pid) { continue; }
++        if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
++            if let Some((_, fields)) = stat.rsplit_once(") ") {
++                if let Some(group) = fields.split_whitespace().nth(2).and_then(|s| s.parse::<i32>().ok()) {
++                    result.insert(group);
++                }
++            }
++        }
++        if let Ok(tasks) = fs::read_dir(format!("/proc/{pid}/task")) {
++            for task in tasks.flatten() {
++                if let Ok(children) = fs::read_to_string(task.path().join("children")) {
++                    pending.extend(children.split_whitespace().filter_map(|s| s.parse::<u32>().ok()));
++                }
++            }
++        }
++    }
++    let own_group = unsafe { getpgrp() };
++    result.retain(|group| *group > 0 && *group != own_group);
++    result
++}
++
++pub(super) fn terminate(child: &mut Child) -> io::Result<()> {
++    // Snapshot nested Python executor groups before terminating their owners.
++    // This traversal is never performed for ordinary completed checks.
++    let groups = groups(child.id());
++    for group in &groups { unsafe { kill(-*group, 15); } }
++    // TERM allows Python's profile/file cleanup to finish. Never skip KILL
++    // merely because the immediate checker has already exited.
++    let waited = child.wait_timeout(Duration::from_secs(1));
++    for group in &groups { unsafe { kill(-*group, 9); } }
++    // Always reap, including when waiting/signaling races with child exit.
++    let reaped = child.wait();
++    waited?;
++    reaped.map(|_| ())
++}

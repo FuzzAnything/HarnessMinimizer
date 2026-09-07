@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from harnessreducer.process_supervisor import termination_guard
 from harnessreducer.check_mode import (
     emit_check_statistics_summary,
     record_check_reference,
@@ -768,6 +769,7 @@ def inline_literals_in_reduced_harness(
     return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
 
+@termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
     if config.debug and config.check:

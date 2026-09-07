@@ -181,7 +181,7 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertFalse(log_path.exists())
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
-    @patch("harnessreducer.check_mode.subprocess.run")
+    @patch("harnessreducer.check_mode.run_supervised")
     def test_run_treereducer_with_check_skips_last_interesting_file_by_default(
         self,
         mock_run,
@@ -218,7 +218,7 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertNotIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
-    @patch("harnessreducer.check_mode.subprocess.run")
+    @patch("harnessreducer.check_mode.run_supervised")
     def test_run_treereducer_with_check_can_skip_symbolized_crash_pattern(
         self,
         mock_run,
@@ -254,7 +254,7 @@ class TestCheckModeHelpers(unittest.TestCase):
     @patch("harnessreducer.check_mode.run_amortized_reference_candidate")
     @patch("harnessreducer.check_mode.start_amortized_runner")
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
-    @patch("harnessreducer.check_mode.subprocess.run")
+    @patch("harnessreducer.check_mode.run_supervised")
     def test_check_mode_uses_amortized_runner_reference(
         self,
         mock_run,
@@ -336,7 +336,7 @@ class TestCheckModeHelpers(unittest.TestCase):
             self.assertEqual(reference.frame_count_symbolize_0, 3)
 
     @patch("harnessreducer.check_mode.os.path.exists", return_value=True)
-    @patch("harnessreducer.check_mode.subprocess.run")
+    @patch("harnessreducer.check_mode.run_supervised")
     def test_run_treereducer_with_check_passes_last_interesting_file_when_enabled(
         self,
         mock_run,

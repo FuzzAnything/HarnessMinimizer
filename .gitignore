@@ -4,6 +4,7 @@
 output/
 .env
 .venv-host/
+.tools/
 benchmark/*/*/build/sanitizer/lib
 benchmark/*/*/build/sanitizer/include
 !benchmark/library-bug/libpcap-2/build/sanitizer/lib
@@ -41,3 +42,6 @@ dummy_file
 workflow-*/
 profile-*/
 latest_profile_split_symbolize_path.txt
+
+harnessreducer-perf-comparison*/
+latest_harnessreducer_perf_run.txt

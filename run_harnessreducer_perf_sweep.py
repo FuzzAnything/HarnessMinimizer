@@ -15,6 +15,9 @@ import time
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from harnessreducer.process_supervisor import run_supervised
+
 DEFAULT_JOBS = (1, 2, 4, 8, 16, 32, 60)
 LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
 
@@ -146,7 +149,7 @@ def run_case(
     with (job_dir / "command.log").open("w", encoding="utf-8", errors="replace") as log:
         log.write(command_text + "\n\n")
         log.flush()
-        proc = subprocess.run(
+        proc = run_supervised(
             command,
             cwd=bench_dir,
             env=env,
@@ -154,6 +157,7 @@ def run_case(
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
+            timeout=None,
         )
     full_wall_seconds = (time.perf_counter_ns() - start_ns) / 1_000_000_000.0
     end_time = datetime.now().astimezone()

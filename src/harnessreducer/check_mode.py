@@ -9,6 +9,10 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from harnessreducer.process_supervisor import (
+    run_supervised, treereduce_binary,
+)
+
 from harnessreducer.reducer_runner import (
     DEFAULT_EXEC_TIMEOUT_MS,
     DEFAULT_TREEREDUCE_JOBS,
@@ -458,7 +462,7 @@ def run_treereducer_with_check(
 
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
-        "treereduce-c",
+        treereduce_binary(),
         "-j",
         str(jobs),
         "-s",
@@ -633,11 +637,13 @@ def run_treereducer_with_check(
                     + " ".join(plugin_link_flags)
                 )
 
-        proc = subprocess.run(
+        proc = run_supervised(
             cmd,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
+            timeout=None,
+            private_tmpdir=True,
         )
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run tree-reducer in check mode:\n{proc.stdout} {proc.stderr}")

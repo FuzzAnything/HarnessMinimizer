@@ -13,27 +13,82 @@ It is designed for `FuzzedDataProvider`-based harnesses and combines:
 
 ## Requirements
 
-Install or make available in `PATH`:
+Use Linux with the following tools available in `PATH`:
 
 - `clang++`
 - `clang-format`
 - `llvm-profdata`
 - `llvm-cov`
 - `llvm-objcopy` (optional, used to export hidden static-archive symbols for faster `--amortize-link`)
-- `treereduce-c`
 - Python 3.12+
+- a current stable Rust toolchain (`rustc` and `cargo`) to build the patched `treereduce-c`
+- `patch` and a C/C++ build toolchain
+- either `uv`, or Python's `venv` and `pip` for the alternative installation below
 
-If you want to use `--llm`, also set the OpenAI-compatible environment variables expected by `src/harnessreducer/llm_reducer.py`.
+Use Clang and the LLVM utilities from the same LLVM installation. Install the
+patched `treereduce-c` using the commands below. The installation downloads
+upstream source, Rust dependencies, and Python dependencies, so it needs
+network access.
+
+On Ubuntu 24.04, missing system prerequisites can be installed with these
+commands as root (or with `sudo` on a host):
+
+```bash
+apt-get update
+apt-get install -y python3 python3-venv python3-pip \
+  clang clang-format llvm build-essential patch pkg-config libssl-dev \
+  curl ca-certificates
+```
+
+If Rust/Cargo is not installed, install the stable Rust toolchain and load its
+environment into the current shell:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+The steps below provide both a `uv` installation and a `venv`/`pip` installation;
+choose one. For the optional `--llm` stage, also set `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, and `OPENAI_MODEL` to your provider's API key, base URL, and
+model name. These variables are not needed for ordinary reduction.
 
 ## Install
 
+Run from the root of the updated HarnessMinimizer checkout, in the host or
+container where reduction will run. With `uv` already available:
+
 ```bash
-cargo install treereduce-c
+python3 tools/treereduce/install.py
+export HARNESSREDUCER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
+"$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
 uv sync
 source .venv/bin/activate
 hash -r
 harnessreducer --help
 ```
+
+The verification command must print `1`. The installer downloads a pinned
+treereduce 0.4.1 source archive, checks its SHA-256, applies
+`tools/treereduce/process-cleanup.patch`, then builds and installs the patched
+executable into `.tools/bin`. It uses two build jobs by default; pass
+`--jobs N` to change installation parallelism. The patch makes timed-out
+checkers and their recorded descendant groups terminate, and waits for the
+checker so its zombie process record is reaped.
+
+The installer's `COMMIT` selects the upstream source snapshot; `SHA256` verifies
+the downloaded archive before patching. Neither identifies a HarnessMinimizer
+commit. The installer handles downloading and patching automatically.
+The ordinary `--version` still reports `treereduce 0.4.1`; use
+`--harnessreducer-supervisor-version` to identify this patched build.
+
+The local installation leaves any global `treereduce-c` installation in place.
+HarnessReducer selects `HARNESSREDUCER_TREEREDUCE` first, then this checkout's
+`.tools/bin/treereduce-c`, then `treereduce-c` on `PATH`. The export above makes
+the intended executable explicit, including when a container already has an
+override. Running plain `treereduce-c` in your shell may still select a global
+binary. `uv sync` or `pip install` installs the Python package only; it does
+not apply the Rust patch or build treereduce.
 
 `uv sync` installs this repository as an editable package and creates
 `.venv/bin/harnessreducer`. You can also avoid shell activation entirely:
@@ -45,14 +100,19 @@ uv run harnessreducer --help
 If `command -v harnessreducer` still names an older global installation after
 activation, run `hash -r` (Bash) or invoke `.venv/bin/harnessreducer` directly.
 
-### Container setup with `/usr/bin/python3`
+### Installation without `uv`, including existing containers
 
-For a container where the system interpreter is `/usr/bin/python3`, first
-confirm that it is Python 3.12 or newer, then create and populate the virtual
-environment explicitly:
+You can update an existing container without rebuilding its Docker image.
+Make the updated checkout, including `tools/treereduce`, available inside the
+container and run the installation there. For a system interpreter at
+`/usr/bin/python3`, first confirm that it is Python 3.12 or newer, then run
+these commands from the checkout root:
 
 ```bash
 /usr/bin/python3 --version
+/usr/bin/python3 tools/treereduce/install.py
+export HARNESSREDUCER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
+"$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
 /usr/bin/python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -62,17 +122,37 @@ command -v harnessreducer
 harnessreducer --help
 ```
 
-The final `command -v` should point to `<project>/.venv/bin/harnessreducer`.
-If `/usr/bin/python3 -m venv` is unavailable in a Debian/Ubuntu-based image,
-install its OS package first:
+The supervisor-version check must print `1`, and the final `command -v` should
+point to `<project>/.venv/bin/harnessreducer`. For a host with Python in a
+different location, use that Python 3.12+ executable in place of
+`/usr/bin/python3`. The prerequisite package commands above include
+`python3-venv` and `python3-pip` if they are missing.
+
+If your checkout is bind-mounted and used by multiple hosts or containers, you
+can keep the container's Rust executable outside the shared checkout. Replace
+the treereduce installation/export steps above with the following, using an
+account that can write to `/usr/local`; keep the Python environment setup:
 
 ```bash
-apt-get update
-apt-get install -y python3-venv python3-pip
+/usr/bin/python3 tools/treereduce/install.py --root /usr/local
+export HARNESSREDUCER_TREEREDUCE=/usr/local/bin/treereduce-c
+"$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
 ```
 
+Build the executable and create the Python environment where you will run
+them; builds from another architecture or runtime environment may not work.
+For later shell sessions, activate the same virtual environment and repeat the
+export for your chosen executable, or add those commands to your shell setup.
+Keep `--init` when creating containers so container PID 1 can reap adopted
+orphan processes. Installing the patch updates the tool independently of the
+container's init configuration.
+
+The repository's Dockerfile installs the patched executable under
+`/usr/local/bin` and sets `HARNESSREDUCER_TREEREDUCE` accordingly. It also keeps
+that selection independent of host binaries in a bind-mounted `.tools` folder.
 Shell activation does not persist between Dockerfile `RUN` instructions. For
-a Docker image, put the virtual environment on `PATH` explicitly:
+a Docker image that already has the patched dependency installed, put the
+virtual environment on `PATH` explicitly:
 
 ```dockerfile
 WORKDIR /root/HarnessMinimizer
@@ -82,6 +162,21 @@ RUN /usr/bin/python3 -m venv .venv \
 ENV PATH="/root/HarnessMinimizer/.venv/bin:${PATH}"
 RUN harnessreducer --help
 ```
+
+### Before starting reduction
+
+Have the harness source, the crash input when needed, and the target library's
+headers and compiled libraries available in the execution environment. Supply
+their include paths with `--compile-flags` and their library paths/names with
+`--link-flags`, as shown below. The tool builds its native persistent runner
+when `--amortize-link` is requested; there is no separate runner install step.
+
+Captured compiler/candidate output is limited to 64 MiB per command/request.
+If a target needs a different capture budget, set
+`HARNESSREDUCER_MAX_OUTPUT_BYTES` to a positive byte count before launch. No
+additional configuration is required for process cleanup, timeout calibration,
+PCH, amortized linking, or `--profile`. The existing worker count and container
+resource limits are not changed by the installation.
 
 ## Basic CLI Usage
 
@@ -564,9 +659,9 @@ During reduction, the work directory may also contain artifacts such as:
 
 ## Reducer throughput baseline
 
-[`measure_treereduce.py`](measure_treereduce.py) compares two direct
+`measure_treereduce.py` compares two direct
 `treereduce-c` workloads using the dependency-free
-[`compile_success.cpp`](benchmark/treereduce-throughput/compile_success.cpp)
+`benchmark/treereduce-throughput/compile_success.cpp`
 fixture:
 
 - `compile`: the normal documented workflow, with `clang++ @@.cpp -o /dev/null`
@@ -584,7 +679,7 @@ reduced source, and failure tails. Add `--keep-logs` only when raw reducer trace
 are needed; debug JSON can become very large when high worker counts cause many
 retries. Retained logs are gzip-compressed.
 
-Use this baseline together with [`measure_time.py`](measure_time.py):
+Use this baseline together with `measure_time.py`:
 
 - `measure_treereduce.py` answers how many real checks the reducer schedules,
   how quickly they complete, and how worker count affects convergence;
@@ -593,5 +688,6 @@ Use this baseline together with [`measure_time.py`](measure_time.py):
 - `measure_time.py` decomposes unchanged-harness compile, link, load, execution,
   fork, socket, and Python oracle costs without a reduction run.
 
-See [`PERFORMANCE_ANALYSIS.md`](PERFORMANCE_ANALYSIS.md) for the observed worker
-sweep, interpretation guidance, and a profiling checklist.
+Compare total reduction wall time as well as checks per second: more workers
+can increase speculative or repeated checks, so higher throughput does not
+necessarily mean the harness finishes reducing sooner.
