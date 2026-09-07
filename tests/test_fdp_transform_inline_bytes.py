@@ -81,9 +81,9 @@ void f(uint8_t* data, int size, size_t length) {
     assert result.replaced == 1
     assert result.loop_replaced == 1
     assert result.header_replaced == 1
-    assert "auto bytes = fuzz_values_100003[fuzz_index_100003++];" in result.source
-    assert "static const std::vector<uint8_t> fuzz_values_100003[]" in result.header_source
-    assert "std::vector<uint8_t>{0x01, 0x02}" in result.header_source
+    assert "auto bytes = harnessreducer_inline_detail::copy_bytes<uint8_t>(fuzz_values_100003[fuzz_index_100003++]);" in result.source
+    assert "static const std::vector<unsigned char> fuzz_values_100003[]" in result.header_source
+    assert "std::vector<unsigned char>{0x01, 0x02}" in result.header_source
 
 
 def test_inline_repeated_remaining_bytes_id_uses_header_values() -> None:
@@ -102,7 +102,7 @@ size_t g(uint8_t* data, int size) {
 
     assert result.replaced == 1
     assert result.loop_replaced == 1
-    assert "return fuzz_values_100004[fuzz_index_100004++];" in result.source
+    assert "return static_cast<size_t>(fuzz_values_100004[fuzz_index_100004++]);" in result.source
     assert "static const size_t fuzz_values_100004[]" in result.header_source
 
 
@@ -213,7 +213,7 @@ void f(uint8_t* data, int size) {
     assert result.replaced == 1
     assert "static const long double fuzz_values_100012[]" in result.header_source
     assert "decltype" not in result.header_source
-    assert "static_cast<decltype((low) + (high))>(" in result.source
+    assert "static_cast<std::decay_t<decltype((low))>>(" in result.source
 
 
 def test_floating_signed_zero_is_preserved() -> None:
@@ -251,7 +251,7 @@ void f(uint8_t* data, int size) {
 
     assert result.replaced == 1
     assert result.loop_replaced == 1
-    assert "int bytes_to_fill = fuzz_values_100028[fuzz_index_100028++];" in result.source
+    assert "int bytes_to_fill = static_cast<size_t>(fuzz_values_100028[fuzz_index_100028++]);" in result.source
     assert "remaining_bytes" not in result.source
     assert "100029" not in result.source
     assert "fuzz_values_100028" in result.header_source
@@ -294,8 +294,8 @@ void f(uint8_t* data, int size) {
     assert result.replaced == 1
     assert result.large_buffer_replaced == 1
     assert result.header_replaced == 1
-    assert "std::vector<uint8_t>(fuzz_bytes_100005, fuzz_bytes_100005 + fuzz_bytes_100005_size)" in result.source
-    assert "static const uint8_t fuzz_bytes_100005[]" in result.header_source
+    assert "harnessreducer_inline_detail::copy_bytes<uint8_t>(fuzz_bytes_100005, fuzz_bytes_100005_size)" in result.source
+    assert "static const unsigned char fuzz_bytes_100005[]" in result.header_source
     assert "static const size_t fuzz_bytes_100005_size" in result.header_source
     assert "0x40" in result.header_source
 

@@ -102,6 +102,20 @@ class ValuesHeaderEntry:
     method: str
     declaration: str
     includes: tuple[str, ...] = ()
+    helpers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScalarResultType:
+    """Type of the replacement expression, independent of trace storage."""
+
+    cpp_type: str
+    floating_storage: bool = False
+    includes: tuple[str, ...] = ()
+
+    def expression(self, value: str) -> str:
+        # A cast also restores a value expression when storage is a const lvalue.
+        return f"static_cast<{self.cpp_type}>({value})"
 
 
 def _iter_nodes(root: Node) -> list[Node]:
@@ -391,7 +405,33 @@ def _cpp_byte_literal(value: int) -> str:
 def _vector_element_type_for_call(call: CallSite) -> str:
     if call.method in _BYTES_METHODS and call.template_arg:
         return _normalize_type_text(call.template_arg)
+    if call.method == "ConsumeBytesWithTerminator" and len(call.arg_texts) >= 2:
+        return f"std::decay_t<decltype(({call.arg_texts[1]}))>"
     return "unsigned char"
+
+
+# Byte headers store exactly the trace bytes. Element types (including local
+# aliases and template parameters) are only named at the original call site.
+# The normal arithmetic path uses the same range construction as FDP replay.
+_BYTE_COPY_HELPER = """namespace harnessreducer_inline_detail {
+template <typename T>
+std::vector<T> copy_bytes(const unsigned char *data, size_t size) {
+    if (size == 0)
+        return {};
+    if constexpr (std::is_convertible_v<unsigned char, T>) {
+        return std::vector<T>(data, data + size);
+    } else {
+        std::vector<T> result(size);
+        for (size_t i = 0; i < size; ++i)
+            result[i] = static_cast<T>(data[i]);
+        return result;
+    }
+}
+template <typename T>
+std::vector<T> copy_bytes(const std::vector<unsigned char>& data) {
+    return copy_bytes<T>(data.data(), data.size());
+}
+} // namespace harnessreducer_inline_detail"""
 
 
 def _vector_type_includes(element_type: str) -> tuple[str, ...]:
@@ -409,11 +449,13 @@ def _cpp_byte_literal_for_type(value: int, element_type: str) -> str:
     normalized = _normalize_type_text(element_type)
     b = value & 0xFF
 
-    if normalized in {"char", "signed char", "int8_t", "std::int8_t"}:
-        return f"static_cast<{element_type}>(0x{b:02x})"
     if normalized == "std::byte":
         return f"std::byte{{0x{b:02x}}}"
-    return _cpp_byte_literal(b)
+    if normalized in {"unsigned char", "uint8_t", "std::uint8_t"}:
+        return _cpp_byte_literal(b)
+    # Local aliases may denote signed bytes or enums; list initialization must
+    # not infer their signedness from the spelling of the type name.
+    return f"static_cast<{element_type}>(0x{b:02x})"
 
 
 def _cpp_vector_literal(bytes_list: list[int], element_type: str = "unsigned char") -> str:
@@ -453,15 +495,36 @@ def _cpp_chunked_string_initializer(bytes_list: list[int]) -> str:
     return "\n".join(f"    {_cpp_string_literal(chunk)}" for chunk in chunks)
 
 
-def _floating_call_type(call: CallSite) -> str:
+def _scalar_result_type(call: CallSite) -> ScalarResultType | None:
+    if call.method in _BOOL_METHODS:
+        return ScalarResultType("bool")
+    if call.method in {"remaining_bytes", "ConsumeData"}:
+        return ScalarResultType("size_t", includes=("<cstddef>",))
+    if call.method not in _SCALAR_METHODS:
+        return None
+
+    # PickValueInArray can return floating values, including values whose trace
+    # spelling is integral. Long double matches the scalar replay storage and
+    # avoids guessing the category of a local alias or deduced element type.
+    floating_storage = call.method in _FLOAT_METHODS or call.method == "PickValueInArray"
     if call.template_arg:
-        return _normalize_type_text(call.template_arg)
-    if call.method == "ConsumeFloatingPointInRange" and len(call.arg_texts) >= 2:
-        # Template deduction gives both bounds the same floating type. The
-        # unevaluated sum removes reference/cv qualifiers without evaluating
-        # either bound after the FDP call is replaced.
-        return f"decltype(({call.arg_texts[0]}) + ({call.arg_texts[1]}))"
-    return "double"
+        return ScalarResultType(call.template_arg, floating_storage)
+    if call.method in {"ConsumeIntegralInRange", "ConsumeFloatingPointInRange"} and call.arg_texts:
+        # Arithmetic would promote narrow integers. Deduction from either bound
+        # strips cv/reference qualifiers while retaining the original width.
+        return ScalarResultType(
+            f"std::decay_t<decltype(({call.arg_texts[0]}))>",
+            floating_storage, ("<type_traits>",),
+        )
+    if call.method == "PickValueInArray" and call.arg_texts:
+        array = call.arg_texts[0]
+        # std::begin handles C arrays, std::array and braced initializer lists.
+        argument = array if array.startswith("{") else f"({array})"
+        return ScalarResultType(
+            f"std::decay_t<decltype(*std::begin({argument}))>",
+            True, ("<iterator>", "<type_traits>"),
+        )
+    return None
 
 
 def _format_cpp_floating(value: Any, cpp_type: str) -> str:
@@ -533,12 +596,19 @@ def _needs_numeric_limits(values: list[Any]) -> bool:
     )
 
 
-def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> str | None:
+def _literal_for_single_record(
+    call: CallSite, record_type: str, value: Any,
+    result_type: ScalarResultType | None,
+) -> str | None:
     method = call.method
-    if method in _FLOAT_METHODS:
+    if method in _SCALAR_METHODS:
         if record_type != "S":
             return None
-        return _format_cpp_floating(value, _floating_call_type(call))
+        if result_type is None:
+            return None
+        if result_type.floating_storage:
+            return _format_cpp_floating(value, result_type.cpp_type)
+        return result_type.expression(_format_cpp_number(value))
     if method == "ConsumeBool":
         return "true" if value != 0 else "false"
     if method in _STRING_METHODS:
@@ -551,13 +621,14 @@ def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> 
             return _cpp_vector_literal(value, element_type)
         return f"std::vector<{element_type}>{{}}"
     if method == "ConsumeData":
+        size = f"static_cast<size_t>({len(value) if record_type == 'B' else 0})"
         if record_type != "B" or not value:
-            return "0"
+            return size
         if not call.arg_texts:
-            return str(len(value))
+            return size
         destination = call.arg_texts[0]
         byte_vector = _cpp_vector_literal(value)
-        return f"(std::memcpy({destination}, {byte_vector}.data(), {len(value)}), {len(value)})"
+        return f"(std::memcpy({destination}, {byte_vector}.data(), {len(value)}), {size})"
     if method == "remaining_bytes":
         if isinstance(value, int):
             return f"static_cast<size_t>({value})"
@@ -598,10 +669,12 @@ def _make_bool_header_entry(key: int, method: str, values: list[Any]) -> ValuesH
     return ValuesHeaderEntry(key=key, method=method, declaration=declaration)
 
 
-def _make_numeric_header_entry(key: int, call: CallSite, values: list[Any]) -> ValuesHeaderEntry:
+def _make_numeric_header_entry(
+    key: int, call: CallSite, values: list[Any], result_type: ScalarResultType,
+) -> ValuesHeaderEntry:
     values_name, index_name = _value_names(key)
-    if call.method in _FLOAT_METHODS:
-        value_type = _floating_call_type(call)
+    if result_type.floating_storage:
+        value_type = result_type.cpp_type
         if value_type not in {"float", "double", "long double"}:
             # Aliases, template parameters, and deduced types can be local to
             # the harness. Keep them out of the global generated header and
@@ -647,35 +720,45 @@ def _make_vector_header_entry(
     key: int,
     method: str,
     byte_values: list[list[int]],
-    element_type: str = "unsigned char",
 ) -> ValuesHeaderEntry:
     values_name, index_name = _value_names(key)
-    entries = [f"    {_cpp_vector_literal(bytes_list, element_type)}" for bytes_list in byte_values]
+    entries = [f"    {_cpp_vector_literal(bytes_list)}" for bytes_list in byte_values]
     declaration = (
-        f"static const std::vector<{element_type}> {values_name}[] = {{\n"
+        f"static const std::vector<unsigned char> {values_name}[] = {{\n"
         + ",\n".join(entries)
         + f"\n}};\nstatic size_t {index_name} = 0;"
     )
-    includes = tuple(dict.fromkeys(("<vector>", *_vector_type_includes(element_type))))
-    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+    includes = ("<vector>",)
+    helpers = ()
+    if method in _BYTES_METHODS:
+        includes += ("<type_traits>",)
+        helpers = (_BYTE_COPY_HELPER,)
+    return ValuesHeaderEntry(
+        key=key, method=method, declaration=declaration, includes=includes, helpers=helpers,
+    )
 
 
 def _make_large_byte_header_entry(
     key: int,
     method: str,
     bytes_list: list[int],
-    element_type: str = "unsigned char",
     extra_includes: tuple[str, ...] = (),
 ) -> ValuesHeaderEntry:
     values_name, size_name = _byte_buffer_names(key)
     declaration = (
-        f"static const {element_type} {values_name}[] = "
-        f"{_cpp_byte_array_initializer(bytes_list, element_type)};\n"
+        f"static const unsigned char {values_name}[] = "
+        f"{_cpp_byte_array_initializer(bytes_list, 'unsigned char')};\n"
         f"static const size_t {size_name} = "
         f"sizeof({values_name}) / sizeof({values_name}[0]);"
     )
-    includes = tuple(dict.fromkeys((*_vector_type_includes(element_type), *extra_includes)))
-    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+    includes = extra_includes
+    helpers = ()
+    if method in _BYTES_METHODS:
+        includes += ("<vector>", "<type_traits>")
+        helpers = (_BYTE_COPY_HELPER,)
+    return ValuesHeaderEntry(
+        key=key, method=method, declaration=declaration, includes=includes, helpers=helpers,
+    )
 
 
 def _make_large_string_header_entry(
@@ -718,17 +801,21 @@ def _large_single_record_replacement_for_call(
     if call.method in _BYTES_METHODS:
         element_type = _vector_element_type_for_call(call)
         values_name, size_name = _byte_buffer_names(matched_key)
-        replacement = f"std::vector<{element_type}>({values_name}, {values_name} + {size_name})"
-        return replacement, _make_large_byte_header_entry(
-            matched_key, call.method, value, element_type
+        replacement = (
+            f"harnessreducer_inline_detail::copy_bytes<{element_type}>"
+            f"({values_name}, {size_name})"
         )
+        return replacement, _make_large_byte_header_entry(matched_key, call.method, value)
 
     if call.method == "ConsumeData":
         if not call.arg_texts:
             return None
         values_name, size_name = _byte_buffer_names(matched_key)
         destination = call.arg_texts[0]
-        replacement = f"(std::memcpy({destination}, {values_name}, {size_name}), {size_name})"
+        replacement = (
+            f"(std::memcpy({destination}, {values_name}, {size_name}), "
+            f"static_cast<size_t>({size_name}))"
+        )
         return replacement, _make_large_byte_header_entry(
             matched_key, call.method, value, extra_includes=("<cstring>",)
         )
@@ -740,6 +827,7 @@ def _repeated_replacement_for_call(
     call: CallSite,
     matched_key: int,
     records: list[tuple[str, Any]],
+    result_type: ScalarResultType | None,
 ) -> tuple[str, ValuesHeaderEntry] | None:
     values_name, index_name = _value_names(matched_key)
     indexed_value = f"{values_name}[{index_name}++]"
@@ -748,22 +836,21 @@ def _repeated_replacement_for_call(
         values = _extract_record_values(records, "S")
         if values is None:
             return None
-        return indexed_value, _make_bool_header_entry(matched_key, call.method, values)
+        return f"static_cast<bool>({indexed_value})", _make_bool_header_entry(matched_key, call.method, values)
 
     if call.method in _STRING_METHODS:
         byte_values = _extract_record_values(records, "B")
         if byte_values is None:
             return None
-        return indexed_value, _make_string_header_entry(matched_key, call.method, byte_values)
+        return f"std::string({indexed_value})", _make_string_header_entry(matched_key, call.method, byte_values)
 
     if call.method in _BYTES_METHODS:
         byte_values = _extract_record_values(records, "B")
         if byte_values is None:
             return None
         element_type = _vector_element_type_for_call(call)
-        return indexed_value, _make_vector_header_entry(
-            matched_key, call.method, byte_values, element_type
-        )
+        replacement = f"harnessreducer_inline_detail::copy_bytes<{element_type}>({indexed_value})"
+        return replacement, _make_vector_header_entry(matched_key, call.method, byte_values)
 
     if call.method == "ConsumeData":
         byte_values = _extract_record_values(records, "B")
@@ -782,15 +869,15 @@ def _repeated_replacement_for_call(
         values = _extract_record_values(records, "R")
         if values is None:
             return None
-        return indexed_value, _make_size_t_header_entry(matched_key, call.method, values)
+        return f"static_cast<size_t>({indexed_value})", _make_size_t_header_entry(matched_key, call.method, values)
 
     if call.method in _SCALAR_METHODS:
         values = _extract_record_values(records, "S")
-        if values is None:
+        if values is None or result_type is None:
             return None
-        if call.method in _FLOAT_METHODS:
-            indexed_value = f"static_cast<{_floating_call_type(call)}>({indexed_value})"
-        return indexed_value, _make_numeric_header_entry(matched_key, call, values)
+        return result_type.expression(indexed_value), _make_numeric_header_entry(
+            matched_key, call, values, result_type,
+        )
 
     return None
 
@@ -810,6 +897,9 @@ def _build_values_header(entries: list[ValuesHeaderEntry]) -> str:
     lines = ["#pragma once"]
     lines.extend(f"#include {include}" for include in ordered_includes)
     lines.append("")
+
+    for helper in dict.fromkeys(helper for entry in entries for helper in entry.helpers):
+        lines.extend((helper, ""))
 
     for entry in entries:
         lines.append(f"// Values recorded from FDP_ID {entry.key} ({entry.method}).")
@@ -844,7 +934,7 @@ def inline_source_with_report(
         return InlineResult(source=source, replaced=0, detected_calls=0)
 
     replacements: list[tuple[int, int, str]] = []
-    needs_limits_include = False
+    source_includes: set[str] = set()
     skipped: list[InlineSkip] = []
     header_entries: list[ValuesHeaderEntry] = []
     header_keys: set[int] = set()
@@ -883,6 +973,25 @@ def inline_source_with_report(
         if matched_key is None:
             continue
 
+        result_type = _scalar_result_type(call)
+        if call.method in _SCALAR_METHODS and result_type is None:
+            skipped.append(InlineSkip(
+                key=matched_key, method=call.method, reason="unsupported-result-type",
+                record_count=len(streams[matched_key]),
+            ))
+            continue
+        if result_type is not None:
+            source_includes.update(result_type.includes)
+        if call.method in _STRING_METHODS:
+            source_includes.add("<string>")
+        if call.method in _BYTES_METHODS:
+            source_includes.add("<vector>")
+            source_includes.update(_vector_type_includes(_vector_element_type_for_call(call)))
+            if call.method == "ConsumeBytesWithTerminator" and not call.template_arg:
+                source_includes.add("<type_traits>")
+        if call.method == "ConsumeData":
+            source_includes.update(("<cstring>", "<vector>"))
+
         record_count = len(streams[matched_key])
         if record_count == 1:
             record_type, value = streams[matched_key].popleft()
@@ -901,18 +1010,18 @@ def inline_source_with_report(
                     header_keys.add(header_entry.key)
                 continue
 
-            literal = _literal_for_single_record(call, record_type, value)
+            literal = _literal_for_single_record(call, record_type, value, result_type)
             if literal is None:
                 continue
             if record_type == "S" and _needs_numeric_limits([value]):
-                needs_limits_include = True
+                source_includes.add("<limits>")
             replacements.append((call.start, call.end, literal))
             replaced_ranges.append((call.start, call.end))
             replaced += 1
             continue
 
         records = [streams[matched_key].popleft() for _ in range(record_count)]
-        repeated = _repeated_replacement_for_call(call, matched_key, records)
+        repeated = _repeated_replacement_for_call(call, matched_key, records, result_type)
         if repeated is None:
             skipped.append(
                 InlineSkip(
@@ -947,8 +1056,11 @@ def inline_source_with_report(
         output = output[:start] + literal.encode("utf-8") + output[end:]
 
     output_text = output.decode("utf-8")
-    if needs_limits_include and "#include <limits>" not in output_text:
-        output_text = "#include <limits>\n" + output_text
+    missing_includes = [
+        f"#include {include}\n" for include in sorted(source_includes)
+        if f"#include {include}" not in output_text
+    ]
+    output_text = "".join(missing_includes) + output_text
 
     header_source = ""
     result_header_name: str | None = None
