@@ -55,7 +55,7 @@ model name. These variables are not needed for ordinary reduction.
 
 ## Install
 
-Run from the root of the updated HarnessMinimizer checkout, in the host or
+Run from the root of the HarnessMinimizer workspace of the host or
 container where reduction will run. With `uv` already available:
 
 ```bash
@@ -71,14 +71,10 @@ harnessreducer --help
 The verification command must print `1`. The installer downloads a pinned
 treereduce 0.4.1 source archive, checks its SHA-256, applies
 `tools/treereduce/process-cleanup.patch`, then builds and installs the patched
-executable into `.tools/bin`. It uses two build jobs by default; pass
-`--jobs N` to change installation parallelism. The patch makes timed-out
-checkers and their recorded descendant groups terminate, and waits for the
-checker so its zombie process record is reaped.
+executable into `.tools/bin`. The patch makes timed-out checkers and their recorded descendant groups terminate, and waits for the checker so its zombie process record is reaped.
 
 The installer's `COMMIT` selects the upstream source snapshot; `SHA256` verifies
-the downloaded archive before patching. Neither identifies a HarnessMinimizer
-commit. The installer handles downloading and patching automatically.
+the downloaded archive before patching. The installer handles downloading and patching automatically.
 The ordinary `--version` still reports `treereduce 0.4.1`; use
 `--harnessreducer-supervisor-version` to identify this patched build.
 
@@ -100,11 +96,9 @@ uv run harnessreducer --help
 If `command -v harnessreducer` still names an older global installation after
 activation, run `hash -r` (Bash) or invoke `.venv/bin/harnessreducer` directly.
 
-### Installation without `uv`, including existing containers
+### Installation without `uv`
 
-You can update an existing container without rebuilding its Docker image.
-Make the updated checkout, including `tools/treereduce`, available inside the
-container and run the installation there. For a system interpreter at
+For a system interpreter at
 `/usr/bin/python3`, first confirm that it is Python 3.12 or newer, then run
 these commands from the checkout root:
 
@@ -128,10 +122,7 @@ different location, use that Python 3.12+ executable in place of
 `/usr/bin/python3`. The prerequisite package commands above include
 `python3-venv` and `python3-pip` if they are missing.
 
-If your checkout is bind-mounted and used by multiple hosts or containers, you
-can keep the container's Rust executable outside the shared checkout. Replace
-the treereduce installation/export steps above with the following, using an
-account that can write to `/usr/local`; keep the Python environment setup:
+To install at another location (not inside the project folder:)
 
 ```bash
 /usr/bin/python3 tools/treereduce/install.py --root /usr/local
@@ -140,28 +131,12 @@ export HARNESSREDUCER_TREEREDUCE=/usr/local/bin/treereduce-c
 ```
 
 Build the executable and create the Python environment where you will run
-them; builds from another architecture or runtime environment may not work.
+them.
 For later shell sessions, activate the same virtual environment and repeat the
 export for your chosen executable, or add those commands to your shell setup.
-Keep `--init` when creating containers so container PID 1 can reap adopted
-orphan processes. Installing the patch updates the tool independently of the
-container's init configuration.
 
 The repository's Dockerfile installs the patched executable under
-`/usr/local/bin` and sets `HARNESSREDUCER_TREEREDUCE` accordingly. It also keeps
-that selection independent of host binaries in a bind-mounted `.tools` folder.
-Shell activation does not persist between Dockerfile `RUN` instructions. For
-a Docker image that already has the patched dependency installed, put the
-virtual environment on `PATH` explicitly:
-
-```dockerfile
-WORKDIR /root/HarnessMinimizer
-RUN /usr/bin/python3 -m venv .venv \
-    && .venv/bin/python -m pip install --upgrade pip \
-    && .venv/bin/python -m pip install -e .
-ENV PATH="/root/HarnessMinimizer/.venv/bin:${PATH}"
-RUN harnessreducer --help
-```
+`/usr/local/bin` and sets `HARNESSREDUCER_TREEREDUCE` accordingly.
 
 ### Before starting reduction
 
@@ -170,13 +145,6 @@ headers and compiled libraries available in the execution environment. Supply
 their include paths with `--compile-flags` and their library paths/names with
 `--link-flags`, as shown below. The tool builds its native persistent runner
 when `--amortize-link` is requested; there is no separate runner install step.
-
-Captured compiler/candidate output is limited to 64 MiB per command/request.
-If a target needs a different capture budget, set
-`HARNESSREDUCER_MAX_OUTPUT_BYTES` to a positive byte count before launch. No
-additional configuration is required for process cleanup, timeout calibration,
-PCH, amortized linking, or `--profile`. The existing worker count and container
-resource limits are not changed by the installation.
 
 ## Basic CLI Usage
 
