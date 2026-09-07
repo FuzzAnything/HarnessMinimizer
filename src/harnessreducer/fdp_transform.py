@@ -51,12 +51,14 @@ _BYTES_METHODS = {
     "ConsumeRemainingBytes",
 }
 _BUFFER_METHODS = _STRING_METHODS | _BYTES_METHODS | {"ConsumeData"}
-_SCALAR_METHODS = {
-    "ConsumeIntegral",
-    "ConsumeIntegralInRange",
+_FLOAT_METHODS = {
     "ConsumeFloatingPoint",
     "ConsumeFloatingPointInRange",
     "ConsumeProbability",
+}
+_SCALAR_METHODS = _FLOAT_METHODS | {
+    "ConsumeIntegral",
+    "ConsumeIntegralInRange",
     "ConsumeEnum",
     "PickValueInArray",
 }
@@ -333,16 +335,21 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
             val: Any
             try:
                 val = int(value_str, 0)
+                if val == 0 and value_str.startswith("-"):
+                    val = Decimal("-0")
             except ValueError:
                 try:
                     dec = Decimal(value_str)
                 except (InvalidOperation, ValueError):
                     val = float(value_str)
                 else:
-                    if dec == dec.to_integral_value():
+                    if dec.is_finite() and not (dec.is_zero() and dec.is_signed()) and dec == dec.to_integral_value():
                         val = int(dec)
                     else:
-                        val = float(dec)
+                        # Retain precision for long double and signed zero.
+                        # The consuming FDP call, not the spelling of the
+                        # trace number, determines its eventual C++ type.
+                        val = dec
             streams[key].append(("S", val))
         elif record_type == "R":
             streams[key].append(("R", int(parts[2], 0)))
@@ -446,9 +453,43 @@ def _cpp_chunked_string_initializer(bytes_list: list[int]) -> str:
     return "\n".join(f"    {_cpp_string_literal(chunk)}" for chunk in chunks)
 
 
+def _floating_call_type(call: CallSite) -> str:
+    if call.template_arg:
+        return _normalize_type_text(call.template_arg)
+    if call.method == "ConsumeFloatingPointInRange" and len(call.arg_texts) >= 2:
+        # Template deduction gives both bounds the same floating type. The
+        # unevaluated sum removes reference/cv qualifiers without evaluating
+        # either bound after the FDP call is replaced.
+        return f"decltype(({call.arg_texts[0]}) + ({call.arg_texts[1]}))"
+    return "double"
+
+
+def _format_cpp_floating(value: Any, cpp_type: str) -> str:
+    # Replay reads S records as long double and then converts to the FDP
+    # return type. Emit the same conversion as a constant expression, without
+    # routing through Python's binary64 float or an oversized integer token.
+    number = value if isinstance(value, Decimal) else Decimal(value)
+    if number.is_nan():
+        literal = "std::numeric_limits<long double>::quiet_NaN()"
+    elif number.is_infinite():
+        literal = "std::numeric_limits<long double>::infinity()"
+    else:
+        mantissa, exponent = format(number, "e").split("e")
+        if "." in mantissa:
+            mantissa = mantissa.rstrip("0").rstrip(".")
+        if "." not in mantissa:
+            mantissa += ".0"
+        literal = f"{mantissa}e{exponent}L"
+    if not number.is_finite() and number.is_signed():
+        literal = "-" + literal
+    return f"static_cast<{cpp_type}>({literal})"
+
+
 def _format_cpp_number(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, Decimal):
+        return _format_cpp_floating(value, "double")
     if isinstance(value, float):
         if math.isnan(value):
             return "std::numeric_limits<double>::quiet_NaN()"
@@ -473,7 +514,7 @@ def _format_cpp_number(value: Any) -> str:
 
 
 def _numeric_array_type(values: list[Any]) -> str:
-    if any(isinstance(value, float) for value in values):
+    if any(isinstance(value, (float, Decimal)) for value in values):
         return "double"
 
     ints = [int(value) for value in values]
@@ -485,11 +526,19 @@ def _numeric_array_type(values: list[Any]) -> str:
 
 
 def _needs_numeric_limits(values: list[Any]) -> bool:
-    return any(isinstance(value, float) and not math.isfinite(value) for value in values)
+    return any(
+        (isinstance(value, float) and not math.isfinite(value))
+        or (isinstance(value, Decimal) and not value.is_finite())
+        for value in values
+    )
 
 
 def _literal_for_single_record(call: CallSite, record_type: str, value: Any) -> str | None:
     method = call.method
+    if method in _FLOAT_METHODS:
+        if record_type != "S":
+            return None
+        return _format_cpp_floating(value, _floating_call_type(call))
     if method == "ConsumeBool":
         return "true" if value != 0 else "false"
     if method in _STRING_METHODS:
@@ -549,16 +598,25 @@ def _make_bool_header_entry(key: int, method: str, values: list[Any]) -> ValuesH
     return ValuesHeaderEntry(key=key, method=method, declaration=declaration)
 
 
-def _make_numeric_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
+def _make_numeric_header_entry(key: int, call: CallSite, values: list[Any]) -> ValuesHeaderEntry:
     values_name, index_name = _value_names(key)
-    value_type = _numeric_array_type(values)
-    value_text = ", ".join(_format_cpp_number(value) for value in values)
+    if call.method in _FLOAT_METHODS:
+        value_type = _floating_call_type(call)
+        if value_type not in {"float", "double", "long double"}:
+            # Aliases, template parameters, and deduced types can be local to
+            # the harness. Keep them out of the global generated header and
+            # apply their conversion at the original call site instead.
+            value_type = "long double"
+        value_text = ", ".join(_format_cpp_floating(value, value_type) for value in values)
+    else:
+        value_type = _numeric_array_type(values)
+        value_text = ", ".join(_format_cpp_number(value) for value in values)
     declaration = (
         f"static const {value_type} {values_name}[] = {{{value_text}}};\n"
         f"static size_t {index_name} = 0;"
     )
     includes = ("<limits>",) if _needs_numeric_limits(values) else ()
-    return ValuesHeaderEntry(key=key, method=method, declaration=declaration, includes=includes)
+    return ValuesHeaderEntry(key=key, method=call.method, declaration=declaration, includes=includes)
 
 
 def _make_size_t_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
@@ -730,7 +788,9 @@ def _repeated_replacement_for_call(
         values = _extract_record_values(records, "S")
         if values is None:
             return None
-        return indexed_value, _make_numeric_header_entry(matched_key, call.method, values)
+        if call.method in _FLOAT_METHODS:
+            indexed_value = f"static_cast<{_floating_call_type(call)}>({indexed_value})"
+        return indexed_value, _make_numeric_header_entry(matched_key, call, values)
 
     return None
 
@@ -784,6 +844,7 @@ def inline_source_with_report(
         return InlineResult(source=source, replaced=0, detected_calls=0)
 
     replacements: list[tuple[int, int, str]] = []
+    needs_limits_include = False
     skipped: list[InlineSkip] = []
     header_entries: list[ValuesHeaderEntry] = []
     header_keys: set[int] = set()
@@ -843,6 +904,8 @@ def inline_source_with_report(
             literal = _literal_for_single_record(call, record_type, value)
             if literal is None:
                 continue
+            if record_type == "S" and _needs_numeric_limits([value]):
+                needs_limits_include = True
             replacements.append((call.start, call.end, literal))
             replaced_ranges.append((call.start, call.end))
             replaced += 1
@@ -884,6 +947,8 @@ def inline_source_with_report(
         output = output[:start] + literal.encode("utf-8") + output[end:]
 
     output_text = output.decode("utf-8")
+    if needs_limits_include and "#include <limits>" not in output_text:
+        output_text = "#include <limits>\n" + output_text
 
     header_source = ""
     result_header_name: str | None = None

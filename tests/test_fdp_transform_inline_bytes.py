@@ -1,9 +1,11 @@
 from collections import defaultdict, deque
+from decimal import Decimal
 
 from harnessreducer.fdp_transform import (
     MAX_INLINE_BUFFER_BYTES,
     inline_source,
     inline_source_with_report,
+    load_trace,
 )
 
 
@@ -142,6 +144,92 @@ void f(uint8_t* data, int size) {
     assert "static const unsigned long long fuzz_values_100009[]" in result.header_source
     assert "9223372036854775808ULL" in result.header_source
     assert "18446744073709551615ULL" in result.header_source
+
+
+def test_integral_spelling_from_repeated_floating_trace_uses_floating_header(
+    tmp_path,
+) -> None:
+    """A finite floating result can be printed as a 308-digit integer."""
+    huge = (
+        "35232417636581483273331783579264219469540533218383373890227327659967016681126362067932496581998013061184795164706296677936105475581163685514480853684518599878799789902329624456941982210901016672202102264526120599811479205303451253251497197886549479826531090448195520143787431010402223645373625777573135908864"
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text(
+        f"S 100010 {huge}\nS 100010 -{huge}\n",
+        encoding="utf-8",
+    )
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  double value = fdp.ConsumeFloatingPoint<double>(/*FDP_ID:100010*/ 100010);
+}
+"""
+
+    result = inline_source_with_report(source, load_trace(trace))
+
+    assert result.replaced == 1
+    assert "static const double fuzz_values_100010[]" in result.header_source
+    assert "static const long long fuzz_values_100010[]" not in result.header_source
+    assert "static_cast<double>(3.523241763658148" in result.header_source
+    assert "e+307L)" in result.header_source
+    assert "static_cast<double>(fuzz_values_100010[fuzz_index_100010++])" in result.source
+
+
+def test_integral_spelling_from_single_floating_trace_uses_floating_literal(
+    tmp_path,
+) -> None:
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("S 100011 100000000000000000000000000000000000000\n", encoding="utf-8")
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto value = fdp.ConsumeFloatingPoint<float>(/*FDP_ID:100011*/ 100011);
+}
+"""
+
+    result = inline_source_with_report(source, load_trace(trace))
+
+    assert result.replaced == 1
+    assert result.header_source == ""
+    assert "static_cast<float>(1.0e+38L)" in result.source
+
+
+def test_repeated_deduced_floating_range_keeps_type_name_out_of_header() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  float low = -1.0f;
+  float high = 1.0f;
+  auto value = fdp.ConsumeFloatingPointInRange(
+      low, high, /*FDP_ID:100012*/ 100012);
+}
+"""
+    streams = defaultdict(deque)
+    streams[100012].append(("S", 0))
+    streams[100012].append(("S", 1))
+
+    result = inline_source_with_report(source, streams)
+
+    assert result.replaced == 1
+    assert "static const long double fuzz_values_100012[]" in result.header_source
+    assert "decltype" not in result.header_source
+    assert "static_cast<decltype((low) + (high))>(" in result.source
+
+
+def test_floating_signed_zero_is_preserved() -> None:
+    source = """
+void f(uint8_t* data, int size) {
+  FuzzedDataProvider fdp(data, size);
+  auto value = fdp.ConsumeProbability<double>(/*FDP_ID:100013*/ 100013);
+}
+"""
+    trace = defaultdict(deque)
+    trace[100013].append(("S", Decimal("-0")))
+
+    result = inline_source_with_report(source, trace)
+
+    assert result.replaced == 1
+    assert "static_cast<double>(-0.0e+0L)" in result.source
 
 
 def test_inline_nested_fdp_call_keeps_outer_replay_replacement() -> None:
