@@ -192,6 +192,55 @@ class TestAsanCrashPattern(unittest.TestCase):
                 self.assertIsNone(re.search(ASAN_HEAP_PATTERN, report))
 
 
+class TestUbsanCrashPattern(unittest.TestCase):
+    LOCATION = "/root/src/libtiff/libtiff/tif_luv.c:1319:18: runtime error: "
+
+    def test_message_numbers_produce_identical_patterns(self):
+        for first, second in (
+            ("left shift of negative value -391", "left shift of negative value -390"),
+            ("signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'",
+             "signed integer overflow: -2147483648 + -2 cannot be represented in type 'int'"),
+            ("index 4 out of bounds for type 'int [3]'", "index 123 out of bounds for type 'int [9]'"),
+            ("value 1.25e+20 is outside the range of type 'int'", "value -.5e-2 is outside the range of type 'int'"),
+            ("value -1 is outside the range of type 'int'", "value +2.5 is outside the range of type 'int'"),
+            ("store to misaligned address 0x1234 for type 'int', which requires 4 byte alignment",
+             "store to misaligned address 0Xabcdef for type 'int', which requires 8 byte alignment"),
+            ("value 100.", "value -200."),
+        ):
+            with self.subTest(first=first):
+                original, changed = self.LOCATION + first, self.LOCATION + second
+                pattern = _extract_crash_signature_from_output(original)
+                self.assertEqual(pattern, _extract_crash_signature_from_output(changed))
+                self.assertIsNotNone(re.search(pattern, original))
+                self.assertIsNotNone(re.search(pattern, changed))
+
+    def test_location_and_error_wording_still_must_match(self):
+        original = self.LOCATION + "left shift of negative value -391"
+        pattern = _extract_crash_signature_from_output(original)
+        for changed in (
+            original.replace("1319:", "1320:"), original.replace(":18:", ":19:"),
+            original.replace("tif_luv.c", "tif_other.c"), original.replace("left shift", "right shift"),
+            original.replace("-391", "unknown"),
+        ):
+            with self.subTest(changed=changed):
+                self.assertIsNone(re.search(pattern, changed))
+
+    def test_numeric_source_paths_and_type_identifiers_remain_literal(self):
+        original = "/src/project2/0x123/file3.c:1319:18: runtime error: load of value 9 for type 'int32_t'"
+        pattern = _extract_crash_signature_from_output(original)
+        for before, after in (("project2", "project9"), ("0x123", "0x456"),
+                              ("file3", "file4"), ("int32_t", "int64_t")):
+            with self.subTest(before=before):
+                self.assertIsNone(re.search(pattern, original.replace(before, after)))
+        self.assertIsNotNone(re.search(pattern, original.replace("value 9", "value 128")))
+
+    def test_ubsan_summary_location_remains_exact(self):
+        output = "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /src/foo.c:42:5"
+        pattern = _extract_crash_signature_from_output(output)
+        self.assertIsNotNone(re.search(pattern, output))
+        self.assertIsNone(re.search(pattern, output.replace(":42:", ":43:")))
+
+
 class TestStackFramePattern(unittest.TestCase):
     """Test the STACK_FRAME_PATTERN and LLVMFuzzerTestOneInput_PATTERN regexes."""
 
@@ -704,10 +753,10 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 get_reference_crash_pattern_symbolize_0(),
                 ASAN_HEAP_PATTERN,
             )
-            self.assertEqual(
-                get_reference_crash_pattern_symbolize_1(),
-                r"/root/src/opencv/modules/imgproc/src/drawing\.cpp:1142:13:\ runtime\ error:\ left\ shift\ of\ negative\ value\ \-1",
-            )
+            symbolized_pattern = get_reference_crash_pattern_symbolize_1()
+            self.assertIsNotNone(re.search(symbolized_pattern, symbolized_output))
+            self.assertIsNotNone(re.search(symbolized_pattern, symbolized_output.replace("value -1", "value -390")))
+            self.assertIsNone(re.search(symbolized_pattern, symbolized_output.replace(":1142:", ":1143:")))
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_records_symbolized_crash_location_when_requested(self, mock_run):

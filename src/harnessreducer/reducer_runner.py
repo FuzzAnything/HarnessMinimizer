@@ -201,6 +201,10 @@ LEAK_PATTERN = re.compile(
 RUNTIME_ERROR_PATTERN = re.compile(
     r"(?:/[^\s:]+)+:\d+:\d+:\s*runtime error:.*"
 )
+RUNTIME_ERROR_NUMBER_PATTERN = re.compile(
+    r"(?<![\w.])[+-]?(?:0[xX][0-9a-fA-F]+|"
+    r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)(?![\w.])"
+)
 UBSAN_PATTERN = re.compile(
     r"SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior\s+(\S+:\d+:\d+)"
 )
@@ -2929,6 +2933,19 @@ def _save_symbolization_failure(output: str) -> str:
     return str(path)
 
 
+def _normalize_runtime_error_signature(signature: str) -> str:
+    """Keep the source location and wording exact; generalize message numbers only."""
+    location, marker, message = signature.strip().partition("runtime error:")
+    parts = [re.escape(location + marker)]
+    end = 0
+    for number in RUNTIME_ERROR_NUMBER_PATTERN.finditer(message):
+        parts.append(re.escape(message[end:number.start()]))
+        parts.append(RUNTIME_ERROR_NUMBER_PATTERN.pattern)
+        end = number.end()
+    parts.append(re.escape(message[end:]))
+    return "".join(parts)
+
+
 def _extract_crash_signature_from_output(output: str) -> str | None:
     abort_assert_match = ABORT_ASSERT_LOCATION_PATTERN.search(output)
     if abort_assert_match:
@@ -2950,7 +2967,7 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
 
     runtime_error_match = RUNTIME_ERROR_PATTERN.search(output)
     if runtime_error_match:
-        return normalize_crash_signature(runtime_error_match.group(0), escape=True)
+        return _normalize_runtime_error_signature(runtime_error_match.group(0))
 
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:

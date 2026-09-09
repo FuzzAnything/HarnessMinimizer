@@ -24,14 +24,14 @@ LOCATION = r"/src/target\.c:42:3"
 
 
 class TestCandidateEvidenceRetry(unittest.TestCase):
-    def run_candidate(self, outputs, *, symbolize=False, mode="direct", extra=(), profile=False):
+    def run_candidate(self, outputs, *, symbolize=False, mode="direct", extra=(), profile=False, crash_pattern=MATCH_PATTERN):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root = Path(tmp)
             source = root / "candidate.cpp"
             source.write_text("candidate source\n")
             obj = root / "candidate.o"
             stats, snapshot, events = (root / name for name in ("stats", "last.cpp", "profile.jsonl"))
-            argv = ["crash_tester", str(source), MATCH_PATTERN, "--crash-input", "seed.bin",
+            argv = ["crash_tester", str(source), crash_pattern, "--crash-input", "seed.bin",
                     "--fdp-trace", "trace.log", "--exec-timeout-ms", "1000",
                     "--statistics-file", str(stats), "--last-interesting-file", str(snapshot),
                     "--print-exec-time-ms"]
@@ -137,6 +137,19 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
                 self.assertEqual((result, attempts), (1, 3))
                 self.assertIn("attempts exhausted", log)
 
+    def test_ubsan_values_can_change_with_or_without_evidence_retry(self):
+        message = "/src/target.c:42:3: runtime error: left shift of negative value -391"
+        pattern = runner._extract_crash_signature_from_output(message)
+        for symbolize, report in ((False, FAST), (True, SYMBOLIZED)):
+            for missing_first in (False, True):
+                with self.subTest(symbolize=symbolize, missing_first=missing_first):
+                    complete = message.replace("-391", "-390") + "\n" + report.replace(PATTERN, "")
+                    outputs = ([(77, message, 7)] if missing_first else []) + [(77, complete, 8)]
+                    result, attempts, _, _ = self.run_candidate(
+                        outputs, symbolize=symbolize, crash_pattern=pattern, profile=True,
+                    )
+                    self.assertEqual((result, attempts), (77, len(outputs)))
+
     def test_mismatches_never_retry(self):
         for status, report, symbolize in (
             (0, EMPTY, False), (124, EMPTY, False), (125, EMPTY, False),
@@ -232,6 +245,16 @@ class TestReferenceEvidenceRetry(unittest.TestCase):
             with self.subTest(flags=flags):
                 self.capture([(77, EMPTY), (77, SYMBOLIZED)], link_flags=flags)
                 self.assertIsNone(runner.get_dynamic_reference_crash_site())
+
+    def test_reference_recovery_allows_ubsan_numeric_value_changes(self):
+        message = "/src/target.c:42:3: runtime error: left shift of negative value -391"
+        changed = message.replace("-391", "-390")
+        pattern = runner._extract_crash_signature_from_output(message)
+        self.assertEqual(self.capture([
+            (77, message), (77, changed + "\n" + FAST.replace(PATTERN, "")),
+            (77, message), (77, changed + "\n" + SYMBOLIZED.replace(PATTERN, "")),
+        ]), pattern)
+        self.assertEqual(runner.get_reference_crash_pattern_symbolize_1(), pattern)
 
     def test_optional_exhaustion_retains_existing_fallback(self):
         self.capture([(77, EMPTY)] * 10, required=False)
