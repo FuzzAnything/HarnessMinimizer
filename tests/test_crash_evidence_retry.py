@@ -16,6 +16,7 @@ from tests import crash_tester as tester
 
 
 PATTERN = "SUMMARY: AddressSanitizer: stack-overflow"
+MATCH_PATTERN = r"(?:SUMMARY|ERROR):\s*AddressSanitizer:\s*stack\-overflow(?![\w-])"
 EMPTY = "AddressSanitizer:DEADLYSIGNAL\n    <empty stack>\n" + PATTERN
 FAST = "    #0 0xabcd (/tmp/libtarget.so+0x123)\n    #1 0xbeef (/tmp/poc.out+0x789)\n" + PATTERN
 SYMBOLIZED = "    #0 0xabcd in target /src/target.c:42:3\n    #1 0xbeef in LLVMFuzzerTestOneInput /tmp/harness.cpp:9:1\n" + PATTERN
@@ -30,7 +31,7 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
             source.write_text("candidate source\n")
             obj = root / "candidate.o"
             stats, snapshot, events = (root / name for name in ("stats", "last.cpp", "profile.jsonl"))
-            argv = ["crash_tester", str(source), PATTERN, "--crash-input", "seed.bin",
+            argv = ["crash_tester", str(source), MATCH_PATTERN, "--crash-input", "seed.bin",
                     "--fdp-trace", "trace.log", "--exec-timeout-ms", "1000",
                     "--statistics-file", str(stats), "--last-interesting-file", str(snapshot),
                     "--print-exec-time-ms"]
@@ -117,6 +118,18 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
                 self.assertEqual((result, attempts), (77, 1))
                 self.assertNotIn("retrying", log)
 
+    def test_candidate_recovery_allows_error_summary_transition(self):
+        for mode in ("direct", "amortized"):
+            for symbolize, complete in ((False, FAST), (True, SYMBOLIZED)):
+                for first_prefix, next_prefix in (("ERROR", "SUMMARY"), ("SUMMARY", "ERROR")):
+                    with self.subTest(mode=mode, symbolize=symbolize, first_prefix=first_prefix):
+                        result, attempts, _, _ = self.run_candidate(
+                            [(77, EMPTY.replace("SUMMARY", first_prefix), 7),
+                             (77, complete.replace("SUMMARY", next_prefix), 8)],
+                            symbolize=symbolize, mode=mode, profile=True,
+                        )
+                        self.assertEqual((result, attempts), (77, 2))
+
     def test_exhaustion_is_bounded(self):
         for symbolize in (False, True):
             with self.subTest(symbolize=symbolize):
@@ -195,12 +208,24 @@ class TestReferenceEvidenceRetry(unittest.TestCase):
         return pattern
 
     def test_recovers_both_modes_and_records_complete_observations(self):
-        self.assertEqual(self.capture([(77, EMPTY), (77, FAST), (77, EMPTY), (77, SYMBOLIZED)]), PATTERN)
+        self.assertEqual(self.capture([(77, EMPTY), (77, FAST), (77, EMPTY), (77, SYMBOLIZED)]), MATCH_PATTERN)
         self.assertEqual(runner.get_dynamic_reference_crash_site().offset, "0x123")
         self.assertEqual(runner.get_normal_reference_stack_depth(), 2)
         self.assertEqual(runner.get_symbolized_reference_stack_depth(), 2)
         self.assertEqual(runner.get_symbolized_reference_crash_location_pattern(), LOCATION)
         self.assertIn("target", Path(runner.get_stack_trace_file()).read_text())
+
+    def test_reference_recovery_allows_error_summary_transition(self):
+        for first_prefix, next_prefix in (("ERROR", "SUMMARY"), ("SUMMARY", "ERROR")):
+            with self.subTest(first_prefix=first_prefix):
+                self.assertEqual(self.capture([
+                    (77, EMPTY.replace("SUMMARY", first_prefix)),
+                    (77, FAST.replace("SUMMARY", next_prefix)),
+                    (77, EMPTY.replace("SUMMARY", first_prefix)),
+                    (77, SYMBOLIZED.replace("SUMMARY", next_prefix)),
+                ]), MATCH_PATTERN)
+                self.assertEqual(runner.get_reference_crash_pattern_symbolize_0(), MATCH_PATTERN)
+                self.assertEqual(runner.get_reference_crash_pattern_symbolize_1(), MATCH_PATTERN)
 
     def test_static_only_skips_dynamic_retries(self):
         for flags in (None, "-lpthread -lm", "/tmp/libtarget.a -lpthread", "-Wl,-Bstatic -ltarget"):
@@ -232,7 +257,7 @@ class TestReferenceEvidenceRetry(unittest.TestCase):
 
     def test_noncrashing_reference_retains_existing_handling(self):
         self.assertIsNone(self.capture([(0, "no crash")]))
-        self.assertEqual(self.capture([(77, FAST), (0, "no crash")]), PATTERN)
+        self.assertEqual(self.capture([(77, FAST), (0, "no crash")]), MATCH_PATTERN)
 
 
 if __name__ == "__main__":

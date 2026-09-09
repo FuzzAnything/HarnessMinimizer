@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from harnessreducer.reducer_runner import (
+    _extract_crash_signature_from_output,
     DynamicCrashSite,
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
@@ -82,6 +83,8 @@ ct_append_debug_record = _ct_module._append_debug_record
 
 
 # --- Sample ASan output for testing ---
+ASAN_HEAP_PATTERN = r"(?:SUMMARY|ERROR):\s*AddressSanitizer:\s*heap\-buffer\-overflow(?![\w-])"
+
 SAMPLE_ASAN_OUTPUT = """\
 =================================================================
 ==12345==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000034 at pc 0x5ea4dfe78fe6 bp 0x7ffc1234 sp 0x7ffc5678
@@ -161,6 +164,32 @@ allocated by thread T0 here:
     #0 0x3333  (/tmp/build/lib/libaom.so+0x13ce1c3)
 SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/build/lib/libaom.so+0x201cf25)
 """
+
+
+class TestAsanCrashPattern(unittest.TestCase):
+    def test_error_and_summary_produce_same_pattern_and_match_both_reports(self):
+        for error_type in ("stack-overflow", "heap-buffer-overflow", "negative-size-param", "SEGV"):
+            error = f"==123==ERROR: AddressSanitizer: {error_type} on address 0x1234"
+            summary = f"SUMMARY: AddressSanitizer: {error_type} /src/target.c:42:3"
+            with self.subTest(error_type=error_type):
+                pattern = _extract_crash_signature_from_output(summary)
+                self.assertEqual(pattern, _extract_crash_signature_from_output(error))
+                self.assertEqual(pattern, _extract_crash_signature_from_output(error + "\n" + summary))
+                for report in (error, summary, f"ERROR:\tAddressSanitizer:  {error_type}"):
+                    self.assertIsNotNone(re.search(pattern, report))
+                for other_type in (error_type + "-other", error_type + "2", "other-" + error_type):
+                    self.assertIsNone(re.search(pattern, f"ERROR: AddressSanitizer: {other_type}"))
+
+    def test_summary_still_has_priority_when_extracting_type(self):
+        output = "ERROR: AddressSanitizer: SEGV\nSUMMARY: AddressSanitizer: heap-buffer-overflow"
+        self.assertEqual(_extract_crash_signature_from_output(output), ASAN_HEAP_PATTERN)
+
+    def test_other_sanitizer_names_and_crash_types_do_not_match(self):
+        for report in ("ERROR: AddressSanitizer: stack-overflow",
+                       "SUMMARY: UndefinedBehaviorSanitizer: heap-buffer-overflow",
+                       "ERROR: LeakSanitizer: heap-buffer-overflow"):
+            with self.subTest(report=report):
+                self.assertIsNone(re.search(ASAN_HEAP_PATTERN, report))
 
 
 class TestStackFramePattern(unittest.TestCase):
@@ -629,11 +658,11 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
             self.assertEqual(get_symbolized_reference_stack_depth(), 6)
             self.assertEqual(
                 get_reference_crash_pattern_symbolize_0(),
-                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+                ASAN_HEAP_PATTERN,
             )
             self.assertEqual(
                 get_reference_crash_pattern_symbolize_1(),
-                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+                ASAN_HEAP_PATTERN,
             )
             self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=False)))
             self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=True)))
@@ -670,10 +699,10 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 harness_path="harness.cpp",
             )
 
-            self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
+            self.assertEqual(pattern, ASAN_HEAP_PATTERN)
             self.assertEqual(
                 get_reference_crash_pattern_symbolize_0(),
-                "SUMMARY: AddressSanitizer: heap-buffer-overflow",
+                ASAN_HEAP_PATTERN,
             )
             self.assertEqual(
                 get_reference_crash_pattern_symbolize_1(),
@@ -808,7 +837,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
             pattern = extract_crash_pattern_from_output(None, harness_path="harness.cpp")
 
             self.assertEqual(mock_run.call_count, 6)  # One fast run, five optional symbolized attempts.
-            self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
+            self.assertEqual(pattern, ASAN_HEAP_PATTERN)
             self.assertFalse(os.path.exists(trace_file))
             self.assertFalse(os.path.exists(dynamic_file))
             self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=False)))

@@ -194,7 +194,7 @@ atexit.register(cleanup)
 
 MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
 ASAN_SUMMARY_PATTERN = re.compile(r"SUMMARY:\s*AddressSanitizer:\s*([\w-]+)")
-ASAN_ERROR_PATTERN = re.compile(r"ERROR:\s*AddressSanitizer:\s*[\w-]+")
+ASAN_ERROR_PATTERN = re.compile(r"ERROR:\s*AddressSanitizer:\s*([\w-]+)")
 LEAK_PATTERN = re.compile(
     r"SUMMARY: AddressSanitizer: \d+ byte\(s\) leaked in \d+ allocation\(s\)\."
 )
@@ -2936,13 +2936,13 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
         signature = parts[0] + ":" + parts[1]
         return normalize_crash_signature(signature)
 
-    asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
-    if asan_summary_match:
-        return normalize_crash_signature(asan_summary_match.group(0))
-
-    asan_error_match = ASAN_ERROR_PATTERN.search(output)
-    if asan_error_match:
-        return normalize_crash_signature(asan_error_match.group(0))
+    # Prefer SUMMARY when extracting the error type, but accept either report
+    # prefix during validation. Both sources produce an identical regex, so a
+    # missing SUMMARY also cannot change the identity during evidence retries.
+    asan_match = ASAN_SUMMARY_PATTERN.search(output) or ASAN_ERROR_PATTERN.search(output)
+    if asan_match:
+        error_type = re.escape(asan_match.group(1))
+        return rf"(?:SUMMARY|ERROR):\s*AddressSanitizer:\s*{error_type}(?![\w-])"
 
     leak_match = LEAK_PATTERN.search(output)
     if leak_match:
