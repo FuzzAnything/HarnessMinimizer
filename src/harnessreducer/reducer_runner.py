@@ -16,6 +16,9 @@ from pathlib import Path
 from harnessreducer.process_supervisor import (
     run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
 )
+from harnessreducer.crash_evidence import (
+    REFERENCE_EVIDENCE_ATTEMPTS, retry_missing_evidence,
+)
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessreducer.reduction_profile import write_profile_summary
@@ -2458,6 +2461,8 @@ def reset_stack_trace_state() -> None:
         get_dynamic_crash_site_file(),
         get_symbolized_crash_location_file(),
         str(Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME),
+        str(Path(get_work_dir()) / "crash_reference.symbolize0.failure.log"),
+        str(Path(get_work_dir()) / "crash_reference.symbolize1.failure.log"),
     ):
         try:
             os.remove(path)
@@ -2759,6 +2764,80 @@ def _run_harness_for_crash_reference(
     )
 
 
+def _capture_crash_reference_with_evidence(
+    output_bin: str,
+    crash_input: str | None,
+    *,
+    symbolize: bool,
+    link_flags: str | None,
+    harness_path: str | None,
+    require_location: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Select one report before persisting reference state; never rebuild the binary."""
+    expected_pattern = None
+    dynamic_applicable = None
+    for attempt in range(1, REFERENCE_EVIDENCE_ATTEMPTS + 1):
+        proc = _run_harness_for_crash_reference(
+            output_bin, crash_input, symbolize=symbolize, link_flags=link_flags,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+        if proc.returncode != 77:
+            return proc
+        if symbolize:
+            harness_location = extract_harness_crash_location(output, harness_path=harness_path)
+            if harness_location:
+                raise HarnessCrashDetected(harness_location)
+
+        pattern = _extract_crash_signature_from_output(output)
+        if attempt > 1 and pattern != expected_pattern:
+            diagnostic = _save_reference_evidence_failure(output, symbolize=symbolize)
+            raise ValueError(
+                f"Crash pattern changed during reference evidence retry (symbolize={int(symbolize)}, "
+                f"attempt {attempt}/{REFERENCE_EVIDENCE_ATTEMPTS}). "
+                f"Expected {expected_pattern!r}, got {pattern!r}. Raw sanitizer output: {diagnostic}"
+            )
+        if pattern is None:
+            # No identity to preserve across retries: retain the caller's existing handling.
+            return proc
+        expected_pattern = pattern
+
+        if symbolize:
+            if require_location and extract_symbolized_crash_location(output, harness_path=harness_path) is None:
+                missing = "symbolized crash-location evidence"
+            elif extract_stack_trace(output, harness_path=harness_path) is None:
+                missing = "symbolized stack-trace evidence"
+            else:
+                return proc
+        else:
+            if extract_first_dynamic_library_crash_site(output, link_flags) is not None:
+                return proc
+            if dynamic_applicable is None:
+                hints = infer_target_dynamic_library_hints(link_flags)
+                # Runtime-only flags such as -lpthread do not identify a fuzzed
+                # target. Explicit library paths still express target intent.
+                dynamic_applicable = bool(hints.exact_paths) or any(
+                    not _is_runtime_shared_library(name) for name in hints.exact_names
+                )
+            if not dynamic_applicable:
+                return proc
+            missing = "dynamic crash-site evidence"
+
+        if not retry_missing_evidence(
+            missing, attempt, REFERENCE_EVIDENCE_ATTEMPTS,
+            context=f"reference symbolize={int(symbolize)}",
+        ):
+            diagnostic = _save_reference_evidence_failure(output, symbolize=symbolize)
+            print(f"[!] Raw sanitizer output: {diagnostic}")
+            # Required/optional exhaustion semantics remain in the caller.
+            return proc
+
+
+def _save_reference_evidence_failure(output: str, *, symbolize: bool) -> str:
+    path = Path(get_work_dir()) / f"crash_reference.symbolize{int(symbolize)}.failure.log"
+    path.write_text(output, encoding="utf-8")
+    return str(path)
+
+
 def _persist_reference_crash_pattern(pattern: str | None, *, symbolized: bool) -> None:
     path = Path(get_crash_pattern_file(symbolized=symbolized))
     if pattern is None:
@@ -2899,11 +2978,12 @@ def extract_crash_pattern_from_output(
         set_symbolized_reference_crash_location_pattern(None)
         _persist_symbolized_reference_crash_location(None)
     output_bin = os.path.join(work_dir, "poc.out")
-    proc = _run_harness_for_crash_reference(
+    proc = _capture_crash_reference_with_evidence(
         output_bin,
         crash_input,
         symbolize=False,
         link_flags=link_flags,
+        harness_path=harness_path,
     )
     output = proc.stdout + "\n" + proc.stderr
     if proc.returncode != 77:
@@ -2934,11 +3014,13 @@ def extract_crash_pattern_from_output(
     set_reference_crash_patterns(symbolize_0=crash_pattern)
     _persist_reference_crash_pattern(crash_pattern, symbolized=False)
 
-    symbolized_proc = _run_harness_for_crash_reference(
+    symbolized_proc = _capture_crash_reference_with_evidence(
         output_bin,
         crash_input,
         symbolize=True,
         link_flags=link_flags,
+        harness_path=harness_path,
+        require_location=record_symbolized_crash_location,
     )
     symbolized_output = symbolized_proc.stdout + "\n" + symbolized_proc.stderr
     if symbolized_proc.returncode != 77:

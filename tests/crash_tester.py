@@ -25,6 +25,9 @@ PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 from harnessreducer.process_supervisor import (
     run_supervised, termination_guard, runner_request, OutputLimitExceeded,
 )
+from harnessreducer.crash_evidence import (
+    CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
+)
 
 from harnessreducer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
@@ -927,11 +930,11 @@ def _check_stack_trace(
     return False
 
 
-def _check_dynamic_crash_site(
+def _classify_dynamic_crash_site(
     run_log: str,
     expected_library: str,
     expected_offset: str,
-) -> bool:
+) -> EvidenceResult:
     site = extract_first_dynamic_library_crash_site(
         run_log,
         expected_library=expected_library,
@@ -941,18 +944,54 @@ def _check_dynamic_crash_site(
             "[-] Dynamic crash-site offset did not match. "
             f"Could not find a frame for {expected_library} in the first stack trace."
         )
-        return False
+        return EvidenceResult.MISSING_EVIDENCE
 
     if site.offset.lower() == expected_offset.lower():
         print("[+] Dynamic crash-site offset validation passed.")
-        return True
+        return EvidenceResult.MATCH
 
     print(
         "[-] Dynamic crash-site offset did not match. "
         f"Expected {expected_library}+{expected_offset.lower()}, "
         f"got {site.library_path}+{site.offset}."
     )
-    return False
+    return EvidenceResult.MISMATCH
+
+
+def _check_dynamic_crash_site(
+    run_log: str,
+    expected_library: str,
+    expected_offset: str,
+) -> bool:
+    return _classify_dynamic_crash_site(
+        run_log, expected_library, expected_offset,
+    ) is EvidenceResult.MATCH
+
+
+def _classify_crash_location_pattern(
+    run_log: str,
+    stored_pattern: str,
+    source_path: str,
+) -> EvidenceResult:
+    pattern = stored_pattern.strip()
+    if not pattern:
+        print("[*] No stored crash-location pattern; skipping crash-location check.")
+        return EvidenceResult.MATCH
+
+    location = extract_symbolized_crash_location(run_log, harness_path=source_path)
+    if location is None:
+        print("[-] No symbolized crash location found in the first stack trace.")
+        return EvidenceResult.MISSING_EVIDENCE
+
+    if re.fullmatch(pattern, location) is not None:
+        print("[+] Symbolized crash-location validation passed.")
+        return EvidenceResult.MATCH
+
+    print(
+        "[-] Symbolized crash location did not match. "
+        f"Expected pattern {pattern!r}, got {location!r}."
+    )
+    return EvidenceResult.MISMATCH
 
 
 def _check_crash_location_pattern(
@@ -960,25 +999,9 @@ def _check_crash_location_pattern(
     stored_pattern: str,
     source_path: str,
 ) -> bool:
-    pattern = stored_pattern.strip()
-    if not pattern:
-        print("[*] No stored crash-location pattern; skipping crash-location check.")
-        return True
-
-    location = extract_symbolized_crash_location(run_log, harness_path=source_path)
-    if location is None:
-        print("[-] No symbolized crash location found in the first stack trace.")
-        return False
-
-    if re.fullmatch(pattern, location) is not None:
-        print("[+] Symbolized crash-location validation passed.")
-        return True
-
-    print(
-        "[-] Symbolized crash location did not match. "
-        f"Expected pattern {pattern!r}, got {location!r}."
-    )
-    return False
+    return _classify_crash_location_pattern(
+        run_log, stored_pattern, source_path,
+    ) is EvidenceResult.MATCH
 
 
 def _check_crash_location(
@@ -998,6 +1021,110 @@ def _stack_depth_is_advisory(
     if use_symbolize:
         return True
     return bool(args.dynamic_crash_site_library and args.dynamic_crash_site_offset)
+
+
+def _evaluate_candidate_crash(
+    args: argparse.Namespace, status: int, run_log: str,
+) -> tuple[EvidenceResult, str | None]:
+    """Evaluate one report without combining evidence or finalizing the candidate."""
+    use_symbolize = args.symbolize
+    if args.debug_log:
+        args._debug_execution_return_code = status
+        args._debug_crash_pattern_matched = (
+            None
+            if args.skip_crash_pattern
+            else re.search(args.crash_pattern, run_log) is not None
+        )
+        args._debug_dynamic_crash_site = extract_first_dynamic_library_crash_site(
+            run_log,
+            args.link_flags,
+            expected_library=args.dynamic_crash_site_library,
+        )
+        args._debug_dynamic_crash_site_found = (
+            args._debug_dynamic_crash_site is not None
+        )
+        if args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
+            args._debug_dynamic_crash_site_matched = bool(
+                args._debug_dynamic_crash_site is not None
+                and args._debug_dynamic_crash_site.offset.lower()
+                == args.dynamic_crash_site_offset.lower()
+            )
+        args._debug_first_stack_trace = extract_first_sanitizer_stack_trace(run_log)
+
+    if status != 77:
+        print(
+            f"Crash did not reproduce. Exit status: {status}\n"
+            f"Execution log:\n{run_log}"
+        )
+        return EvidenceResult.MISMATCH, None
+
+    # First: crash pattern must match unless a caller intentionally uses
+    # this run only for symbolized stack/depth validation.
+    if not args.skip_crash_pattern and re.search(args.crash_pattern, run_log) is None:
+        print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
+        return EvidenceResult.MISMATCH, None
+
+    # A known mismatch takes precedence over missing evidence in another check.
+    missing = None
+    if not use_symbolize and args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
+        result = _classify_dynamic_crash_site(
+            run_log, args.dynamic_crash_site_library, args.dynamic_crash_site_offset,
+        )
+        if result is EvidenceResult.MISMATCH:
+            return result, None
+        if result is EvidenceResult.MISSING_EVIDENCE:
+            missing = "dynamic crash-site evidence (symbolize=0)"
+
+    location_pattern = args.crash_location_pattern
+    if not location_pattern and args.crash_location_file and os.path.exists(args.crash_location_file):
+        location_pattern = Path(args.crash_location_file).read_text(encoding="utf-8").strip()
+    if location_pattern:
+        result = _classify_crash_location_pattern(run_log, location_pattern, args.source)
+        if result is EvidenceResult.MISMATCH:
+            return result, None
+        if result is EvidenceResult.MISSING_EVIDENCE:
+            missing = f"symbolized crash-location evidence (symbolize={int(use_symbolize)})"
+
+    # Stack-depth handling depends on the active oracle.  When a crash-site
+    # anchor is available (symbolized crash location or fast-path DSO+offset),
+    # depth is advisory.  In fast non-symbolized mode without a dynamic
+    # crash-site anchor, depth becomes part of the hard equivalence check.
+    if args.stack_depth is not None:
+        candidate_stack_depth = count_first_stack_trace_frames(run_log)
+        if candidate_stack_depth != args.stack_depth:
+            if _stack_depth_is_advisory(args, use_symbolize=use_symbolize):
+                print(
+                    "[!] Warning: stack depth did not match. "
+                    f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
+                    "Treating as advisory for the active crash-site oracle."
+                )
+            else:
+                print(
+                    "[-] Stack depth did not match. "
+                    f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
+                    "No dynamic crash-site anchor is available in non-symbolized mode."
+                )
+                return EvidenceResult.MISMATCH, None
+        else:
+            print("[+] Stack depth validation passed.")
+
+    if missing is not None:
+        return EvidenceResult.MISSING_EVIDENCE, missing
+
+    # Advisory full symbolized stack-trace check.  The recorded trace can
+    # differ run-to-run for multithreaded targets (different worker thread
+    # reaches the crash first, different intermediate frames), so a regex
+    # mismatch is logged as a warning rather than rejecting the candidate.
+    # The crash-location anchor above is the authoritative gate.
+    if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
+        if not _check_stack_trace(run_log, args.stack_trace_file, args.source):
+            print(
+                "[!] Warning: full symbolized stack trace did not match the "
+                "stored pattern. Treating as advisory; crash-location anchor "
+                "already validated."
+            )
+
+    return EvidenceResult.MATCH, None
 
 
 @termination_guard()
@@ -1103,136 +1230,49 @@ def main() -> int:
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
 
-        execution_started_ns = (
-            time.perf_counter_ns() if args.profile_file else None
-        )
-        try:
-            if args.amortized_runner_socket:
-                try:
-                    status, run_log, exec_time_ms = run_with_amortized_runner_maybe_fallback_timed(
-                        args,
-                        output_path,
-                        object_path,
-                    )
-                    args._last_exec_time_ms = exec_time_ms
-                except Exception as exc:
-                    print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
-                    return _finalize_result(args, 1)
-                if status is None:
-                    return _finalize_result(args, -1)
-            else:
-                exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
-                status, run_log, exec_time_ms = run_standalone_candidate(
-                    args,
-                    exec_cmd,
-                    env=env,
-                )
-                args._last_exec_time_ms = exec_time_ms
-        finally:
-            if execution_started_ns is not None:
-                _add_profile_duration(args, "_profile_execute_ns", execution_started_ns)
-
-        if args.profile_file:
-            args._profile_oracle_started_ns = time.perf_counter_ns()
-
-        if args.debug_log:
-            args._debug_execution_return_code = status
-            args._debug_crash_pattern_matched = (
-                None
-                if args.skip_crash_pattern
-                else re.search(args.crash_pattern, run_log) is not None
-            )
-            args._debug_dynamic_crash_site = extract_first_dynamic_library_crash_site(
-                run_log,
-                args.link_flags,
-                expected_library=args.dynamic_crash_site_library,
-            )
-            args._debug_dynamic_crash_site_found = (
-                args._debug_dynamic_crash_site is not None
-            )
-            if args.dynamic_crash_site_library and args.dynamic_crash_site_offset:
-                args._debug_dynamic_crash_site_matched = bool(
-                    args._debug_dynamic_crash_site is not None
-                    and args._debug_dynamic_crash_site.offset.lower()
-                    == args.dynamic_crash_site_offset.lower()
-                )
-            args._debug_first_stack_trace = extract_first_sanitizer_stack_trace(run_log)
-
-        if status != 77:
-            print(
-                f"Crash did not reproduce. Exit status: {status}\n"
-                f"Execution log:\n{run_log}"
-            )
-            return _finalize_result(args, 1)
-
-        # First: crash pattern must match unless a caller intentionally uses
-        # this run only for symbolized stack/depth validation.
-        if not args.skip_crash_pattern and re.search(args.crash_pattern, run_log) is None:
-            print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
-            return _finalize_result(args, 1)
-
-        # Location-identifying anchor checks run first: these are the gates
-        # that can reject a candidate.  Stack depth is advisory below, because
-        # it can fluctuate across runs for multithreaded targets (e.g. libaom
-        # row-MT) even when the crash site itself is stable.
-        if (
-            not use_symbolize
-            and args.dynamic_crash_site_library
-            and args.dynamic_crash_site_offset
-        ):
-            if not _check_dynamic_crash_site(
-                run_log,
-                args.dynamic_crash_site_library,
-                args.dynamic_crash_site_offset,
-            ):
-                return _finalize_result(args, 1)
-
-        if args.crash_location_pattern:
-            if not _check_crash_location_pattern(
-                run_log,
-                args.crash_location_pattern,
-                args.source,
-            ):
-                return _finalize_result(args, 1)
-        elif args.crash_location_file and os.path.exists(args.crash_location_file):
-            if not _check_crash_location(run_log, args.crash_location_file, args.source):
-                return _finalize_result(args, 1)
-
-        # Stack-depth handling depends on the active oracle.  When a crash-site
-        # anchor is available (symbolized crash location or fast-path DSO+offset),
-        # depth is advisory.  In fast non-symbolized mode without a dynamic
-        # crash-site anchor, depth becomes part of the hard equivalence check.
-        if args.stack_depth is not None:
-            candidate_stack_depth = count_first_stack_trace_frames(run_log)
-            if candidate_stack_depth != args.stack_depth:
-                if _stack_depth_is_advisory(args, use_symbolize=use_symbolize):
-                    print(
-                        "[!] Warning: stack depth did not match. "
-                        f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
-                        "Treating as advisory; crash site/location anchor already validated."
-                    )
+        for attempt in range(1, CANDIDATE_EVIDENCE_ATTEMPTS + 1):
+            execution_started_ns = time.perf_counter_ns() if args.profile_file else None
+            execution_failure = None
+            try:
+                if args.amortized_runner_socket:
+                    try:
+                        status, run_log, exec_time_ms = run_with_amortized_runner_maybe_fallback_timed(
+                            args, output_path, object_path,
+                        )
+                        args._last_exec_time_ms = exec_time_ms
+                        if status is None:
+                            execution_failure = -1
+                    except Exception as exc:
+                        print(f"Amortized-link execution failed: {exc}", file=sys.stderr)
+                        execution_failure = 1
                 else:
-                    print(
-                        "[-] Stack depth did not match. "
-                        f"Expected {args.stack_depth}, got {candidate_stack_depth}. "
-                        "No dynamic crash-site anchor is available in non-symbolized mode."
+                    exec_cmd = [output_path, args.crash_input] if args.crash_input else [output_path]
+                    status, run_log, exec_time_ms = run_standalone_candidate(
+                        args, exec_cmd, env=env,
                     )
-                    return _finalize_result(args, 1)
-            else:
-                print("[+] Stack depth validation passed.")
+                    # Keep calibration a single execution measurement, not a retry sum.
+                    args._last_exec_time_ms = exec_time_ms
+            finally:
+                if execution_started_ns is not None:
+                    _add_profile_duration(args, "_profile_execute_ns", execution_started_ns)
+            if execution_failure is not None:
+                return _finalize_result(args, execution_failure)
 
-        # Advisory full symbolized stack-trace check.  The recorded trace can
-        # differ run-to-run for multithreaded targets (different worker thread
-        # reaches the crash first, different intermediate frames), so a regex
-        # mismatch is logged as a warning rather than rejecting the candidate.
-        # The crash-location anchor above is the authoritative gate.
-        if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
-            if not _check_stack_trace(run_log, args.stack_trace_file, args.source):
-                print(
-                    "[!] Warning: full symbolized stack trace did not match the "
-                    "stored pattern. Treating as advisory; crash-location anchor "
-                    "already validated."
-                )
+            if args.profile_file:
+                args._profile_oracle_started_ns = time.perf_counter_ns()
+            result, missing = _evaluate_candidate_crash(args, status, run_log)
+            if result is EvidenceResult.MATCH:
+                break
+            if result is EvidenceResult.MISMATCH:
+                return _finalize_result(args, 1)
+            if not retry_missing_evidence(
+                missing, attempt, CANDIDATE_EVIDENCE_ATTEMPTS, context="candidate",
+            ):
+                print(f"[-] Rejecting candidate without required evidence. Execution log:\n{run_log}")
+                return _finalize_result(args, 1)
+            if args._profile_oracle_started_ns is not None:
+                _add_profile_duration(args, "_profile_oracle_ns", args._profile_oracle_started_ns)
+                args._profile_oracle_started_ns = None
 
         _update_last_interesting_file(args.source, args.last_interesting_file)
         print("execution log: ")

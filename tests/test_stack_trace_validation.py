@@ -799,13 +799,15 @@ class TestStackTraceStateManagement(unittest.TestCase):
             Path(trace_file).write_text("stale-pattern", encoding="utf-8")
             dynamic_file = get_dynamic_crash_site_file()
             Path(dynamic_file).write_text("stale-dynamic-site", encoding="utf-8")
-            mock_run.side_effect = [
-                type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
-                type("Proc", (), {"returncode": 77, "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n", "stderr": ""})(),
-            ]
+            mock_run.return_value = type("Proc", (), {
+                "returncode": 77,
+                "stdout": "SUMMARY: AddressSanitizer: heap-buffer-overflow\n",
+                "stderr": "",
+            })()
 
             pattern = extract_crash_pattern_from_output(None, harness_path="harness.cpp")
 
+            self.assertEqual(mock_run.call_count, 6)  # One fast run, five optional symbolized attempts.
             self.assertEqual(pattern, "SUMMARY: AddressSanitizer: heap-buffer-overflow")
             self.assertFalse(os.path.exists(trace_file))
             self.assertFalse(os.path.exists(dynamic_file))
