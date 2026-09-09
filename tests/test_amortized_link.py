@@ -1,11 +1,146 @@
 import subprocess
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from harnessreducer import reducer_runner
+
+
+def _compile_shared_alias_fixture(directory: Path, name: str, *, soname: bool = False) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    source = directory / f"{name}.cpp"
+    library = directory / f"lib{name}.so.7.2"
+    source.write_text(f'extern "C" int {name}_value() {{ return 42; }}\n', encoding="utf-8")
+    flags = [f"-Wl,-soname,lib{name}.so.7"] if soname else []
+    subprocess.run(
+        ["clang++", "-shared", "-fPIC", str(source), *flags, "-o", str(library)],
+        check=True, capture_output=True, timeout=30,
+    )
+    return library
+
+
+@pytest.mark.parametrize("soname", [False, True])
+@pytest.mark.parametrize("spelling", ["named", "exact", "absolute", "relative", "bare", "cross-directory", "script"])
+def test_reference_filter_preserves_verified_aliases_and_discards_unused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, soname: bool, spelling: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = _compile_shared_alias_fixture(tmp_path / "real", "target", soname=soname)
+    unused = _compile_shared_alias_fixture(tmp_path / "real", "unused", soname=soname)
+    link_dir = tmp_path / "real"
+    if spelling in {"cross-directory", "script"}:
+        link_dir = tmp_path / "aliases"
+        link_dir.mkdir()
+    if spelling == "bare":
+        link_dir = tmp_path
+    alias = link_dir / "libtarget.so"
+    alias.symlink_to(target)
+    (link_dir / "libunused.so").symlink_to(unused)
+    flags = [f"-L{link_dir}", "-ltarget", "-lunused"]
+    if spelling == "exact":
+        flags = [f"-L{link_dir}", "-l:libtarget.so", "-l:libunused.so"]
+    elif spelling == "absolute":
+        flags = [str(alias), str(link_dir / "libunused.so")]
+    elif spelling == "relative":
+        flags = [str(alias.relative_to(tmp_path)), str((link_dir / "libunused.so").relative_to(tmp_path))]
+    elif spelling == "bare":
+        flags = ["libtarget.so", "libunused.so"]
+    elif spelling == "script":
+        # A nested script refers to the ELF through a different symlink; script
+        # names themselves must never become aliases for that ELF.
+        nested = link_dir / "libnested.so"
+        nested.write_text(f"INPUT ( {alias} )\n", encoding="utf-8")
+        script = link_dir / "libscript.so"
+        script.write_text(f"GROUP ( {nested} )\n", encoding="utf-8")
+        flags = [f"-L{link_dir}", "-lscript", "-lunused"]
+    reference = tmp_path / "reference"
+    subprocess.run(
+        ["clang++", "-x", "c++", "-", "-x", "none", "-Wl,--as-needed", *flags, "-o", str(reference)],
+        input='extern "C" int target_value(); int main() { return target_value(); }\n',
+        text=True, check=True, capture_output=True, timeout=30,
+    )
+    # Exercise the normalization used by run_treereducer before classification.
+    normalized = reducer_runner.absolutize_link_flags(" ".join(flags))
+    inputs = reducer_runner.resolve_amortized_link_inputs(normalized)
+    assert inputs.shared_libraries == (str(target), str(unused))
+    filtered = reducer_runner.filter_amortized_shared_libraries_for_reference(inputs, reference)
+    assert filtered.shared_libraries == (str(target),)
+    assert tuple(item.load_path for item in filtered.shared_library_inputs) == (str(target),)
+    aliases = filtered.shared_library_inputs[0].link_aliases
+    assert str(alias) in aliases
+    if spelling == "script":
+        assert str(script) not in aliases
+        assert str(nested) not in aliases
+    if soname:
+        # Prove these cases still work entirely through the old matching rules.
+        legacy = replace(inputs, shared_library_inputs=())
+        assert reducer_runner.filter_amortized_shared_libraries_for_reference(legacy, reference).shared_libraries == (str(target),)
+
+
+def test_reference_filter_does_not_confuse_aliases_in_different_directories(
+    tmp_path: Path,
+) -> None:
+    first = _compile_shared_alias_fixture(tmp_path / "a", "first")
+    second = _compile_shared_alias_fixture(tmp_path / "b", "second")
+    similar = _compile_shared_alias_fixture(tmp_path / "c", "similar")
+    first_alias = first.parent / "libfoo.so"
+    second_alias = second.parent / "libfoo.so"
+    similar_alias = similar.parent / "libfoobar.so"
+    for alias, target in ((first_alias, first), (second_alias, second), (similar_alias, similar)):
+        alias.symlink_to(target)
+    for first_flags in ([str(first_alias)], [f"-L{first.parent}", "-lfoo"]):
+        flags = [*first_flags, str(second_alias), str(similar_alias)]
+        reference = tmp_path / "reference"
+        subprocess.run(
+            ["clang++", "-x", "c++", "-", "-x", "none", "-Wl,--as-needed", *flags, "-o", str(reference)],
+            input='extern "C" int first_value(); int main() { return first_value(); }\n',
+            text=True, check=True, capture_output=True, timeout=30,
+        )
+        inputs = reducer_runner.resolve_amortized_link_inputs(" ".join(flags))
+        assert reducer_runner.filter_amortized_shared_libraries_for_reference(inputs, reference).shared_libraries == (str(first),)
+
+
+def test_shared_aliases_merge_without_changing_library_order(tmp_path: Path) -> None:
+    library = _compile_shared_alias_fixture(tmp_path, "target")
+    (tmp_path / "libtarget.so").symlink_to(library)
+    (tmp_path / "libalias.so").symlink_to(library)
+    inputs = reducer_runner.resolve_amortized_link_inputs(f"-L{tmp_path} -ltarget -lalias -ltarget")
+    assert inputs.shared_libraries == (str(library),)
+    assert len(inputs.shared_library_inputs) == 1
+    aliases = inputs.shared_library_inputs[0].link_aliases
+    assert "libtarget.so" in aliases and "libalias.so" in aliases
+    assert len(aliases) == len(set(aliases))
+
+
+@pytest.mark.parametrize("soname,metadata", [("libtarget.so.1", True), (None, False)])
+def test_alias_fallback_respects_soname_and_legacy_inputs(
+    monkeypatch: pytest.MonkeyPatch, soname: str | None, metadata: bool,
+) -> None:
+    library = "/tmp/libtarget.so.9"
+    identities = (reducer_runner.SharedLibraryInput(library, ("libtarget.so",)),) if metadata else ()
+    inputs = reducer_runner.AmortizedLinkInputs((library,), (), (), shared_library_inputs=identities)
+    monkeypatch.setattr(
+        reducer_runner, "_read_elf_dynamic_metadata",
+        lambda path: (("libtarget.so",), None) if str(path) == "reference" else ((), soname),
+    )
+    assert reducer_runner.filter_amortized_shared_libraries_for_reference(inputs, "reference").shared_libraries == ()
+
+
+def test_ambiguous_alias_metadata_is_not_guessed(monkeypatch: pytest.MonkeyPatch) -> None:
+    libraries = ("/tmp/first.so.1", "/tmp/second.so.2")
+    inputs = reducer_runner.AmortizedLinkInputs(
+        libraries, (), (), shared_library_inputs=tuple(
+            reducer_runner.SharedLibraryInput(library, ("libalias.so",)) for library in libraries
+        ),
+    )
+    monkeypatch.setattr(
+        reducer_runner, "_read_elf_dynamic_metadata",
+        lambda path: (("libalias.so",), None) if str(path) == "reference" else ((), None),
+    )
+    assert reducer_runner.filter_amortized_shared_libraries_for_reference(inputs, "reference").shared_libraries == ()
 
 
 def _compile_static_archive(
@@ -360,16 +495,17 @@ def test_absolutize_link_flags_preserves_libraries_and_resolves_paths(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     normalized = reducer_runner.absolutize_link_flags(
-        "-Lrelative/lib -laom relative/lib/libextra.so -lm"
+        "-Lrelative/lib -laom relative/lib/libextra.so -lm -l:libnamed.so -l :libarchive.a"
     )
     assert normalized == (
         f"-L{tmp_path / 'relative/lib'} -laom "
-        f"{tmp_path / 'relative/lib/libextra.so'} -lm"
+        f"{tmp_path / 'relative/lib/libextra.so'} -lm -l:libnamed.so -l :libarchive.a"
     )
 
 
+@pytest.mark.parametrize("link_through_alias", [False, True])
 def test_amortized_runner_executes_candidate_against_shared_target(
-    tmp_path: Path,
+    tmp_path: Path, link_through_alias: bool,
 ) -> None:
     reducer_runner.configure_work_dir(str(tmp_path / "work"))
     target_source = tmp_path / "target.cpp"
@@ -421,12 +557,29 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *, size_t) {
         f"{target_library} -lm"
     ) == (str(target_library.resolve()),)
 
+    link_flags = str(target_library)
+    reference_executable = None
+    if link_through_alias:
+        versioned = target_library.with_name("libtarget_asan.so.7")
+        target_library.rename(versioned)
+        target_library.symlink_to(versioned)
+        link_flags = f"-L{tmp_path} -ltarget_asan"
+        reference_executable = tmp_path / "reference"
+        subprocess.run(
+            ["clang++", "-x", "c++", "-", "-fsanitize=address,undefined",
+             f"-L{tmp_path}", "-ltarget_asan", "-o", str(reference_executable)],
+            input='extern "C" void target_crash(); int main() { target_crash(); }\n',
+            text=True, check=True, capture_output=True, timeout=30,
+        )
+
     with reducer_runner.start_amortized_runner(
-        str(target_library),
+        link_flags,
         None,
         str(trace_path),
         symbolize=False,
+        reference_executable=reference_executable,
     ) as runner:
+        assert runner.shared_libraries == (str(target_library.resolve()),)
         split_tester = subprocess.run(
             [
                 sys.executable,

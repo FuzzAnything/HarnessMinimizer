@@ -154,11 +154,20 @@ class AmortizedRunner:
 
 
 @dataclass(frozen=True)
+class SharedLibraryInput:
+    """Canonical ELF and verified link-time spellings, used only during setup."""
+
+    load_path: str
+    link_aliases: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AmortizedLinkInputs:
     shared_libraries: tuple[str, ...]
     static_libraries: tuple[str, ...]
     runner_link_flags: tuple[str, ...]
     plugin_link_flags: tuple[str, ...] = ()
+    shared_library_inputs: tuple[SharedLibraryInput, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -398,13 +407,21 @@ def absolutize_link_flags(link_flags: str | None) -> str | None:
             )
             index += 2
             continue
+        if token == "-l" and index + 1 < len(tokens):
+            normalized.extend([token, tokens[index + 1]])
+            index += 2
+            continue
         if token.startswith("-L") and len(token) > 2:
             normalized.append(
                 "-L" + str(Path(token[2:]).expanduser().resolve())
             )
-        elif token.endswith((".a", ".o", ".lo")) or _is_shared_library_path(
-            Path(token)
-        ):
+        elif token.startswith("-l"):
+            normalized.append(token)
+        elif _is_shared_library_path(Path(token)):
+            # Keep the link-time alias: without SONAME, the linker may record
+            # this path in DT_NEEDED. Classification resolves the ELF separately.
+            normalized.append(str(Path(token).expanduser().absolute()))
+        elif token.endswith((".a", ".o", ".lo")):
             normalized.append(str(Path(token).expanduser().resolve()))
         else:
             normalized.append(token)
@@ -432,6 +449,7 @@ def _resolve_linker_script_shared_library(
     path: Path,
     *,
     seen: set[Path] | None = None,
+    link_aliases: list[str] | None = None,
 ) -> Path | None:
     candidate = path.expanduser().resolve()
     if seen is None:
@@ -448,22 +466,29 @@ def _resolve_linker_script_shared_library(
         referenced = Path(token)
         if not referenced.is_absolute():
             referenced = candidate.parent / referenced
-        referenced = referenced.expanduser().resolve()
+        referenced_alias = referenced.expanduser()
+        referenced = referenced_alias.resolve()
         if not referenced.exists():
             continue
         if _has_elf_magic(referenced):
+            if link_aliases is not None:
+                link_aliases.extend((token, str(referenced_alias.absolute())))
             return referenced
-        nested = _resolve_linker_script_shared_library(referenced, seen=seen)
+        nested = _resolve_linker_script_shared_library(
+            referenced, seen=seen, link_aliases=link_aliases,
+        )
         if nested is not None:
             return nested
     return None
 
 
-def _resolve_loadable_shared_library(path: Path) -> Path | None:
+def _resolve_loadable_shared_library(
+    path: Path, *, link_aliases: list[str] | None = None,
+) -> Path | None:
     candidate = path.expanduser().resolve()
     if _has_elf_magic(candidate):
         return candidate
-    return _resolve_linker_script_shared_library(candidate)
+    return _resolve_linker_script_shared_library(candidate, link_aliases=link_aliases)
 
 
 def _dedupe_preserving_order(values: list[str]) -> tuple[str, ...]:
@@ -873,6 +898,7 @@ def resolve_amortized_link_inputs(
             library_dirs.append(Path(token[2:]).expanduser().resolve())
 
     shared_libraries: list[str] = []
+    shared_aliases: dict[str, list[str]] = {}
     static_libraries: list[str] = []
     runner_link_flags: list[str] = []
 
@@ -889,7 +915,15 @@ def resolve_amortized_link_inputs(
                 "--amortize-link received an unsupported shared-library input: "
                 f"{candidate}"
             )
-        resolved = _resolve_loadable_shared_library(candidate)
+        aliases: list[str] = []
+        resolved = _resolve_loadable_shared_library(candidate, link_aliases=aliases)
+        if resolved == candidate:
+            # The original path resolved to this ELF, so it is a verified alias.
+            # A -l input can become a bare DT_NEEDED name; an explicit path must
+            # retain its directory so same-basename libraries cannot cross-match.
+            aliases.extend((str(path), str(path.expanduser().absolute())))
+            if fallback_flags is not None:
+                aliases.append(path.name)
         if resolved is not None and resolved != candidate:
             print(
                 "[+] Resolved shared-library linker script for amortized-link: "
@@ -914,6 +948,10 @@ def resolve_amortized_link_inputs(
         value = str(candidate)
         if value not in shared_libraries:
             shared_libraries.append(value)
+        recorded = shared_aliases.setdefault(value, [])
+        for alias in aliases:
+            if alias not in recorded:
+                recorded.append(alias)
 
     def add_static_library(path: Path) -> None:
         candidate = path.expanduser().resolve()
@@ -1036,6 +1074,10 @@ def resolve_amortized_link_inputs(
         static_libraries=tuple(static_libraries),
         runner_link_flags=tuple(runner_link_flags),
         plugin_link_flags=plugin_link_flags,
+        shared_library_inputs=tuple(
+            SharedLibraryInput(library, tuple(shared_aliases[library]))
+            for library in shared_libraries
+        ),
     )
 
 
@@ -1101,6 +1143,9 @@ def filter_amortized_shared_libraries_for_reference(
     executable is the authoritative record of which direct dynamic inputs the
     linker selected.
 
+    A missing-SONAME input may be recorded under a verified link alias rather
+    than its canonical filename. Such aliases never override SONAME matching.
+
     Static archives are deliberately left unchanged.  Their member selection
     is handled separately by the static-root planning path.
     """
@@ -1111,6 +1156,7 @@ def filter_amortized_shared_libraries_for_reference(
     needed_names = set(needed)
     needed_basenames = {Path(name).name for name in needed}
     retained: list[str] = []
+    needed_alias_owners: dict[str, set[str]] | None = None
     for library in link_inputs.shared_libraries:
         library_path = Path(library)
         _, soname = _read_elf_dynamic_metadata(library_path)
@@ -1121,12 +1167,43 @@ def filter_amortized_shared_libraries_for_reference(
             or (soname is not None and soname in needed_names)
         ):
             retained.append(library)
+        elif soname is None and link_inputs.shared_library_inputs:
+            # Only unmatched, missing-SONAME inputs need the alias fallback.
+            # Keep exact link identities, not guessed basenames/version prefixes.
+            if needed_alias_owners is None:
+                alias_owners: dict[str, set[str]] = {}
+                for shared in link_inputs.shared_library_inputs:
+                    for alias in shared.link_aliases:
+                        alias_owners.setdefault(alias, set()).add(shared.load_path)
+                needed_alias_owners = {}
+                for name in needed:
+                    owners = alias_owners.get(name)
+                    if owners is None and not Path(name).is_absolute():
+                        # The reference was linked before relative input paths
+                        # were made absolute for treereduce's changed cwd.
+                        owners = alias_owners.get(str(Path(name).absolute()))
+                    if owners is not None:
+                        needed_alias_owners[name] = owners
+            matched_alias = next(
+                (name for name in needed if needed_alias_owners.get(name) == {library}),
+                None,
+            )
+            if matched_alias is not None:
+                retained.append(library)
+                print(
+                    "[+] Retained shared library without DT_SONAME via verified link alias: "
+                    f"{matched_alias} -> {library}"
+                )
 
     return AmortizedLinkInputs(
         shared_libraries=tuple(retained),
         static_libraries=link_inputs.static_libraries,
         runner_link_flags=link_inputs.runner_link_flags,
         plugin_link_flags=link_inputs.plugin_link_flags,
+        shared_library_inputs=tuple(
+            shared for shared in link_inputs.shared_library_inputs
+            if shared.load_path in retained
+        ),
     )
 
 
