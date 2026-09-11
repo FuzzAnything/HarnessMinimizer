@@ -415,12 +415,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         default=None,
-        help="Output TXT path. Default: <results-dir>/performance_tables.txt.",
+        help="Output TXT path. Default: <results-dir>/performance_tables_<dir>.txt.",
     )
     parser.add_argument(
         "--csv-output",
         default=None,
-        help="Output CSV path. Default: <results-dir>/performance_comparison.csv.",
+        help="Output CSV path. Default: <results-dir>/performance_comparison_<dir>.csv.",
     )
     return parser
 
@@ -447,13 +447,13 @@ def main() -> int:
     output_path = (
         Path(args.output).expanduser().resolve()
         if args.output
-        else results_dir / "performance_tables.txt"
+        else results_dir / f"performance_tables_{bench_dir.name}.txt"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     csv_output_path = (
         Path(args.csv_output).expanduser().resolve()
         if args.csv_output
-        else results_dir / "performance_comparison.csv"
+        else results_dir / f"performance_comparison_{bench_dir.name}.csv"
     )
 
     lines = [
