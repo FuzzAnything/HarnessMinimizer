@@ -383,15 +383,20 @@ class TestReducerRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
             trace_path = Path(tmpdir) / "fdp_trace.log"
+            wide_trace_path = Path(reducer_runner.fdp_wide_trace_path(trace_path))
             trace_path.write_text("stale trace\n", encoding="utf-8")
+            wide_trace_path.write_text("stale wide trace\n", encoding="utf-8")
 
             def write_fresh_trace(*args, **kwargs):
                 self.assertFalse(trace_path.exists())
+                self.assertFalse(wide_trace_path.exists())
                 self.assertEqual(
                     kwargs["env"]["LD_LIBRARY_PATH"].split(os.pathsep)[0],
                     "/tmp/shared",
                 )
+                self.assertEqual(kwargs["env"]["FDP_WIDE_TRACE_PATH"], str(wide_trace_path))
                 trace_path.write_text("S 100000 1\n", encoding="utf-8")
+                wide_trace_path.write_text("V 100001 U 16 1 7\n", encoding="utf-8")
                 return _Proc(returncode=77)
 
             mock_run_command.side_effect = write_fresh_trace
@@ -404,6 +409,10 @@ class TestReducerRunner(unittest.TestCase):
 
             self.assertEqual(result, str(trace_path))
             self.assertEqual(trace_path.read_text(encoding="utf-8"), "S 100000 1\n")
+            self.assertEqual(
+                wide_trace_path.read_text(encoding="utf-8"),
+                "V 100001 U 16 1 7\n",
+            )
 
     @patch("harnessreducer.reducer_runner.validate_crash_pattern_and_stack_trace")
     @patch("harnessreducer.reducer_runner.collect_harness_coverage")

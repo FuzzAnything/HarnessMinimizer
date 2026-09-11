@@ -43,6 +43,7 @@ from harnessreducer.reducer_runner import (
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
     extract_symbolized_crash_location,
+    fdp_wide_trace_path,
     runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
@@ -1229,6 +1230,7 @@ def main() -> int:
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1:print_stacktrace=1"
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace
+            env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_path(args.fdp_trace)
 
         for attempt in range(1, CANDIDATE_EVIDENCE_ATTEMPTS + 1):
             execution_started_ns = time.perf_counter_ns() if args.profile_file else None

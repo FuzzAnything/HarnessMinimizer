@@ -106,6 +106,13 @@ class ValuesHeaderEntry:
 
 
 @dataclass(frozen=True)
+class WideVectorTrace:
+    is_signed: bool
+    value_bits: int
+    values: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class ScalarResultType:
     """Type of the replacement expression, independent of trace storage."""
 
@@ -330,7 +337,12 @@ def inject_ids(src: str, start_id: int, marker: str) -> tuple[str, int]:
 
 def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
     streams: dict[int, Deque[tuple[str, Any]]] = defaultdict(deque)
-    lines = trace_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    wide_trace_path = Path(f"{trace_path}.wide")
+    lines: list[str] = []
+    if trace_path.exists():
+        lines = trace_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    elif not wide_trace_path.exists():
+        raise FileNotFoundError(trace_path)
 
     for line in lines:
         parts = line.strip().split()
@@ -373,6 +385,38 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
             for i in range(count):
                 bytes_list.append(int(parts[3 + i]) if 3 + i < len(parts) else 0)
             streams[key].append(("B", bytes_list))
+
+    if not wide_trace_path.exists():
+        return streams
+
+    for line in wide_trace_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        parts = line.strip().split()
+        if not parts or parts[0] != "V":
+            continue
+        try:
+            key = int(parts[1], 0)
+            signedness = parts[2]
+            value_bits = int(parts[3], 0)
+            count = int(parts[4], 0)
+        except (ValueError, IndexError):
+            continue
+        if signedness not in {"S", "U"}:
+            continue
+
+        values: list[int] = []
+        try:
+            for i in range(count):
+                values.append(int(parts[5 + i], 0))
+        except (ValueError, IndexError):
+            continue
+        streams[key].append((
+            "V",
+            WideVectorTrace(
+                is_signed=signedness == "S",
+                value_bits=value_bits,
+                values=tuple(values),
+            ),
+        ))
 
     return streams
 
@@ -434,13 +478,44 @@ std::vector<T> copy_bytes(const std::vector<unsigned char>& data) {
 } // namespace harnessreducer_inline_detail"""
 
 
+_VALUE_COPY_HELPER = """namespace harnessreducer_inline_detail {
+template <typename T, typename Source>
+std::vector<T> copy_values(const Source *data, size_t size) {
+    std::vector<T> result;
+    result.reserve(size);
+    for (size_t i = 0; i < size; ++i)
+        result.push_back(static_cast<T>(data[i]));
+    return result;
+}
+template <typename T, typename Source>
+std::vector<T> copy_values(const std::vector<Source>& data) {
+    return copy_values<T>(data.data(), data.size());
+}
+} // namespace harnessreducer_inline_detail"""
+
+
 def _vector_type_includes(element_type: str) -> tuple[str, ...]:
     normalized = _normalize_type_text(element_type)
-    if normalized in {"uint8_t", "int8_t"}:
+    fixed_width_names = {
+        "uint8_t",
+        "int8_t",
+        "uint16_t",
+        "int16_t",
+        "uint32_t",
+        "int32_t",
+        "uint64_t",
+        "int64_t",
+    }
+    if normalized in fixed_width_names:
         return ("<stdint.h>",)
-    if "std::uint8_t" in normalized or "std::int8_t" in normalized:
+    if any(
+        f"std::{name}" in normalized
+        for name in fixed_width_names
+    ):
         return ("<cstdint>",)
     if "std::byte" in normalized:
+        return ("<cstddef>",)
+    if "size_t" in normalized:
         return ("<cstddef>",)
     return ()
 
@@ -464,6 +539,17 @@ def _cpp_vector_literal(bytes_list: list[int], element_type: str = "unsigned cha
         return f"{vector_type}{{}}"
     byte_text = ", ".join(_cpp_byte_literal_for_type(b, element_type) for b in bytes_list)
     return f"{vector_type}{{{byte_text}}}"
+
+
+def _cpp_wide_vector_literal(trace: WideVectorTrace, element_type: str) -> str:
+    vector_type = f"std::vector<{element_type}>"
+    if not trace.values:
+        return f"{vector_type}{{}}"
+    value_text = ", ".join(
+        f"static_cast<{element_type}>({_format_cpp_number(value)})"
+        for value in trace.values
+    )
+    return f"{vector_type}{{{value_text}}}"
 
 
 def _format_wrapped_items(items: list[str], per_line: int = _HEADER_BYTES_PER_LINE) -> str:
@@ -619,6 +705,8 @@ def _literal_for_single_record(
         element_type = _vector_element_type_for_call(call)
         if record_type == "B":
             return _cpp_vector_literal(value, element_type)
+        if record_type == "V" and isinstance(value, WideVectorTrace):
+            return _cpp_wide_vector_literal(value, element_type)
         return f"std::vector<{element_type}>{{}}"
     if method == "ConsumeData":
         size = f"static_cast<size_t>({len(value) if record_type == 'B' else 0})"
@@ -657,6 +745,23 @@ def _extract_record_values(records: list[tuple[str, Any]], expected_type: str) -
             return None
         values.append(value)
     return values
+
+
+def _extract_wide_vector_traces(records: list[tuple[str, Any]]) -> list[WideVectorTrace] | None:
+    traces: list[WideVectorTrace] = []
+    for record_type, value in records:
+        if record_type != "V" or not isinstance(value, WideVectorTrace):
+            return None
+        traces.append(value)
+    if not traces:
+        return None
+    first = traces[0]
+    if any(
+        trace.is_signed != first.is_signed or trace.value_bits != first.value_bits
+        for trace in traces
+    ):
+        return None
+    return traces
 
 
 def _make_bool_header_entry(key: int, method: str, values: list[Any]) -> ValuesHeaderEntry:
@@ -738,6 +843,40 @@ def _make_vector_header_entry(
     )
 
 
+def _wide_vector_storage_type(trace: WideVectorTrace) -> str:
+    return "long long" if trace.is_signed else "unsigned long long"
+
+
+def _cpp_wide_array_initializer(trace: WideVectorTrace) -> str:
+    items = [_format_cpp_number(value) for value in trace.values]
+    return _format_wrapped_items(items)
+
+
+def _make_wide_vector_header_entry(
+    key: int,
+    method: str,
+    traces: list[WideVectorTrace],
+) -> ValuesHeaderEntry:
+    values_name, index_name = _value_names(key)
+    storage_type = _wide_vector_storage_type(traces[0])
+    entries = [
+        f"    std::vector<{storage_type}>{_cpp_wide_array_initializer(trace)}"
+        for trace in traces
+    ]
+    declaration = (
+        f"static const std::vector<{storage_type}> {values_name}[] = {{\n"
+        + ",\n".join(entries)
+        + f"\n}};\nstatic size_t {index_name} = 0;"
+    )
+    return ValuesHeaderEntry(
+        key=key,
+        method=method,
+        declaration=declaration,
+        includes=("<vector>",),
+        helpers=(_VALUE_COPY_HELPER,),
+    )
+
+
 def _make_large_byte_header_entry(
     key: int,
     method: str,
@@ -758,6 +897,28 @@ def _make_large_byte_header_entry(
         helpers = (_BYTE_COPY_HELPER,)
     return ValuesHeaderEntry(
         key=key, method=method, declaration=declaration, includes=includes, helpers=helpers,
+    )
+
+
+def _make_large_wide_vector_header_entry(
+    key: int,
+    method: str,
+    trace: WideVectorTrace,
+) -> ValuesHeaderEntry:
+    values_name, size_name = _byte_buffer_names(key)
+    storage_type = _wide_vector_storage_type(trace)
+    declaration = (
+        f"static const {storage_type} {values_name}[] = "
+        f"{_cpp_wide_array_initializer(trace)};\n"
+        f"static const size_t {size_name} = "
+        f"sizeof({values_name}) / sizeof({values_name}[0]);"
+    )
+    return ValuesHeaderEntry(
+        key=key,
+        method=method,
+        declaration=declaration,
+        includes=("<vector>",),
+        helpers=(_VALUE_COPY_HELPER,),
     )
 
 
@@ -787,10 +948,28 @@ def _large_single_record_replacement_for_call(
 ) -> tuple[str, ValuesHeaderEntry] | None:
     if (
         call.method not in _BUFFER_METHODS
-        or record_type != "B"
-        or not isinstance(value, list)
-        or len(value) <= MAX_INLINE_BUFFER_BYTES
+        or record_type not in {"B", "V"}
     ):
+        return None
+
+    if record_type == "V":
+        if (
+            call.method not in _BYTES_METHODS
+            or not isinstance(value, WideVectorTrace)
+            or len(value.values) <= MAX_INLINE_BUFFER_BYTES
+        ):
+            return None
+        element_type = _vector_element_type_for_call(call)
+        values_name, size_name = _byte_buffer_names(matched_key)
+        replacement = (
+            f"harnessreducer_inline_detail::copy_values<{element_type}>"
+            f"({values_name}, {size_name})"
+        )
+        return replacement, _make_large_wide_vector_header_entry(
+            matched_key, call.method, value
+        )
+
+    if not isinstance(value, list) or len(value) <= MAX_INLINE_BUFFER_BYTES:
         return None
 
     if call.method in _STRING_METHODS:
@@ -845,10 +1024,15 @@ def _repeated_replacement_for_call(
         return f"std::string({indexed_value})", _make_string_header_entry(matched_key, call.method, byte_values)
 
     if call.method in _BYTES_METHODS:
+        element_type = _vector_element_type_for_call(call)
+        wide_values = _extract_wide_vector_traces(records)
+        if wide_values is not None:
+            replacement = f"harnessreducer_inline_detail::copy_values<{element_type}>({indexed_value})"
+            return replacement, _make_wide_vector_header_entry(matched_key, call.method, wide_values)
+
         byte_values = _extract_record_values(records, "B")
         if byte_values is None:
             return None
-        element_type = _vector_element_type_for_call(call)
         replacement = f"harnessreducer_inline_detail::copy_bytes<{element_type}>({indexed_value})"
         return replacement, _make_vector_header_entry(matched_key, call.method, byte_values)
 

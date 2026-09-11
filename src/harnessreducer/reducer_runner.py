@@ -99,6 +99,12 @@ SHARED_LIBRARY_FRAME_PATTERN = re.compile(
     r"\((?P<library>[^()\s]+?\.so(?:\.[^()+\s]+)?)\+"
     r"(?P<offset>0x[0-9a-fA-F]+)\)"
 )
+
+
+def fdp_wide_trace_path(fdp_trace_file: str | os.PathLike[str]) -> str:
+    return f"{fdp_trace_file}.wide"
+
+
 ELF_NEEDED_PATTERN = re.compile(
     r"\(NEEDED\)\s+Shared library: \[(?P<name>[^\]]+)\]"
 )
@@ -1547,8 +1553,10 @@ def start_amortized_runner(
     )
     if fdp_trace_file is not None:
         env["FDP_TRACE_PATH"] = fdp_trace_file
+        env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_path(fdp_trace_file)
     else:
         env.pop("FDP_TRACE_PATH", None)
+        env.pop("FDP_WIDE_TRACE_PATH", None)
     library_dirs = tuple(dict.fromkeys(str(Path(path).parent) for path in shared_libraries))
     if library_dirs:
         if symbolize:
@@ -3257,20 +3265,26 @@ def dump_fdp_trace(
     link_flags: str | None = None,
 ) -> str:
     fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
+    fdp_wide_trace_file = fdp_wide_trace_path(fdp_trace_file)
     # The dump runtime appends trace records, so remove any trace left by an
     # earlier run when a fixed work directory is reused.
-    try:
-        os.remove(fdp_trace_file)
-    except FileNotFoundError:
-        pass
+    for trace_file in (fdp_trace_file, fdp_wide_trace_file):
+        try:
+            os.remove(trace_file)
+        except FileNotFoundError:
+            pass
 
     env = runtime_library_env(link_flags)
     env["FDP_TRACE_PATH"] = fdp_trace_file
+    env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_file
 
     exec_cmd = [harness_bin, crash_input] if crash_input else [harness_bin]
     run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env, ignore_errors=True)
 
     if not os.path.exists(fdp_trace_file):
+        if os.path.exists(fdp_wide_trace_file):
+            Path(fdp_trace_file).touch()
+            return fdp_trace_file
         raise RuntimeError("FDP trace file was not created as expected.")
     return fdp_trace_file
 

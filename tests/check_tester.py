@@ -23,7 +23,11 @@ from harnessreducer.check_mode import (
     load_check_reference,
     record_check_statistics,
 )
-from harnessreducer.reducer_runner import extract_stack_trace, runtime_library_env
+from harnessreducer.reducer_runner import (
+    extract_stack_trace,
+    fdp_wide_trace_path,
+    runtime_library_env,
+)
 from harnessreducer.reducer_runner import extract_first_dynamic_library_crash_site
 
 _crash_tester_spec = importlib.util.spec_from_file_location(
@@ -54,6 +58,7 @@ def _execution_env(args: argparse.Namespace, *, symbolize: bool) -> dict[str, st
     )
     if args.fdp_trace:
         env["FDP_TRACE_PATH"] = args.fdp_trace
+        env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_path(args.fdp_trace)
     return env
 
 

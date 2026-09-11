@@ -88,8 +88,29 @@ inline const std::string &GetTracePath() {
   return path;
 }
 
+inline const std::string &GetWideTracePath() {
+  static const std::string path = [] {
+    const char *env = std::getenv("FDP_WIDE_TRACE_PATH");
+    if (env != nullptr && env[0] != '\0')
+      return std::string(env);
+    return GetTracePath() + ".wide";
+  }();
+  return path;
+}
+
+template <typename T>
+inline constexpr bool kUseWideIntegralVectorTrace =
+    std::is_integral_v<T> && sizeof(T) > 1 && sizeof(T) <= sizeof(uint64_t);
+
 #if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
                                    !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
+
+struct WideVectorRecord {
+  bool is_signed = false;
+  size_t value_bits = 0;
+  std::vector<int64_t> signed_values;
+  std::vector<uint64_t> unsigned_values;
+};
 
 class TraceStore {
 public:
@@ -135,6 +156,26 @@ public:
     out << "B " << line << " " << size;
     for (size_t i = 0; i < size; ++i)
       out << " " << static_cast<unsigned>(bytes[i]);
+    out << "\n";
+  }
+
+  template <typename T>
+  void DumpWideIntegralVector(int line, const T *values, size_t count) {
+    if (line == -1)
+      return;
+    std::lock_guard<std::mutex> lock(mu_);
+    std::ofstream out(GetWideTracePath(), std::ios::app);
+    if (!out)
+      return;
+    out << "V " << line << " " << (std::is_signed_v<T> ? "S" : "U") << " "
+        << (sizeof(T) * CHAR_BIT) << " " << count;
+    for (size_t i = 0; i < count; ++i) {
+      if constexpr (std::is_signed_v<T>) {
+        out << " " << static_cast<long long>(values[i]);
+      } else {
+        out << " " << static_cast<unsigned long long>(values[i]);
+      }
+    }
     out << "\n";
   }
 
@@ -194,6 +235,42 @@ public:
     return value;
   }
 
+  template <typename T> std::vector<T> ReplayWideIntegralVector(int line) {
+    LoadWideTraces();
+
+    auto it = wide_vector_streams_.find(line);
+    if (it == wide_vector_streams_.end() || it->second.empty())
+      abort();
+
+    WideVectorRecord value = std::move(it->second.front());
+    it->second.pop_front();
+
+    if (value.is_signed != std::is_signed_v<T> ||
+        value.value_bits != sizeof(T) * CHAR_BIT) {
+      abort();
+    }
+
+    std::vector<T> result;
+    if constexpr (std::is_signed_v<T>) {
+      result.reserve(value.signed_values.size());
+      for (int64_t entry : value.signed_values) {
+        if (entry < static_cast<int64_t>(std::numeric_limits<T>::lowest()) ||
+            entry > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+          abort();
+        }
+        result.push_back(static_cast<T>(entry));
+      }
+    } else {
+      result.reserve(value.unsigned_values.size());
+      for (uint64_t entry : value.unsigned_values) {
+        if (entry > static_cast<uint64_t>(std::numeric_limits<T>::max()))
+          abort();
+        result.push_back(static_cast<T>(entry));
+      }
+    }
+    return result;
+  }
+
 private:
   TraceStore() {
     if (kMode != Mode::kReplay)
@@ -247,10 +324,65 @@ private:
     }
   }
 
+  void LoadWideTraces() {
+    if (wide_traces_loaded_)
+      return;
+    wide_traces_loaded_ = true;
+    if (kMode != Mode::kReplay)
+      return;
+
+    std::ifstream in(GetWideTracePath());
+    if (!in)
+      return;
+
+    std::string line;
+    while (std::getline(in, line)) {
+      if (line.empty())
+        continue;
+      std::istringstream iss(line);
+      char tag = '\0';
+      int call_line = 0;
+      char signedness = '\0';
+      size_t value_bits = 0;
+      size_t count = 0;
+      iss >> tag >> call_line >> signedness >> value_bits >> count;
+      if (!iss || tag != 'V' || (signedness != 'S' && signedness != 'U'))
+        continue;
+
+      WideVectorRecord record;
+      record.is_signed = signedness == 'S';
+      record.value_bits = value_bits;
+      if (record.is_signed) {
+        record.signed_values.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+          int64_t entry = 0;
+          if (!(iss >> entry))
+            break;
+          record.signed_values.push_back(entry);
+        }
+        if (record.signed_values.size() != count)
+          continue;
+      } else {
+        record.unsigned_values.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+          uint64_t entry = 0;
+          if (!(iss >> entry))
+            break;
+          record.unsigned_values.push_back(entry);
+        }
+        if (record.unsigned_values.size() != count)
+          continue;
+      }
+      wide_vector_streams_[call_line].push_back(std::move(record));
+    }
+  }
+
   std::mutex mu_;
+  bool wide_traces_loaded_ = false;
   std::map<int, std::deque<long double>> scalar_streams_;
   std::map<int, std::deque<size_t>> remaining_streams_;
   std::map<int, std::deque<std::vector<uint8_t>>> bytes_streams_;
+  std::map<int, std::deque<WideVectorRecord>> wide_vector_streams_;
 };
 
 inline void InitializeReplayStore() {
@@ -270,6 +402,18 @@ inline void DumpBytes(int line, const uint8_t *bytes, size_t size) {
   TraceStore::Instance().DumpBytes(line, bytes, size);
 }
 
+template <typename T>
+inline void DumpVector(int line, const std::vector<T> &values) {
+  if constexpr (kUseWideIntegralVectorTrace<T>) {
+    TraceStore::Instance().DumpWideIntegralVector(line, values.data(),
+                                                  values.size());
+  } else {
+    TraceStore::Instance().DumpBytes(
+        line, reinterpret_cast<const uint8_t *>(values.data()),
+        values.size() * sizeof(T));
+  }
+}
+
 template <typename T> T ReplayScalar(int line, T fallback) {
   return TraceStore::Instance().ReplayScalar<T>(line, fallback);
 }
@@ -282,6 +426,17 @@ inline std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
   return TraceStore::Instance().ReplayBytes(line, wanted_size);
 }
 
+template <typename T>
+inline std::vector<T> ReplayVector(int line, size_t wanted_size) {
+  if constexpr (kUseWideIntegralVectorTrace<T>) {
+    (void)wanted_size;
+    return TraceStore::Instance().ReplayWideIntegralVector<T>(line);
+  } else {
+    auto bytes = ReplayBytes(line, wanted_size);
+    return std::vector<T>(bytes.begin(), bytes.end());
+  }
+}
+
 #elif defined(FDP_MIN_MODE_REPLAY) && defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME)
 
 inline void InitializeReplayStore() { EnsureReplayTraceLoaded(); }
@@ -291,6 +446,9 @@ inline void DumpScalar(int, long double) {}
 inline void DumpRemaining(int, size_t) {}
 
 inline void DumpBytes(int, const uint8_t *, size_t) {}
+
+template <typename T>
+inline void DumpVector(int, const std::vector<T> &) {}
 
 template <typename T> T ReplayScalar(int line, T fallback) {
   (void)fallback;
@@ -360,6 +518,47 @@ inline std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
   return ReplayBytesValue(line, wanted_size);
 }
 
+template <typename T, typename U>
+inline std::vector<T> ConvertReplayVector(std::vector<U> &&values) {
+  if constexpr (std::is_same_v<T, U>) {
+    return std::move(values);
+  } else {
+    return std::vector<T>(values.begin(), values.end());
+  }
+}
+
+template <typename T>
+inline std::vector<T> ReplayVector(int line, size_t wanted_size) {
+  if constexpr (kUseWideIntegralVectorTrace<T>) {
+    (void)wanted_size;
+    if constexpr (std::is_signed_v<T>) {
+      if constexpr (sizeof(T) == 2) {
+        return ConvertReplayVector<T>(ReplaySigned16VectorValue(line));
+      } else if constexpr (sizeof(T) == 4) {
+        return ConvertReplayVector<T>(ReplaySigned32VectorValue(line));
+      } else if constexpr (sizeof(T) == 8) {
+        return ConvertReplayVector<T>(ReplaySigned64VectorValue(line));
+      }
+    } else {
+      if constexpr (sizeof(T) == 2) {
+        return ConvertReplayVector<T>(ReplayUnsigned16VectorValue(line));
+      } else if constexpr (sizeof(T) == 4) {
+        return ConvertReplayVector<T>(ReplayUnsigned32VectorValue(line));
+      } else if constexpr (sizeof(T) == 8) {
+        return ConvertReplayVector<T>(ReplayUnsigned64VectorValue(line));
+      }
+    }
+    abort();
+  } else {
+    auto bytes = ReplayBytes(line, wanted_size);
+    if constexpr (std::is_same_v<T, uint8_t>) {
+      return bytes;
+    } else {
+      return std::vector<T>(bytes.begin(), bytes.end());
+    }
+  }
+}
+
 #else
 
 inline void InitializeReplayStore() {}
@@ -370,11 +569,19 @@ inline void DumpRemaining(int, size_t) {}
 
 inline void DumpBytes(int, const uint8_t *, size_t) {}
 
+template <typename T>
+inline void DumpVector(int, const std::vector<T> &) {}
+
 template <typename T> T ReplayScalar(int, T fallback) { return fallback; }
 
 inline size_t ReplayRemaining(int, size_t fallback) { return fallback; }
 
 inline std::vector<uint8_t> ReplayBytes(int, size_t) { return {}; }
+
+template <typename T>
+inline std::vector<T> ReplayVector(int, size_t) {
+  return {};
+}
 
 #endif
 
@@ -463,11 +670,7 @@ private:
 #define FDP_REPLAY_BYTES(wanted_size)                                          \
   if (line != -1 &&                                                            \
       fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
-    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size);                \
-    if constexpr (std::is_same_v<T, uint8_t>) {                                \
-      return bs;                                                               \
-    }                                                                          \
-    return std::vector<T>(bs.begin(), bs.end());                               \
+    return fdp_min_internal::ReplayVector<T>(line, wanted_size);               \
   }
 
 #define FDP_REPLAY_STR(wanted_size)                                            \
@@ -479,8 +682,7 @@ private:
 #define FDP_REPLAY_BYTES(wanted_size)                                          \
   if (line != -1 &&                                                            \
       fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {            \
-    auto bs = fdp_min_internal::ReplayBytes(line, wanted_size);                \
-    return std::vector<T>(bs.begin(), bs.end());                               \
+    return fdp_min_internal::ReplayVector<T>(line, wanted_size);               \
   }
 
 #define FDP_REPLAY_STR(wanted_size)                                            \
@@ -503,8 +705,7 @@ std::vector<T> FuzzedDataProvider::ConsumeBytes(size_t num_bytes, int line) {
   num_bytes = std::min(num_bytes, remaining_bytes_);
   auto res = ConsumeBytesIter<T>(num_bytes, num_bytes);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(),
-                                res.size() * sizeof(T));
+    fdp_min_internal::DumpVector(line, res);
   }
   return res;
 }
@@ -518,8 +719,7 @@ std::vector<T> FuzzedDataProvider::ConsumeBytesWithTerminator(size_t num_bytes,
   std::vector<T> result = ConsumeBytesIter<T>(num_bytes + 1, num_bytes);
   result.back() = terminator;
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t *)result.data(),
-                                result.size() * sizeof(T));
+    fdp_min_internal::DumpVector(line, result);
   }
   return result;
 }
@@ -529,8 +729,7 @@ std::vector<T> FuzzedDataProvider::ConsumeRemainingBytes(int line) {
   FDP_REPLAY_BYTES(-1);
   auto res = ConsumeBytes<T>(remaining_bytes_, -1);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpBytes(line, (const uint8_t *)res.data(),
-                                res.size() * sizeof(T));
+    fdp_min_internal::DumpVector(line, res);
   }
   return res;
 }

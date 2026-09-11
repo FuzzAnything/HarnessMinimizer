@@ -27,6 +27,12 @@ double ReplayDoubleValue(int line);
 long double ReplayLongDoubleValue(int line);
 size_t ReplayRemainingValue(int line);
 std::vector<uint8_t> ReplayBytesValue(int line, size_t wanted_size);
+std::vector<int16_t> ReplaySigned16VectorValue(int line);
+std::vector<uint16_t> ReplayUnsigned16VectorValue(int line);
+std::vector<int32_t> ReplaySigned32VectorValue(int line);
+std::vector<uint32_t> ReplayUnsigned32VectorValue(int line);
+std::vector<int64_t> ReplaySigned64VectorValue(int line);
+std::vector<uint64_t> ReplayUnsigned64VectorValue(int line);
 std::string ReplayStringValue(int line, size_t wanted_size);
 size_t ReplayBytesToBuffer(int line, void *destination);
 

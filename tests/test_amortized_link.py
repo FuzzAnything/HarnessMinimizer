@@ -863,6 +863,135 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     assert "AddressSanitizer" in pch_tester.stdout + pch_tester.stderr
 
 
+def test_amortized_runner_replay_runtime_supports_wide_integer_vectors(
+    tmp_path: Path,
+) -> None:
+    reducer_runner.configure_work_dir(str(tmp_path / "work-fdp-wide-vectors"))
+    target_source = tmp_path / "fdp_wide_target.cpp"
+    target_library = tmp_path / "libfdp_wide_target_asan.so"
+    harness_source = tmp_path / "fdp_wide_harness.cpp"
+    trace_path = tmp_path / "fdp_trace.log"
+    trace_path.write_text("", encoding="utf-8")
+    Path(reducer_runner.fdp_wide_trace_path(trace_path)).write_text(
+        "\n".join(
+            [
+                "V 101 U 16 3 2055 9 0",
+                "V 202 S 32 3 2826 0 -7",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    target_source.write_text(
+        """
+extern "C" __attribute__((noinline)) void replay_target_crash(int trigger) {
+  if (!trigger) {
+    return;
+  }
+  volatile int *values = new int[1];
+  values[4] = 7;
+}
+""",
+        encoding="utf-8",
+    )
+    harness_source.write_text(
+        """
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include "fuzzer/FuzzedDataProvider.h"
+extern "C" void replay_target_crash(int);
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  FuzzedDataProvider fdp(data, size);
+  std::vector<uint16_t> words = fdp.ConsumeBytes<uint16_t>(3, 101);
+  std::vector<int32_t> terminated =
+      fdp.ConsumeBytesWithTerminator<int32_t>(2, -7, 202);
+  bool matches = words.size() == 3 && words[0] == 2055 && words[1] == 9 &&
+                 words[2] == 0 && terminated.size() == 3 &&
+                 terminated[0] == 2826 && terminated[1] == 0 &&
+                 terminated[2] == -7;
+  if (matches) {
+    replay_target_crash(1);
+  }
+  return 0;
+}
+""",
+        encoding="utf-8",
+    )
+
+    compile_target = subprocess.run(
+        [
+            "clang++",
+            "-shared",
+            "-fPIC",
+            "-fsanitize=address,undefined",
+            "-O1",
+            "-gline-tables-only",
+            str(target_source),
+            "-o",
+            str(target_library),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert compile_target.returncode == 0, compile_target.stderr
+
+    with reducer_runner.start_amortized_runner(
+        str(target_library),
+        None,
+        str(trace_path),
+        symbolize=False,
+    ) as runner:
+        split_tester = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                str(harness_source),
+                "AddressSanitizer",
+                "--split",
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        pch = reducer_runner.prepare_phase3_pch_harness(
+            str(harness_source),
+            compile_flags=None,
+            use_replay=True,
+            amortize_link=True,
+        )
+        pch_tester = subprocess.run(
+            [
+                sys.executable,
+                reducer_runner.get_crash_tester_path(),
+                pch.body_source,
+                "AddressSanitizer",
+                "--pch",
+                "--pch-path",
+                pch.pch_file,
+                "--fdp-trace",
+                str(trace_path),
+                "--amortized-runner-socket",
+                runner.socket_path,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert split_tester.returncode == 77, split_tester.stdout + split_tester.stderr
+    assert "AddressSanitizer" in split_tester.stdout + split_tester.stderr
+    assert pch_tester.returncode == 77, pch_tester.stdout + pch_tester.stderr
+    assert "AddressSanitizer" in pch_tester.stdout + pch_tester.stderr
+
+
 def test_amortized_runner_replay_runtime_supports_common_fdp_helpers(
     tmp_path: Path,
 ) -> None:

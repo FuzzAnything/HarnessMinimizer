@@ -31,7 +31,12 @@ def compile_program(compiler: str, source: Path, *flags: str) -> Path:
 
 def run_program(binary: Path, trace: Path) -> str:
     result = subprocess.run(
-        [str(binary)], env={**os.environ, "FDP_TRACE_PATH": str(trace)},
+        [str(binary)],
+        env={
+            **os.environ,
+            "FDP_TRACE_PATH": str(trace),
+            "FDP_WIDE_TRACE_PATH": f"{trace}.wide",
+        },
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 0, result.stderr
@@ -236,3 +241,102 @@ int main() {
     translated = tmp_path / "bytes.cpp"
     translated.write_text(result.source)
     run_program(compile_program(compiler, translated), trace)
+
+
+def test_wide_integer_vectors_use_sidecar_for_replay_and_inlining(compiler, tmp_path):
+    source_text = r"""
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <type_traits>
+#include <vector>
+#include "fuzzer/FuzzedDataProvider.h"
+
+template <typename T>
+void print_vector(const char *name, const std::vector<T>& values) {
+    std::cout << name << ':' << values.size() << ':';
+    for (T value : values) {
+        if constexpr (std::is_signed_v<T>)
+            std::cout << static_cast<long long>(value);
+        else
+            std::cout << static_cast<unsigned long long>(value);
+        std::cout << ',';
+    }
+    std::cout << '\n';
+}
+
+int main() {
+    uint8_t data[] = {7, 8, 9, 10, 11, 12, 13};
+    FuzzedDataProvider fdp(data, sizeof(data));
+    auto half_words = fdp.ConsumeBytes<uint16_t>(3, /*FDP_ID:100101*/ 100101);
+    auto terminated = fdp.ConsumeBytesWithTerminator<int32_t>(
+        2, -7, /*FDP_ID:100102*/ 100102);
+    auto remaining = fdp.ConsumeRemainingBytes<uint64_t>(
+        /*FDP_ID:100103*/ 100103);
+    print_vector("u16", half_words);
+    print_vector("i32", terminated);
+    print_vector("u64", remaining);
+}
+"""
+    source = tmp_path / "wide_vectors.cpp"
+    source.write_text(source_text, encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+    sidecar = Path(f"{trace}.wide")
+
+    native = compile_program(compiler, source, "-DFDP_MIN_MODE_DUMP")
+    expected = run_program(native, trace)
+
+    assert sidecar.exists()
+    sidecar_text = sidecar.read_text(encoding="utf-8")
+    assert "V 100101 U 16" in sidecar_text
+    assert "V 100102 S 32" in sidecar_text
+    assert "V 100103 U 64" in sidecar_text
+    assert not trace.exists() or "B " not in trace.read_text(encoding="utf-8")
+
+    header_replay = compile_program(compiler, source, "-DFDP_MIN_MODE_REPLAY")
+    assert run_program(header_replay, trace) == expected
+
+    runtime_source = Path(__file__).resolve().parents[1] / "src" / "harnessreducer" / "fdp_replay_runtime.cpp"
+    external_replay = compile_program(
+        compiler,
+        source,
+        "-DFDP_MIN_MODE_REPLAY",
+        "-DFDP_MIN_EXTERNAL_REPLAY_RUNTIME",
+        str(runtime_source),
+    )
+    assert run_program(external_replay, trace) == expected
+
+    result = inline_source_with_report(source_text, load_trace(trace))
+    assert result.replaced == 3
+    assert "FDP_ID" not in result.source
+    if result.header_name:
+        (tmp_path / result.header_name).write_text(result.header_source, encoding="utf-8")
+    translated = tmp_path / "wide_vectors_inlined.cpp"
+    translated.write_text(result.source, encoding="utf-8")
+    assert run_program(compile_program(compiler, translated), trace) == expected
+
+
+def test_uint8_byte_vectors_stay_on_primary_trace(compiler, tmp_path):
+    source_text = r"""
+#include <cstdint>
+#include <vector>
+#include "fuzzer/FuzzedDataProvider.h"
+
+int main() {
+    uint8_t data[] = {1, 2, 3, 4};
+    FuzzedDataProvider fdp(data, sizeof(data));
+    auto bytes = fdp.ConsumeBytes<uint8_t>(3, /*FDP_ID:100201*/ 100201);
+    return bytes.size() == 3 ? 0 : 1;
+}
+"""
+    source = tmp_path / "byte_vectors.cpp"
+    source.write_text(source_text, encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+    sidecar = Path(f"{trace}.wide")
+
+    binary = compile_program(compiler, source, "-DFDP_MIN_MODE_DUMP")
+    run_program(binary, trace)
+
+    assert trace.exists()
+    assert "B 100201 3 1 2 3" in trace.read_text(encoding="utf-8")
+    assert not sidecar.exists()
