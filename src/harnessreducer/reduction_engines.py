@@ -21,11 +21,11 @@ import tempfile
 from harnessreducer.process_supervisor import run_supervised, treereduce_binary
 
 
-TOOL_CHOICES = ("treereduce", "wdd", "cdd", "sfc", "vulcan")
+TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd", "sfc", "vulcan")
 PERSES_COMMIT = "6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2"
 CANDIDATE_PLACEHOLDER = "@@.cpp"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-LIST_MINIMIZERS = {"wdd": "WDD", "cdd": "CDD", "sfc": "DFS", "vulcan": "DFS"}
+LIST_MINIMIZERS = {"perses": "DFS", "wdd": "WDD", "cdd": "CDD", "sfc": "DFS", "vulcan": "DFS"}
 
 
 def validate_tool(tool: str) -> None:

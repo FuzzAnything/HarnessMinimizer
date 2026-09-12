@@ -37,7 +37,7 @@ class TestEngineSelection(unittest.TestCase):
             self.assertEqual((args.tool, args.jobs), (tool, 4))
 
     def test_presets_enable_only_selected_methods(self):
-        for tool, minimizer in (("wdd", "WDD"), ("cdd", "CDD"), ("sfc", "DFS"), ("vulcan", "DFS")):
+        for tool, minimizer in (("perses", "DFS"), ("wdd", "WDD"), ("cdd", "CDD"), ("sfc", "DFS"), ("vulcan", "DFS")):
             for stable in (False, True):
                 with self.subTest(tool=tool, stable=stable):
                     flags = perses_flags(tool, stable=stable, jobs=8)
@@ -74,10 +74,10 @@ class TestEngineSelection(unittest.TestCase):
              patch.object(api, "check_perses") as probe, \
              patch.object(api, "check_tree_reducer") as tree_probe, \
              patch.object(api, "check_harness_compilation", side_effect=RuntimeError("stop after preflight")):
-            for tool in ("wdd", "cdd", "sfc", "vulcan"):
+            for tool in ("perses", "wdd", "cdd", "sfc", "vulcan"):
                 with self.assertRaisesRegex(RuntimeError, "stop after preflight"):
                     api.reduce_with_config(api.ReductionConfig("unused.cpp", work_dir=tmp, tool=tool))
-            self.assertEqual(probe.call_count, 4)
+            self.assertEqual(probe.call_count, 5)
             tree_probe.assert_not_called()
 
     def test_process_api_passes_tool(self):
@@ -290,7 +290,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                  patch.object(reducer_runner, "run_supervised", side_effect=pretend_perses):
                 result = reducer_runner.run_treereducer(
                     str(source), str(root / "trace.log"), "pattern", None, None,
-                    str(root / "input.bin"), tool="wdd", phase3_mode="pch", amortize_link=True,
+                    str(root / "input.bin"), tool="perses", phase3_mode="pch", amortize_link=True,
                 )
             checker = json.loads((root / "reduction_engine.json").read_text())["checker_command"]
             self.assertEqual(checker[checker.index("--pch-path") + 1], str(pch))

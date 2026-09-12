@@ -180,11 +180,11 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 ## CLI Arguments
 
 To use the additional Perses engines, build once with
-`python3 tools/perses/install.py --source ../perses`, then select `--tool wdd`,
+`python3 tools/perses/install.py --source ../perses`, then select `--tool perses`, `--tool wdd`,
 `--tool cdd`, `--tool sfc`, or `--tool vulcan`. These choices need Java 17+ and
 GNU `timeout`, and do not require treereduce. See [Reduction engines](REDUCTION_ENGINES.md)
 for the pinned build, exact evaluation configurations, and profiling details.
-WDD, CDD, and SFC passed the C++ integration tests. Vulcan is selectable, but
+Plain Perses, WDD, CDD, and SFC passed the C++ integration tests. Vulcan is selectable, but
 the pinned Perses version has an unimplemented C++ grammar operation; see the
 documented limitation before using it for an evaluation.
 
@@ -192,7 +192,7 @@ documented limitation before using it for an evaluation.
 |---|---:|---|
 | `harness` | Yes | Path to the original harness source file. |
 | `-o`, `--output` | Yes | Where to copy the final reduced harness. |
-| `--tool <name>` | No | Engine: `treereduce` (default), `wdd`, `cdd`, `sfc`, or `vulcan`. |
+| `--tool <name>` | No | Engine: `treereduce` (default), `perses`, `wdd`, `cdd`, `sfc`, or `vulcan`. |
 | `--compile-flags="..."` | No | Compile/preprocessor flags, e.g. include paths, macros, language standard. |
 | `--link-flags="..."` | No | Link-only flags, e.g. libraries, `-L`, `-l`, or full `.a` paths. |
 | `--crash-input <file>` | No | Crash input passed to the harness binary. |
@@ -591,7 +591,7 @@ from harnessreducer import ReductionConfig, reduce_with_config
 
 config = ReductionConfig(
     harness_path="harness.cpp",
-    tool="treereduce",       # or "wdd", "cdd", "sfc", "vulcan"
+    tool="treereduce",       # or "perses", "wdd", "cdd", "sfc", "vulcan"
     compile_flags="-std=c++17 -Iinclude -Ibuild/include",
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",

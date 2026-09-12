@@ -17,7 +17,7 @@ from harnessreducer.process_supervisor import run_supervised
 
 
 @pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_PERSES") != "1", reason="opt-in real Perses test")
-@pytest.mark.parametrize("tool", ("wdd", "cdd", "sfc", "vulcan"))
+@pytest.mark.parametrize("tool", ("perses", "wdd", "cdd", "sfc", "vulcan"))
 @pytest.mark.parametrize("stable,jobs", ((False, 1), (True, 2)))
 def test_presets_reduce_a_compilable_cpp_program(tool, stable, jobs):
     runtime = check_perses()
