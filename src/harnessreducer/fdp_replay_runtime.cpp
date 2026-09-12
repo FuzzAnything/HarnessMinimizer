@@ -28,6 +28,16 @@ const std::string &GetTracePath() {
   return path;
 }
 
+const std::string &GetWideTracePath() {
+  static const std::string path = [] {
+    const char *env = std::getenv("FDP_WIDE_TRACE_PATH");
+    if (env != nullptr && env[0] != '\0')
+      return std::string(env);
+    return GetTracePath() + ".wide";
+  }();
+  return path;
+}
+
 class ReplayTraceStore {
 public:
   static ReplayTraceStore &Instance() {
@@ -123,6 +133,106 @@ private:
   std::map<int, std::deque<long double>> scalar_streams_;
   std::map<int, std::deque<size_t>> remaining_streams_;
   std::map<int, std::deque<std::vector<uint8_t>>> bytes_streams_;
+};
+
+struct WideVectorRecord {
+  bool is_signed = false;
+  size_t value_bits = 0;
+  std::vector<int64_t> signed_values;
+  std::vector<uint64_t> unsigned_values;
+};
+
+class WideReplayTraceStore {
+public:
+  static WideReplayTraceStore &Instance() {
+    static WideReplayTraceStore store;
+    return store;
+  }
+
+  template <typename T> std::vector<T> ReplayVectorValue(int line) {
+    auto it = wide_vector_streams_.find(line);
+    if (it == wide_vector_streams_.end() || it->second.empty())
+      std::abort();
+
+    WideVectorRecord value = std::move(it->second.front());
+    it->second.pop_front();
+
+    if (value.is_signed != std::is_signed_v<T> ||
+        value.value_bits != sizeof(T) * CHAR_BIT) {
+      std::abort();
+    }
+
+    std::vector<T> result;
+    if constexpr (std::is_signed_v<T>) {
+      result.reserve(value.signed_values.size());
+      for (int64_t entry : value.signed_values) {
+        if (entry < static_cast<int64_t>(std::numeric_limits<T>::lowest()) ||
+            entry > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+          std::abort();
+        }
+        result.push_back(static_cast<T>(entry));
+      }
+    } else {
+      result.reserve(value.unsigned_values.size());
+      for (uint64_t entry : value.unsigned_values) {
+        if (entry > static_cast<uint64_t>(std::numeric_limits<T>::max()))
+          std::abort();
+        result.push_back(static_cast<T>(entry));
+      }
+    }
+    return result;
+  }
+
+private:
+  WideReplayTraceStore() {
+    std::ifstream in(GetWideTracePath());
+    if (!in)
+      return;
+
+    std::string line;
+    while (std::getline(in, line)) {
+      if (line.empty())
+        continue;
+      std::istringstream iss(line);
+      char tag = '\0';
+      int call_line = 0;
+      char signedness = '\0';
+      size_t value_bits = 0;
+      size_t count = 0;
+      iss >> tag >> call_line >> signedness >> value_bits >> count;
+      if (!iss || tag != 'V' || (signedness != 'S' && signedness != 'U'))
+        continue;
+
+      WideVectorRecord record;
+      record.is_signed = signedness == 'S';
+      record.value_bits = value_bits;
+      if (record.is_signed) {
+        record.signed_values.reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+          int64_t entry = 0;
+          if (!(iss >> entry))
+            break;
+          record.signed_values.push_back(entry);
+        }
+        if (record.signed_values.size() != count)
+          continue;
+      } else {
+        record.unsigned_values.reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+          uint64_t entry = 0;
+          if (!(iss >> entry))
+            break;
+          record.unsigned_values.push_back(entry);
+        }
+        if (record.unsigned_values.size() != count)
+          continue;
+      }
+
+      wide_vector_streams_[call_line].push_back(std::move(record));
+    }
+  }
+
+  std::map<int, std::deque<WideVectorRecord>> wide_vector_streams_;
 };
 
 void NativeAdvance(const uint8_t *&data_ptr, size_t &remaining_bytes,
@@ -294,6 +404,30 @@ size_t ReplayRemainingValue(int line) {
 
 std::vector<uint8_t> ReplayBytesValue(int line, size_t wanted_size) {
   return ReplayTraceStore::Instance().ReplayBytesValue(line, wanted_size);
+}
+
+std::vector<int16_t> ReplaySigned16VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<int16_t>(line);
+}
+
+std::vector<uint16_t> ReplayUnsigned16VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<uint16_t>(line);
+}
+
+std::vector<int32_t> ReplaySigned32VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<int32_t>(line);
+}
+
+std::vector<uint32_t> ReplayUnsigned32VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<uint32_t>(line);
+}
+
+std::vector<int64_t> ReplaySigned64VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<int64_t>(line);
+}
+
+std::vector<uint64_t> ReplayUnsigned64VectorValue(int line) {
+  return WideReplayTraceStore::Instance().ReplayVectorValue<uint64_t>(line);
 }
 
 std::string ReplayStringValue(int line, size_t wanted_size) {
