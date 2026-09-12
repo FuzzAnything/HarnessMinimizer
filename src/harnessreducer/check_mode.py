@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from harnessreducer.process_supervisor import (
-    run_supervised, treereduce_binary,
+    run_supervised,
 )
 
 from harnessreducer.reducer_runner import (
@@ -350,7 +350,11 @@ def run_treereducer_with_check(
     crash_pattern_symbolize_0: str | None = None,
     require_crash_pattern: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
+    tool: str = "treereduce",
 ) -> str:
+    from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
+
+    validate_tool(tool)
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
@@ -358,7 +362,7 @@ def run_treereducer_with_check(
     validate_phase3_mode(phase3_mode)
     if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
-            f"treereduce jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+            f"Reducer jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
         )
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
@@ -462,43 +466,22 @@ def run_treereducer_with_check(
 
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
-        treereduce_binary(),
-        "-j",
-        str(jobs),
-        "-s",
-        reducer_source,
-        "-o",
-        reduced_harness,
+        *get_check_tester_command(),
+        "@@.cpp",
+        crash_pattern or ".*",
+        "--crash-input",
+        crash_input or "",
+        f"--compile-flags={compile_flags or ''}",
+        f"--link-flags={link_flags or ''}",
+        "--check-reference-file",
+        get_check_reference_file(),
+        "--check-statistics-file",
+        initialize_check_statistics_file(),
+        "--check-stack-log-file",
+        get_check_candidate_stack_traces_file(),
+        "--stack-trace-file",
+        get_stack_trace_file(),
     ]
-    if stable:
-        cmd.extend(["--stable", "--min-reduction", "1"])
-    else:
-        cmd.append("--fast")
-
-    cmd.extend(
-        [
-            "--timeout",
-            "300",
-            "--interesting-exit-code",
-            "77",
-            "--",
-            *get_check_tester_command(),
-            "@@.cpp",
-            crash_pattern or ".*",
-            "--crash-input",
-            crash_input or "",
-            f"--compile-flags={compile_flags or ''}",
-            f"--link-flags={link_flags or ''}",
-            "--check-reference-file",
-            get_check_reference_file(),
-            "--check-statistics-file",
-            initialize_check_statistics_file(),
-            "--check-stack-log-file",
-            get_check_candidate_stack_traces_file(),
-            "--stack-trace-file",
-            get_stack_trace_file(),
-        ]
-    )
     append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
@@ -637,16 +620,16 @@ def run_treereducer_with_check(
                     + " ".join(plugin_link_flags)
                 )
 
-        proc = run_supervised(
-            cmd,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            timeout=None,
-            private_tmpdir=True,
+        invocation = prepare_reducer_invocation(
+            tool=tool, source=reducer_source, output=reduced_harness,
+            checker_command=cmd, stable=stable, jobs=jobs,
         )
+        print(f"[+] Running reduction engine: {tool} (check mode)")
+        proc = invocation.run(run_supervised)
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run tree-reducer in check mode:\n{proc.stdout} {proc.stderr}")
+        raise RuntimeError(f"Failed to run {tool} reducer in check mode:\n{proc.stdout} {proc.stderr}")
+    if tool != "treereduce":
+        invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

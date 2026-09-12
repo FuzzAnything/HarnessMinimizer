@@ -179,16 +179,26 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 
 ## CLI Arguments
 
+To use the additional Perses engines, build once with
+`python3 tools/perses/install.py --source ../perses`, then select `--tool wdd`,
+`--tool cdd`, `--tool sfc`, or `--tool vulcan`. These choices need Java 17+ and
+GNU `timeout`, and do not require treereduce. See [Reduction engines](REDUCTION_ENGINES.md)
+for the pinned build, exact evaluation configurations, and profiling details.
+WDD, CDD, and SFC passed the C++ integration tests. Vulcan is selectable, but
+the pinned Perses version has an unimplemented C++ grammar operation; see the
+documented limitation before using it for an evaluation.
+
 | Argument | Required | Description |
 |---|---:|---|
 | `harness` | Yes | Path to the original harness source file. |
 | `-o`, `--output` | Yes | Where to copy the final reduced harness. |
+| `--tool <name>` | No | Engine: `treereduce` (default), `wdd`, `cdd`, `sfc`, or `vulcan`. |
 | `--compile-flags="..."` | No | Compile/preprocessor flags, e.g. include paths, macros, language standard. |
 | `--link-flags="..."` | No | Link-only flags, e.g. libraries, `-L`, `-l`, or full `.a` paths. |
 | `--crash-input <file>` | No | Crash input passed to the harness binary. |
 | `--work-dir <dir>` | No | Reuse a fixed work directory instead of a temporary one. |
-| `--stable` | No | Use deterministic tree reduction mode instead of the faster randomized mode. |
-| `-j`, `--jobs <1..63>` | No | Number of concurrent `treereduce-c` interestingness checks. Defaults to 60 for compatibility; benchmark this value because more workers can increase speculative/retried work. |
+| `--stable` | No | Repeat the selected engine's reduction passes until their stopping conditions are reached. |
+| `-j`, `--jobs <1..63>` | No | Requested checker concurrency. Defaults to 60; actual concurrency depends on the engine. More workers can increase speculative/retried work. |
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--profile` | No | Record candidate-stage timings, result counts, concurrency, tree-reduction wall time, and checks/s. Writes `candidate_profile.jsonl` and `reduction_profile.{json,txt}`. |
@@ -443,7 +453,11 @@ required when running through the tool.
 
 ### `--stable`
 
-Runs `treereduce-c` in deterministic mode. Usually slower, but helpful when you want reproducible results.
+For treereduce, retains `--stable --min-reduction 1` instead of `--fast`.
+For Perses engines, enables main and global fixpoint reduction and the selected
+transformation family's fixpoint mode. This repeats the passes until their
+stopping conditions are reached; it does not guarantee identical results across
+worker counts. See [Reduction engines](REDUCTION_ENGINES.md).
 
 ## Typical Commands
 
@@ -577,6 +591,7 @@ from harnessreducer import ReductionConfig, reduce_with_config
 
 config = ReductionConfig(
     harness_path="harness.cpp",
+    tool="treereduce",       # or "wdd", "cdd", "sfc", "vulcan"
     compile_flags="-std=c++17 -Iinclude -Ibuild/include",
     link_flags="build/lib/libtarget.a",
     crash_input="crash-input",

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from harnessreducer.process_supervisor import termination_guard
+from harnessreducer.reduction_engines import check_perses, validate_tool
 from harnessreducer.check_mode import (
     emit_check_statistics_summary,
     record_check_reference,
@@ -117,6 +118,7 @@ class ReductionConfig:
     symbolize: bool = False
     jobs: int = DEFAULT_TREEREDUCE_JOBS
     profile: bool = False
+    tool: str = "treereduce"
 
 
 @dataclass(frozen=True)
@@ -771,6 +773,7 @@ def inline_literals_in_reduced_harness(
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    validate_tool(config.tool)
     configure_work_dir(config.work_dir)
     if config.debug and config.check:
         raise ValueError("debug and check modes cannot be enabled together.")
@@ -798,7 +801,10 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_phase3_mode = PHASE3_DIRECT
     reduction_phase3_mode = config.phase3_mode
-    check_tree_reducer()
+    if config.tool == "treereduce":
+        check_tree_reducer()
+    else:
+        check_perses()
     check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
     crash_pattern_kwargs = {}
     if config.symbolize:
@@ -939,6 +945,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
             require_crash_pattern=recorded_symbolized_pattern is not None,
             jobs=config.jobs,
+            tool=config.tool,
         )
         emit_check_statistics_summary()
     else:
@@ -957,6 +964,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             symbolize=config.symbolize,
             jobs=config.jobs,
             profile=config.profile,
+            tool=config.tool,
         )
     format_reduced_harness(reduced_harness)
     if config.debug:
@@ -1057,6 +1065,7 @@ def process(
     symbolize: bool = False,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
+    tool: str = "treereduce",
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -1075,6 +1084,7 @@ def process(
         symbolize=symbolize,
         jobs=jobs,
         profile=profile,
+        tool=tool,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

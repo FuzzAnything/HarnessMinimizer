@@ -3380,8 +3380,12 @@ def run_treereducer(
     symbolize: bool = False,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
+    tool: str = "treereduce",
 ) -> str:
-    # treereduce changes cwd to a temp dir when invoking the tester, so relative
+    from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
+
+    validate_tool(tool)
+    # Reducers change cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
@@ -3389,7 +3393,7 @@ def run_treereducer(
     validate_phase3_mode(phase3_mode)
     if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
-            f"treereduce jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+            f"Reducer jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
         )
     if amortize_link and phase3_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
@@ -3457,33 +3461,13 @@ def run_treereducer(
 
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
-        treereduce_binary(),
-        "-j",
-        str(jobs),
-        "-s",
-        reducer_source,
-        "-o",
-        reduced_harness,
-    ]
-    if stable:
-        cmd.append("--stable")
-        cmd.append("--min-reduction")
-        cmd.append("1")
-    else:
-        cmd.append("--fast")
-    cmd.extend([
-        "--timeout",
-        "300",
-        "--interesting-exit-code",
-        "77",
-        "--",
         get_crash_tester_path(),
         "@@.cpp",
         crash_pattern,
         "--crash-input", crash_input or "",
         f"--compile-flags={compile_flags or ''}",
         f"--link-flags={link_flags or ''}",
-    ])
+    ]
     append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
@@ -3558,15 +3542,13 @@ def run_treereducer(
             if not symbolize:
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
-        reduction_started_ns = time.perf_counter_ns()
-        proc = run_supervised(
-            cmd,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            timeout=None,
-            private_tmpdir=True,
+        invocation = prepare_reducer_invocation(
+            tool=tool, source=reducer_source, output=reduced_harness,
+            checker_command=cmd, stable=stable, jobs=jobs,
         )
+        print(f"[+] Running reduction engine: {tool}")
+        reduction_started_ns = time.perf_counter_ns()
+        proc = invocation.run(run_supervised)
         reduction_wall_ns = time.perf_counter_ns() - reduction_started_ns
     if profile and profile_events_path is not None:
         profile_summary = write_profile_summary(
@@ -3577,6 +3559,8 @@ def run_treereducer(
             jobs=jobs,
             returncode=proc.returncode,
             configuration={
+                "tool": tool,
+                "engine": invocation.metadata,
                 "jobs": jobs,
                 "phase3_mode": phase3_mode,
                 "amortize_link": amortize_link,
@@ -3596,7 +3580,9 @@ def run_treereducer(
         )
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
+        raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
+    if tool != "treereduce":
+        invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

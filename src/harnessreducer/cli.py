@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
+from harnessreducer.reduction_engines import TOOL_CHOICES
 from harnessreducer.reducer_runner import (
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
@@ -54,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
     parser.add_argument(
+        "--tool", choices=TOOL_CHOICES, default="treereduce",
+        help="Reduction engine (default: treereduce; other choices use Perses).",
+    )
+    parser.add_argument(
         "--compile-flags",
         default=None,
         help=(
@@ -94,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stable",
         action="store_true",
-        help="Use stable reduction mode (no randomization, deterministic output).",
+        help="Repeat the selected engine's reduction passes until their stopping conditions are reached.",
     )
     parser.add_argument(
         "-j",
@@ -102,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_TREEREDUCE_JOBS,
         help=(
-            "Number of concurrent treereduce interestingness checks "
+            "Requested number of concurrent interestingness checks "
             f"(default: {DEFAULT_TREEREDUCE_JOBS}; maximum: {MAX_TREEREDUCE_JOBS})."
         ),
     )
@@ -110,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--statistics",
         action="store_true",
         help=(
-            "Collect crash_tester return-code statistics during treereduce and "
+            "Collect crash_tester return-code statistics during reduction and "
             "write them to statistics.txt in the work directory."
         ),
     )
@@ -229,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         symbolize=args.symbolize,
         jobs=args.jobs,
         profile=args.profile,
+        tool=args.tool,
     )
     try:
         result = reduce_with_config(config)

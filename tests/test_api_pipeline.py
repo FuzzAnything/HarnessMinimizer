@@ -148,6 +148,7 @@ class TestApiPipeline(unittest.TestCase):
             crash_pattern_symbolize_0="AddressSanitizer",
             require_crash_pattern=False,
             jobs=60,
+            tool="treereduce",
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -260,6 +261,7 @@ class TestApiPipeline(unittest.TestCase):
             symbolize=False,
             jobs=60,
             profile=False,
+            tool="treereduce",
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -530,6 +532,7 @@ class TestApiPipeline(unittest.TestCase):
             symbolize=False,
             jobs=60,
             profile=False,
+            tool="treereduce",
         )
 
     @patch("harnessreducer.api.validate_stack_trace")
@@ -672,6 +675,7 @@ class TestApiPipeline(unittest.TestCase):
             symbolize=True,
             jobs=60,
             profile=False,
+            tool="treereduce",
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
