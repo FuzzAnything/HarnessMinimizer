@@ -8,6 +8,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -20,6 +21,21 @@ from harnessreducer.process_supervisor import run_supervised
 
 DEFAULT_JOBS = (1, 2, 4, 8, 16, 32, 60)
 LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
+SOURCE_TOKEN_COUNT_METHOD = "cpp_like_regex_v1"
+SOURCE_TOKEN_RE = re.compile(
+    r"""
+    //[^\n]*
+    | /\*.*?\*/
+    | "(?:\\.|[^"\\])*"
+    | '(?:\\.|[^'\\])*'
+    | [A-Za-z_]\w*
+    | 0[xX][0-9A-Fa-f]+
+    | \d+(?:\.\d*)?(?:[eE][+-]?\d+)?
+    | ::|->\*|->|\+\+|--|<<=|>>=|<=|>=|==|!=|&&|\|\||<<|>>|[+\-*/%&|^~!<>=?:;,.()[\]{}]
+    | \S
+    """,
+    re.DOTALL | re.VERBOSE,
+)
 
 
 VARIANTS = (
@@ -93,10 +109,65 @@ def shell_command(command: list[str]) -> str:
     return shlex.join(command)
 
 
+def count_source_tokens(path: Path) -> int | None:
+    """Count source tokens with a lightweight C/C++-like tokenizer.
+
+    The count is intended for consistent before/after reduction comparisons,
+    not as a full replacement for a compiler lexer.
+    """
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    count = 0
+    for match in SOURCE_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        if token.startswith("//") or token.startswith("/*"):
+            continue
+        count += 1
+    return count
+
+
+def token_reduction_percent(
+    original_tokens: int | None,
+    final_tokens: int | None,
+) -> float | None:
+    if original_tokens is None or final_tokens is None or original_tokens <= 0:
+        return None
+    return 100.0 * (1.0 - (final_tokens / original_tokens))
+
+
+def source_metrics(original_path: Path, reduced_path: Path) -> dict[str, object]:
+    original_tokens = count_source_tokens(original_path)
+    final_tokens = count_source_tokens(reduced_path)
+    return {
+        "token_count_method": SOURCE_TOKEN_COUNT_METHOD,
+        "original_tokens": original_tokens,
+        "final_tokens": final_tokens,
+        "token_reduction_percent": token_reduction_percent(
+            original_tokens,
+            final_tokens,
+        ),
+    }
+
+
+def profiled_checks(profile_path: Path) -> int | None:
+    if not profile_path.is_file():
+        return None
+    try:
+        summary = json.loads(profile_path.read_text(encoding="utf-8"))
+        reducer = summary.get("reducer", {})
+        if not isinstance(reducer, dict):
+            return None
+        return int(reducer.get("profiled_checks"))  # type: ignore[arg-type]
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def run_case(
     *,
     python_executable: str,
     bench_dir: Path,
+    harness_path: Path,
     harness: str,
     crash_input: str,
     compile_flags: str,
@@ -167,6 +238,14 @@ def run_case(
         encoding="utf-8",
     )
 
+    total_checks = profiled_checks(job_dir / "reduction_profile.json")
+    source_reduction = source_metrics(harness_path, output_path)
+    source_reduction_path = job_dir / "source_reduction_metrics.json"
+    source_reduction_path.write_text(
+        json.dumps(source_reduction, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     run_info = {
         "variant": variant["key"],
         "variant_label": variant["label"],
@@ -180,6 +259,8 @@ def run_case(
         "ended": end_time.isoformat(),
         "full_command_wall_seconds": full_wall_seconds,
         "returncode": proc.returncode,
+        "total_checks": total_checks,
+        "source_reduction_metrics": source_reduction,
     }
     (job_dir / "run_info.json").write_text(
         json.dumps(run_info, indent=2, sort_keys=True) + "\n",
@@ -314,6 +395,7 @@ def main() -> int:
             run_info = run_case(
                 python_executable=args.python,
                 bench_dir=bench_dir,
+                harness_path=harness_path,
                 harness=args.harness,
                 crash_input=args.crash_input,
                 compile_flags=compile_flags,

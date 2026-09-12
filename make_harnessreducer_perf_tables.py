@@ -8,6 +8,7 @@ import csv
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 from typing import Iterable
 
 
@@ -17,6 +18,21 @@ DEFAULT_VARIANT_DIRS = {
     "optimized": "optimized",
     "split_symbolize": "split-symbolize",
 }
+SOURCE_TOKEN_COUNT_METHOD = "cpp_like_regex_v1"
+SOURCE_TOKEN_RE = re.compile(
+    r"""
+    //[^\n]*
+    | /\*.*?\*/
+    | "(?:\\.|[^"\\])*"
+    | '(?:\\.|[^'\\])*'
+    | [A-Za-z_]\w*
+    | 0[xX][0-9A-Fa-f]+
+    | \d+(?:\.\d*)?(?:[eE][+-]?\d+)?
+    | ::|->\*|->|\+\+|--|<<=|>>=|<=|>=|==|!=|&&|\|\||<<|>>|[+\-*/%&|^~!<>=?:;,.()[\]{}]
+    | \S
+    """,
+    re.DOTALL | re.VERBOSE,
+)
 VARIANT_TITLES = {
     "optimized": "Optimized configuration: --pch --amortize-link, symbolize off",
     "split_symbolize": "Split-symbolize configuration: --split, no amortize-link, --symbolize",
@@ -60,6 +76,16 @@ def read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def read_json_if_exists(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def read_float(path: Path) -> float | None:
     if not path.is_file():
         return None
@@ -77,6 +103,100 @@ def ns_to_ms(value: object) -> float:
         return float(value) / 1_000_000.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def count_source_tokens(path: Path) -> int | None:
+    """Count source tokens with a lightweight C/C++-like tokenizer.
+
+    This is meant for consistent before/after reduction reporting. It is not a
+    full compiler lexer.
+    """
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    count = 0
+    for match in SOURCE_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        if token.startswith("//") or token.startswith("/*"):
+            continue
+        count += 1
+    return count
+
+
+def token_reduction_percent(
+    original_tokens: int | None,
+    final_tokens: int | None,
+) -> float | None:
+    if original_tokens is None or final_tokens is None or original_tokens <= 0:
+        return None
+    return 100.0 * (1.0 - (final_tokens / original_tokens))
+
+
+def source_reduction_metrics(
+    original_path: Path,
+    reduced_path: Path,
+) -> dict[str, object]:
+    original_tokens = count_source_tokens(original_path)
+    final_tokens = count_source_tokens(reduced_path)
+    return {
+        "token_count_method": SOURCE_TOKEN_COUNT_METHOD,
+        "original_tokens": original_tokens,
+        "final_tokens": final_tokens,
+        "token_reduction_percent": token_reduction_percent(
+            original_tokens,
+            final_tokens,
+        ),
+    }
+
+
+def merge_source_reduction_metrics(
+    original_path: Path,
+    reduced_path: Path,
+    recorded: object,
+) -> dict[str, object]:
+    computed = source_reduction_metrics(original_path, reduced_path)
+    if not isinstance(recorded, dict):
+        return computed
+
+    original_tokens = int_or_none(recorded.get("original_tokens"))
+    final_tokens = int_or_none(recorded.get("final_tokens"))
+    reduction_percent = float_or_none(recorded.get("token_reduction_percent"))
+    return {
+        "token_count_method": str(
+            recorded.get("token_count_method", SOURCE_TOKEN_COUNT_METHOD)
+        ),
+        "original_tokens": (
+            original_tokens
+            if original_tokens is not None
+            else computed["original_tokens"]
+        ),
+        "final_tokens": (
+            final_tokens if final_tokens is not None else computed["final_tokens"]
+        ),
+        "token_reduction_percent": (
+            reduction_percent
+            if reduction_percent is not None
+            else computed["token_reduction_percent"]
+        ),
+    }
 
 
 def timing_mean_ms(summary: dict[str, object], field: str) -> float:
@@ -105,6 +225,12 @@ def format_speedup(value: float | None) -> str:
     if value is None:
         return "n/a"
     return f"{value:.2f}x"
+
+
+def format_percent(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:,.2f}%"
 
 
 def ascii_table(headers: list[str], rows: Iterable[list[str]]) -> str:
@@ -148,7 +274,12 @@ def result_counts(summary: dict[str, object]) -> dict[str, int]:
     return parsed
 
 
-def load_variant(results_dir: Path, variant_key: str, directory: str) -> dict[int, dict[str, object]]:
+def load_variant(
+    results_dir: Path,
+    variant_key: str,
+    directory: str,
+    original_harness_path: Path,
+) -> dict[int, dict[str, object]]:
     variant_dir = results_dir / directory
     if not variant_dir.is_dir():
         raise SystemExit(f"missing result directory for {variant_key}: {variant_dir}")
@@ -166,11 +297,23 @@ def load_variant(results_dir: Path, variant_key: str, directory: str) -> dict[in
         full_wall = read_float(job_dir / "full_command_wall_seconds.txt")
         reduced_path = job_dir / "reduced.cpp"
         final_size = reduced_path.stat().st_size if reduced_path.is_file() else None
+        run_info = read_json_if_exists(job_dir / "run_info.json")
+        metrics_path = job_dir / "source_reduction_metrics.json"
+        metrics_record = read_json_if_exists(metrics_path)
+        if not metrics_record:
+            metrics_record = run_info.get("source_reduction_metrics", {})
+        source_metrics = merge_source_reduction_metrics(
+            original_harness_path,
+            reduced_path,
+            metrics_record,
+        )
         rows[jobs] = {
             "job_dir": str(job_dir),
             "summary": summary,
             "full_wall": full_wall,
             "final_size": final_size,
+            "run_info": run_info,
+            "source_reduction_metrics": source_metrics,
         }
     if not rows:
         raise SystemExit(f"no jobs-* results found in {variant_dir}")
@@ -184,11 +327,17 @@ def get_reducer(row: dict[str, object]) -> dict[str, object]:
     return reducer if isinstance(reducer, dict) else {}
 
 
+def get_source_metrics(row: dict[str, object]) -> dict[str, object]:
+    metrics = row.get("source_reduction_metrics", {})
+    return metrics if isinstance(metrics, dict) else {}
+
+
 def main_rows(rows_by_job: dict[int, dict[str, object]]) -> list[list[str]]:
     table_rows: list[list[str]] = []
     for jobs in sorted(rows_by_job):
         row = rows_by_job[jobs]
         reducer = get_reducer(row)
+        source_metrics = get_source_metrics(row)
         table_rows.append(
             [
                 str(jobs),
@@ -197,6 +346,11 @@ def main_rows(rows_by_job: dict[int, dict[str, object]]) -> list[list[str]]:
                 format_int(int(reducer.get("profiled_checks", 0))),
                 format_float(float(reducer.get("checks_per_second", 0.0)), 3),
                 format_int(row.get("final_size")),  # type: ignore[arg-type]
+                format_int(int_or_none(source_metrics.get("original_tokens"))),
+                format_int(int_or_none(source_metrics.get("final_tokens"))),
+                format_percent(
+                    float_or_none(source_metrics.get("token_reduction_percent"))
+                ),
             ]
         )
     return table_rows
@@ -332,6 +486,25 @@ def comparison_rows(
     return rows
 
 
+def csv_scalar(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def csv_source_metric_values(row: dict[str, object]) -> list[str]:
+    reducer = get_reducer(row)
+    source_metrics = get_source_metrics(row)
+    return [
+        csv_scalar(int_or_none(reducer.get("profiled_checks"))),
+        csv_scalar(int_or_none(source_metrics.get("original_tokens"))),
+        csv_scalar(int_or_none(source_metrics.get("final_tokens"))),
+        csv_scalar(float_or_none(source_metrics.get("token_reduction_percent"))),
+    ]
+
+
 def write_comparison_csv(
     output_path: Path,
     optimized: dict[int, dict[str, object]],
@@ -353,17 +526,26 @@ def write_comparison_csv(
                 "link_milliseconds",
                 "execute_milliseconds",
                 "total_per_check_milliseconds",
+                "total_checks",
+                "original_tokens",
+                "final_tokens",
+                "token_reduction_percent",
             ]
         )
         for jobs in sorted(set(optimized) & set(split_symbolize)):
             metrics = comparison_metric_values(
                 optimized[jobs], split_symbolize[jobs]
             )
-            for result_type, value_index in (
-                ("optimized", 2),
-                ("non_optimized_split_symbolize", 3),
-                ("optimized_speedup_x", 4),
+            for result_type, value_index, row_for_metadata in (
+                ("optimized", 2, optimized[jobs]),
+                ("non_optimized_split_symbolize", 3, split_symbolize[jobs]),
+                ("optimized_speedup_x", 4, None),
             ):
+                metadata_values = (
+                    ["", "", "", ""]
+                    if row_for_metadata is None
+                    else csv_source_metric_values(row_for_metadata)
+                )
                 writer.writerow(
                     [
                         jobs,
@@ -372,6 +554,7 @@ def write_comparison_csv(
                             "" if metric[value_index] is None else repr(metric[value_index])
                             for metric in metrics
                         ),
+                        *metadata_values,
                     ]
                 )
 
@@ -436,12 +619,27 @@ def main() -> int:
     if not results_dir.is_dir():
         raise SystemExit(f"results directory not found: {results_dir}")
 
+    manifest = read_json_if_exists(results_dir / "run_manifest.json")
+    harness_name = str(manifest.get("harness", "harness.cpp"))
+    harness_path = Path(harness_name).expanduser()
+    original_harness_path = (
+        harness_path.resolve()
+        if harness_path.is_absolute()
+        else (bench_dir / harness_path).resolve()
+    )
+
     variant_dirs = variant_dirs_from_manifest(results_dir)
-    optimized = load_variant(results_dir, "optimized", variant_dirs["optimized"])
+    optimized = load_variant(
+        results_dir,
+        "optimized",
+        variant_dirs["optimized"],
+        original_harness_path,
+    )
     split_symbolize = load_variant(
         results_dir,
         "split_symbolize",
         variant_dirs["split_symbolize"],
+        original_harness_path,
     )
 
     output_path = (
@@ -484,9 +682,12 @@ def main() -> int:
                         "Jobs",
                         "Reduction wall (s)",
                         "Full command wall (s)",
-                        "Profiled checks",
+                        "Total checks",
                         "Checks/s",
                         "Final size (bytes)",
+                        "Original tokens",
+                        "Final tokens",
+                        "Token reduction",
                     ],
                     main_rows(rows_by_job),
                 ),
