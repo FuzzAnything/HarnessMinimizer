@@ -22,14 +22,21 @@ Use Linux with the following tools available in `PATH`:
 - `llvm-symbolizer` (or an explicit `ASAN_SYMBOLIZER_PATH` / `UBSAN_SYMBOLIZER_PATH`)
 - `llvm-objcopy` (optional, used to export hidden static-archive symbols for faster `--amortize-link`)
 - Python 3.12+
-- a current stable Rust toolchain (`rustc` and `cargo`) to build the patched `treereduce-c`
-- `patch` and a C/C++ build toolchain
-- either `uv`, or Python's `venv` and `pip` for the alternative installation below
+- Git and a C/C++ build toolchain
+- Python's `venv` and `pip`, or `uv`, to install the Python package
 
-Use Clang and the LLVM utilities from the same LLVM installation. Install the
-patched `treereduce-c` using the commands below. The installation downloads
-upstream source, Rust dependencies, and Python dependencies, so it needs
-network access.
+Use Clang and the LLVM utilities from the same LLVM installation. You also need
+at least one reduction engine; install the one you intend to use:
+
+- **treereduce (default):** a current stable Rust toolchain (`rustc` and `cargo`)
+  and `patch` to build the patched executable.
+- **Perses, WDD, CDD, or SFC:** Java 17+, GNU `timeout`, and Bazelisk (or Bazel
+  9.1.0) to build the shared Perses executable. Rust and treereduce are not
+  required for these engines.
+
+The installation steps below include downloading the engine source and build
+dependencies, so network access is required. Installing the Python package alone
+does not install a reduction engine.
 
 On Ubuntu 24.04, missing system prerequisites can be installed with these
 commands as root (or with `sudo` on a host):
@@ -38,35 +45,141 @@ commands as root (or with `sudo` on a host):
 apt-get update
 apt-get install -y python3 python3-venv python3-pip \
   clang clang-format llvm build-essential patch pkg-config libssl-dev \
-  curl ca-certificates
+  git curl ca-certificates
 ```
 
-If Rust/Cargo is not installed, install the stable Rust toolchain and load its
-environment into the current shell:
+For the optional `--llm` stage, also set `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, and `OPENAI_MODEL` to your provider's API key, base URL, and
+model name. These variables are not needed for ordinary reduction.
+
+## Install
+
+Start in the root of your clone of this repository, on the host or container
+where reduction will run. First install the Python package, then install
+[Perses and its variants](#2a-install-perses-wdd-cdd-and-sfc) or
+[treereduce](#2b-install-treereduce-default), or both. No existing virtual
+environment or Perses checkout is assumed.
+
+### 1. Install the Python package
+
+Use a Python 3.12+ interpreter to create a new virtual environment:
+
+```bash
+python3 --version
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+hash -r
+harnessreducer --help
+```
+
+If `python3` is older than 3.12, use your installed Python 3.12+ executable in
+its place. `harnessreducer --help` checks the Python installation; it does not
+verify that an engine has been installed.
+
+Alternatively, if you already use `uv`, use this block **instead** of the one
+above:
+
+```bash
+uv sync
+source .venv/bin/activate
+hash -r
+harnessreducer --help
+```
+
+Both methods install an editable Python package and provide
+`.venv/bin/harnessreducer`. The remaining commands assume this environment is
+active. In a new shell, return to the repository root and run
+`source .venv/bin/activate` again. If Bash still selects an older global
+`harnessreducer`, run `hash -r` or use `.venv/bin/harnessreducer` directly.
+
+### 2a. Install Perses, WDD, CDD, and SFC
+
+These engines share one Perses JAR (the Java executable). You only need to build
+it once, and you can skip the treereduce installation below if you only use
+these engines.
+
+Install Java 17+ and GNU `timeout`. On Ubuntu 24.04, run as root or with `sudo`:
+
+```bash
+apt-get update
+apt-get install -y openjdk-17-jdk-headless coreutils unzip zip
+java -version
+timeout --version
+```
+
+Next install [Bazelisk](https://github.com/bazelbuild/bazelisk#installation),
+which downloads the Bazel version specified by the Perses checkout (9.1.0).
+If Bazelisk or Bazel 9.1.0 is already on `PATH`, skip this block. Otherwise,
+from the repository root, these commands install Bazelisk locally for Linux
+**x86-64**. On Linux ARM64, replace `bazelisk-linux-amd64` with
+`bazelisk-linux-arm64` in the URL. The binaries come from the official
+[Bazelisk release](https://github.com/bazelbuild/bazelisk/releases/tag/v1.29.0).
+
+```bash
+mkdir -p .tools/bin
+curl -fL --retry 3 \
+  https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64 \
+  -o .tools/bin/bazelisk
+chmod +x .tools/bin/bazelisk
+export PATH="$(pwd)/.tools/bin:$PATH"
+```
+
+Now download Perses, select the exact revision supported by this integration,
+and build it. Run these commands from the HarnessMinimizer repository root,
+with the Python environment from step 1 active:
+
+```bash
+mkdir -p .tools/perses
+git clone https://github.com/uw-pluverse/perses.git .tools/perses/source
+git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2
+python tools/perses/install.py --source .tools/perses/source --jobs 2
+java -Xmx4g -jar .tools/perses/perses_deploy.jar --verbosity SEVERE --version
+```
+
+The last command should print the Perses version and exit successfully. The
+clone command is a one-time step and requires that `.tools/perses/source` does
+not already exist. If you already have a separate, clean Perses checkout at
+the required revision, skip cloning and pass its path to `--source` instead.
+The build helper checks the revision and refuses tracked source changes; it
+does not download or switch the source checkout for you.
+
+The first build downloads dependencies and can take some time. `--jobs 2` here
+limits **build** parallelism, not the number of reduction workers. The helper
+installs `.tools/perses/perses_deploy.jar` and records its source revision,
+build command, and fingerprint in `.tools/perses/build_info.json`.
+HarnessReducer finds this JAR automatically; no JAR-path export is needed.
+The `.tools` directory is local and ignored by Git, so each fresh installation
+needs its own build (or a compatible JAR supplied through
+`HARNESSREDUCER_PERSES_JAR`). For later builds in a new shell, repeat the local
+Bazelisk `PATH` export if you used it; Bazelisk is not needed to run the built
+JAR.
+
+Select the engine with `--tool perses`, `--tool wdd`, `--tool cdd`, or
+`--tool sfc`. If you omit `--tool`, HarnessReducer still selects treereduce,
+even if only Perses is installed. Plain Perses, WDD, CDD, and SFC passed the
+C++ integration tests. `--tool vulcan` is also selectable, but the pinned
+Perses version has an unimplemented C++ grammar operation and is not a working
+C++ evaluation option. See [Reduction engines](REDUCTION_ENGINES.md) for the
+exact configurations and limitation.
+
+### 2b. Install treereduce (default)
+
+Skip this section if you only use the Perses engines. If Rust/Cargo is not
+installed, install the stable toolchain and load it into the current shell:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-The steps below provide both a `uv` installation and a `venv`/`pip` installation;
-choose one. For the optional `--llm` stage, also set `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, and `OPENAI_MODEL` to your provider's API key, base URL, and
-model name. These variables are not needed for ordinary reduction.
-
-## Install
-
-Run from the root of the HarnessMinimizer workspace of the host or
-container where reduction will run. With `uv` already available:
+From the repository root, with the Python environment from step 1 active:
 
 ```bash
-python3 tools/treereduce/install.py
+python tools/treereduce/install.py
 export HARNESSREDUCER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
 "$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
-uv sync
-source .venv/bin/activate
-hash -r
-harnessreducer --help
 ```
 
 The verification command must print `1`. The installer downloads a pinned
@@ -87,46 +200,11 @@ override. Running plain `treereduce-c` in your shell may still select a global
 binary. `uv sync` or `pip install` installs the Python package only; it does
 not apply the Rust patch or build treereduce.
 
-`uv sync` installs this repository as an editable package and creates
-`.venv/bin/harnessreducer`. You can also avoid shell activation entirely:
+To install treereduce outside the project folder (requires write access to the
+destination):
 
 ```bash
-uv run harnessreducer --help
-```
-
-If `command -v harnessreducer` still names an older global installation after
-activation, run `hash -r` (Bash) or invoke `.venv/bin/harnessreducer` directly.
-
-### Installation without `uv`
-
-For a system interpreter at
-`/usr/bin/python3`, first confirm that it is Python 3.12 or newer, then run
-these commands from the checkout root:
-
-```bash
-/usr/bin/python3 --version
-/usr/bin/python3 tools/treereduce/install.py
-export HARNESSREDUCER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
-"$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
-/usr/bin/python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-hash -r
-command -v harnessreducer
-harnessreducer --help
-```
-
-The supervisor-version check must print `1`, and the final `command -v` should
-point to `<project>/.venv/bin/harnessreducer`. For a host with Python in a
-different location, use that Python 3.12+ executable in place of
-`/usr/bin/python3`. The prerequisite package commands above include
-`python3-venv` and `python3-pip` if they are missing.
-
-To install at another location (not inside the project folder:)
-
-```bash
-/usr/bin/python3 tools/treereduce/install.py --root /usr/local
+python tools/treereduce/install.py --root /usr/local
 export HARNESSREDUCER_TREEREDUCE=/usr/local/bin/treereduce-c
 "$HARNESSREDUCER_TREEREDUCE" --harnessreducer-supervisor-version
 ```
@@ -139,7 +217,7 @@ export for your chosen executable, or add those commands to your shell setup.
 The repository's Dockerfile installs the patched executable under
 `/usr/local/bin` and sets `HARNESSREDUCER_TREEREDUCE` accordingly.
 
-### Before starting reduction
+### 3. Before starting reduction
 
 Have the harness source, the crash input when needed, and the target library's
 headers and compiled libraries available in the execution environment. Supply
@@ -174,26 +252,10 @@ harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 Module form:
 
 ```bash
-uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
+python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 ```
 
 ## CLI Arguments
-
-To use the additional Perses engines, build once from the repository root:
-
-```bash
-.venv-host/bin/python tools/perses/install.py --source ../perses --jobs 2
-```
-
-Then select `--tool perses` (plain Perses), `--tool wdd`, `--tool cdd`, or
-`--tool sfc`. All use different configurations of the same installed Perses JAR.
-`--tool vulcan` is also selectable, subject to the limitation below.
-These choices need Java 17+ and
-GNU `timeout`, and do not require treereduce. See [Reduction engines](REDUCTION_ENGINES.md)
-for the pinned build, exact evaluation configurations, and profiling details.
-Plain Perses, WDD, CDD, and SFC passed the C++ integration tests. Vulcan is selectable, but
-the pinned Perses version has an unimplemented C++ grammar operation; see the
-documented limitation before using it for an evaluation.
 
 | Argument | Required | Description |
 |---|---:|---|
@@ -669,11 +731,11 @@ During reduction, the work directory may also contain artifacts such as:
 
 ## Performance sweeps and CSV collection
 
-From the repository root, run both compilation/execution configurations with
-the selected reduction engine:
+From the repository root, with the Python environment from installation active,
+run both compilation/execution configurations with the selected reduction engine:
 
 ```bash
-.venv-host/bin/python run_harnessreducer_perf_sweep.py \
+python run_harnessreducer_perf_sweep.py \
   --dir libaom-1 --tool wdd \
   --compile-flags='-I{bench_dir}/build/sanitizer/include' \
   --link-flags='-L{bench_dir}/build/sanitizer/lib -laom'
@@ -701,7 +763,7 @@ interrupted sweep may remain marked `running`.
 Create TXT and CSV reports for the latest run of **each tool** for a benchmark:
 
 ```bash
-.venv-host/bin/python make_harnessreducer_perf_tables.py --dir libaom-1 --all-tools
+python make_harnessreducer_perf_tables.py --dir libaom-1 --all-tools
 ```
 
 For just the latest WDD run, use `--tool wdd` instead of `--all-tools`. With
@@ -743,7 +805,7 @@ run; they cannot be combined with `--all-tools`.
 Collect existing CSV files from the entire `benchmark/library-bug` tree:
 
 ```bash
-.venv-host/bin/python collect_harnessreducer_perf_csvs.py
+python collect_harnessreducer_perf_csvs.py
 ```
 
 This copies regular `.csv` files (case-insensitive), including existing legacy
