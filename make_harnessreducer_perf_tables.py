@@ -575,6 +575,61 @@ def variant_dirs_from_manifest(results_dir: Path) -> dict[str, str]:
     return directories
 
 
+def infer_tool(
+    manifest: dict[str, object],
+    *variants: dict[int, dict[str, object]],
+) -> str:
+    """Use recorded engine identities, never silently compare different tools.
+
+    Pre-engine sweep results have no tool field and used treereduce by default.
+    Explicit identities from manifests, per-job commands, and profiles must agree.
+    This reads metadata only; no engine installation is needed to make tables.
+    """
+    found: set[str] = set()
+
+    def add(value: object) -> None:
+        if value is None:
+            return
+        if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_-]*", value):
+            raise SystemExit(f"invalid recorded tool name: {value!r}")
+        found.add(value)
+
+    def inspect(record: object) -> None:
+        if not isinstance(record, dict):
+            return
+        add(record.get("tool"))
+        command = record.get("command", [])
+        if isinstance(command, list):
+            for index, argument in enumerate(command):
+                if argument == "--tool":
+                    if index + 1 >= len(command):
+                        raise SystemExit("recorded command has --tool without a value")
+                    add(command[index + 1])
+                elif isinstance(argument, str) and argument.startswith("--tool="):
+                    add(argument.partition("=")[2])
+
+    inspect(manifest)
+    runs = manifest.get("runs", [])
+    if isinstance(runs, list):
+        for run in runs:
+            inspect(run)
+    for rows in variants:
+        for row in rows.values():
+            inspect(row.get("run_info"))
+            summary = row.get("summary", {})
+            if isinstance(summary, dict):
+                configuration = summary.get("configuration", {})
+                inspect(configuration)
+                if isinstance(configuration, dict):
+                    inspect(configuration.get("engine"))
+    if len(found) > 1:
+        raise SystemExit(
+            "conflicting reduction tools in these results: " + ", ".join(sorted(found))
+            + ". Select a single-tool sweep using --results-dir."
+        )
+    return next(iter(found), "treereduce")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render TXT and CSV tables from HarnessReducer performance sweep results."
@@ -598,12 +653,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         default=None,
-        help="Output TXT path. Default: <results-dir>/performance_tables_<dir>.txt.",
+        help="Output TXT path. Default: <results-dir>/performance_tables_<tool>_<dir>.txt.",
     )
     parser.add_argument(
         "--csv-output",
         default=None,
-        help="Output CSV path. Default: <results-dir>/performance_comparison_<dir>.csv.",
+        help="Output CSV path. Default: <results-dir>/performance_comparison_<tool>_<dir>.csv.",
     )
     return parser
 
@@ -641,17 +696,18 @@ def main() -> int:
         variant_dirs["split_symbolize"],
         original_harness_path,
     )
+    tool = infer_tool(manifest, optimized, split_symbolize)
 
     output_path = (
         Path(args.output).expanduser().resolve()
         if args.output
-        else results_dir / f"performance_tables_{bench_dir.name}.txt"
+        else results_dir / f"performance_tables_{tool}_{bench_dir.name}.txt"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     csv_output_path = (
         Path(args.csv_output).expanduser().resolve()
         if args.csv_output
-        else results_dir / f"performance_comparison_{bench_dir.name}.csv"
+        else results_dir / f"performance_comparison_{tool}_{bench_dir.name}.csv"
     )
 
     lines = [
@@ -660,6 +716,7 @@ def main() -> int:
         "",
         f"Generated: {datetime.now().astimezone().isoformat()}",
         f"Benchmark: {bench_dir}",
+        f"Tool:      {tool}",
         f"Results:   {results_dir}",
         "",
         "Speedup convention:",

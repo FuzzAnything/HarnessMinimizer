@@ -179,9 +179,16 @@ uv run python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 
 ## CLI Arguments
 
-To use the additional Perses engines, build once with
-`python3 tools/perses/install.py --source ../perses`, then select `--tool perses`, `--tool wdd`,
-`--tool cdd`, `--tool sfc`, or `--tool vulcan`. These choices need Java 17+ and
+To use the additional Perses engines, build once from the repository root:
+
+```bash
+.venv-host/bin/python tools/perses/install.py --source ../perses --jobs 2
+```
+
+Then select `--tool perses` (plain Perses), `--tool wdd`, `--tool cdd`, or
+`--tool sfc`. All use different configurations of the same installed Perses JAR.
+`--tool vulcan` is also selectable, subject to the limitation below.
+These choices need Java 17+ and
 GNU `timeout`, and do not require treereduce. See [Reduction engines](REDUCTION_ENGINES.md)
 for the pinned build, exact evaluation configurations, and profiling details.
 Plain Perses, WDD, CDD, and SFC passed the C++ integration tests. Vulcan is selectable, but
@@ -659,6 +666,73 @@ During reduction, the work directory may also contain artifacts such as:
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
 - If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. By default, inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, inline validation uses the symbolized crash pattern, symbolized stack depth, and recorded crash location.
 - If LLM validation fails, the tool falls back to the non-LLM harness.
+
+## Performance sweeps and CSV collection
+
+From the repository root, run both compilation/execution configurations with
+the selected reduction engine:
+
+```bash
+.venv-host/bin/python run_harnessreducer_perf_sweep.py \
+  --dir libaom-1 --tool wdd \
+  --compile-flags='-I{bench_dir}/build/sanitizer/include' \
+  --link-flags='-L{bench_dir}/build/sanitizer/lib -laom'
+```
+
+Replace `wdd` with `treereduce`, `perses`, `cdd`, or `sfc`. Omitting `--tool`
+uses treereduce. The sweep accepts the same engine choices as the main CLI,
+including Vulcan with its known limitation; selecting it does not fix that
+upstream issue. Build the selected engine before running a timed sweep.
+
+The script substitutes `{bench_dir}` with the benchmark's absolute path. It
+first runs `--pch --amortize-link` without symbolization, then `--split
+--symbolize` without amortized linking. Each configuration uses workers
+`1,2,4,8,16,32,60`, with `--stable --profile` and a separate work directory for
+each case. Use `--jobs 1,2,4` for a smaller sweep. Results are saved under
+`benchmark/library-bug/<benchmark>/harnessreducer-perf-comparison-<tool>-<timestamp>`.
+The manifest and each job's metadata record the selected engine.
+
+Create TXT and CSV reports for the latest sweep of that benchmark:
+
+```bash
+.venv-host/bin/python make_harnessreducer_perf_tables.py --dir libaom-1
+```
+
+The table script does not run a reducer and does not need `--tool`. It reads
+the engine from the saved manifest, per-job metadata/command, or profile
+configuration, and rejects conflicting engine names. Old sweep data without
+engine metadata is treated as treereduce, which was the old sweep's only engine.
+It summarizes one sweep, not all historical sweeps at once. To summarize an older
+engine run, add `--results-dir /absolute/path/to/that/sweep`; the runner prints
+the exact report command after each sweep.
+
+Default reports include both engine and benchmark names, for example:
+
+- `performance_tables_wdd_libaom-1.txt`
+- `performance_comparison_wdd_libaom-1.csv`
+
+The CSV layout remains three rows per matched worker count: optimized,
+non-optimized, and speedup. The timing columns, total checks, original/final
+tokens, and token reduction percentage are unchanged. Time speedups are
+non-optimized / optimized; throughput speedup is optimized / non-optimized.
+Values below 1 are retained if an optimization was slower. Explicit `--output`
+and `--csv-output` paths still override the default report names.
+
+Collect existing CSV files from the entire `benchmark/library-bug` tree:
+
+```bash
+.venv-host/bin/python collect_harnessreducer_perf_csvs.py
+```
+
+This copies regular `.csv` files (case-insensitive), including existing legacy
+reports and engines' internal CSVs, into repository-root `temp/`. Source files
+are unchanged. Different contents with the same filename get `__2`, `__3`, etc.;
+identical copies are reused, so rerunning does not duplicate unchanged files.
+CSV symlinks and symlinked directories are not followed. Each invocation writes
+a unique `csv_collection_*.json` mapping source paths to collected names.
+`temp/` is ignored by Git. Use `--output-dir` to choose another destination
+outside the benchmark tree. Existing CSV contents/names are not rewritten to
+guess an engine; engine-bearing names come from the updated table generator.
 
 ## Reducer throughput baseline
 

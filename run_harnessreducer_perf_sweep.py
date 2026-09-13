@@ -18,6 +18,7 @@ import time
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from harnessreducer.process_supervisor import run_supervised
+from harnessreducer.reduction_engines import TOOL_CHOICES
 
 DEFAULT_JOBS = (1, 2, 4, 8, 16, 32, 60)
 LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
@@ -64,8 +65,8 @@ def parse_jobs(value: str) -> list[int]:
             job = int(item)
         except ValueError as exc:
             raise argparse.ArgumentTypeError(f"invalid job count: {item!r}") from exc
-        if job < 1:
-            raise argparse.ArgumentTypeError("job counts must be positive")
+        if not 1 <= job <= 63:
+            raise argparse.ArgumentTypeError("job counts must be between 1 and 63")
         if job not in jobs:
             jobs.append(job)
     if not jobs:
@@ -176,6 +177,7 @@ def run_case(
     job: int,
     job_dir: Path,
     stable: bool,
+    tool: str = "treereduce",
 ) -> dict[str, object]:
     work_dir = job_dir / "work"
     output_path = job_dir / "reduced.cpp"
@@ -190,6 +192,8 @@ def run_case(
         "-m",
         "harnessreducer.cli",
         harness,
+        "--tool",
+        tool,
         f"--compile-flags={compile_flags}",
         f"--link-flags={link_flags}",
         "--work-dir",
@@ -247,6 +251,7 @@ def run_case(
     )
 
     run_info = {
+        "tool": tool,
         "variant": variant["key"],
         "variant_label": variant["label"],
         "jobs": job,
@@ -287,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compile-flags", required=True)
     parser.add_argument("--link-flags", required=True)
     parser.add_argument(
+        "--tool", choices=TOOL_CHOICES, default="treereduce",
+        help="Reduction engine for both configurations (default: treereduce). Vulcan has a known C++ limitation.",
+    )
+    parser.add_argument(
         "--jobs",
         type=parse_jobs,
         default=list(DEFAULT_JOBS),
@@ -307,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Directory for all results. Default: "
-            "<benchmark>/harnessreducer-perf-comparison-<timestamp>."
+            "<benchmark>/harnessreducer-perf-comparison-<tool>-<timestamp>."
         ),
     )
     parser.add_argument(
@@ -344,11 +353,11 @@ def main() -> int:
     assert compile_flags is not None
     assert link_flags is not None
 
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     output_root = (
         Path(args.output_root).expanduser()
         if args.output_root
-        else bench_dir / f"harnessreducer-perf-comparison-{timestamp}"
+        else bench_dir / f"harnessreducer-perf-comparison-{args.tool}-{timestamp}"
     ).resolve()
     if output_root.exists():
         raise SystemExit(f"output directory already exists: {output_root}")
@@ -356,7 +365,8 @@ def main() -> int:
 
     stable = not args.no_stable
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "tool": args.tool,
         "created": datetime.now().astimezone().isoformat(),
         "benchmark_dir": str(bench_dir),
         "harness": args.harness,
@@ -382,6 +392,7 @@ def main() -> int:
     )
 
     print(f"Benchmark: {bench_dir}")
+    print(f"Tool:      {args.tool}")
     print(f"Results:   {output_root}")
     print(f"Python:    {args.python}")
     print(f"Jobs:      {','.join(str(job) for job in args.jobs)}")
@@ -404,6 +415,7 @@ def main() -> int:
                 job=job,
                 job_dir=job_dir,
                 stable=stable,
+                tool=args.tool,
             )
             manifest["runs"].append(run_info)  # type: ignore[index]
             manifest_path.write_text(
@@ -425,8 +437,11 @@ def main() -> int:
 
     (bench_dir / LATEST_MARKER_NAME).write_text(str(output_root) + "\n", encoding="utf-8")
     print(f"Latest-run marker: {bench_dir / LATEST_MARKER_NAME}")
-    print("Create the TXT tables with:")
-    print(f"  ./make_harnessreducer_perf_tables.py --dir {bench_dir.name}")
+    print("Create the TXT and CSV tables with:")
+    print("  " + shell_command([
+        args.python, str(PROJECT_ROOT / "make_harnessreducer_perf_tables.py"),
+        "--dir", str(bench_dir), "--results-dir", str(output_root),
+    ]))
     return 1 if failed else 0
 
 
