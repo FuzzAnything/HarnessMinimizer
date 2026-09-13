@@ -22,6 +22,7 @@ from harnessreducer.reduction_engines import TOOL_CHOICES
 
 DEFAULT_JOBS = (1, 2, 4, 8, 16, 32, 60)
 LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
+TOOL_MARKER_TEMPLATE = "latest_harnessreducer_perf_run_{tool}.txt"
 SOURCE_TOKEN_COUNT_METHOD = "cpp_like_regex_v1"
 SOURCE_TOKEN_RE = re.compile(
     r"""
@@ -367,6 +368,7 @@ def main() -> int:
     manifest: dict[str, object] = {
         "schema_version": 2,
         "tool": args.tool,
+        "status": "running",
         "created": datetime.now().astimezone().isoformat(),
         "benchmark_dir": str(bench_dir),
         "harness": args.harness,
@@ -390,6 +392,10 @@ def main() -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    # Publish at start, so a failed/interrupted newer run is not hidden by an
+    # older successful run. These pointers also locate custom --output-root paths.
+    for marker_name in (LATEST_MARKER_NAME, TOOL_MARKER_TEMPLATE.format(tool=args.tool)):
+        (bench_dir / marker_name).write_text(str(output_root) + "\n", encoding="utf-8")
 
     print(f"Benchmark: {bench_dir}")
     print(f"Tool:      {args.tool}")
@@ -435,8 +441,11 @@ def main() -> int:
         if failed and not args.keep_going:
             break
 
-    (bench_dir / LATEST_MARKER_NAME).write_text(str(output_root) + "\n", encoding="utf-8")
-    print(f"Latest-run marker: {bench_dir / LATEST_MARKER_NAME}")
+    manifest["status"] = "failed" if failed else "completed"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    print(f"Latest-tool marker: {bench_dir / TOOL_MARKER_TEMPLATE.format(tool=args.tool)}")
     print("Create the TXT and CSV tables with:")
     print("  " + shell_command([
         args.python, str(PROJECT_ROOT / "make_harnessreducer_perf_tables.py"),

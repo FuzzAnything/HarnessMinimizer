@@ -690,21 +690,42 @@ first runs `--pch --amortize-link` without symbolization, then `--split
 `1,2,4,8,16,32,60`, with `--stable --profile` and a separate work directory for
 each case. Use `--jobs 1,2,4` for a smaller sweep. Results are saved under
 `benchmark/library-bug/<benchmark>/harnessreducer-perf-comparison-<tool>-<timestamp>`.
-The manifest and each job's metadata record the selected engine.
+The manifest and each job's metadata record the selected engine. The runner also
+writes `latest_harnessreducer_perf_run_<tool>.txt` under the benchmark directory,
+alongside the old global marker. These markers point to result directories,
+including custom `--output-root` locations; the existing directory layout does
+not change. Markers are written when a sweep starts. The manifest records
+`running`, then `completed` or `failed` when the sweep exits normally; an
+interrupted sweep may remain marked `running`.
 
-Create TXT and CSV reports for the latest sweep of that benchmark:
+Create TXT and CSV reports for the latest run of **each tool** for a benchmark:
 
 ```bash
-.venv-host/bin/python make_harnessreducer_perf_tables.py --dir libaom-1
+.venv-host/bin/python make_harnessreducer_perf_tables.py --dir libaom-1 --all-tools
 ```
 
-The table script does not run a reducer and does not need `--tool`. It reads
-the engine from the saved manifest, per-job metadata/command, or profile
-configuration, and rejects conflicting engine names. Old sweep data without
-engine metadata is treated as treereduce, which was the old sweep's only engine.
-It summarizes one sweep, not all historical sweeps at once. To summarize an older
-engine run, add `--results-dir /absolute/path/to/that/sweep`; the runner prints
-the exact report command after each sweep.
+For just the latest WDD run, use `--tool wdd` instead of `--all-tools`. With
+neither option, the script retains single-report usage and selects the latest
+run overall. Repository-root `command.txt` contains a loop over benchmarks using
+`--all-tools`; it does not generate reports for every historical run.
+
+The table script does not run a reducer. It reads the engine from saved
+manifest/job/profile metadata and rejects conflicting names. Old data without
+engine metadata is treated as treereduce, the old sweep's only engine. Latest
+runs are chosen by the manifest's recorded start time, with the timestamp in
+the directory name as the legacy fallback. Thus, generating a report in an
+older folder does not make that run newer. For old custom folders with neither
+timestamp, the manifest's modification time (or directory time if no manifest
+exists) is the last-resort ordering. Both old and new directory names are
+supported; stale pointers to missing directories are ignored.
+
+"Latest" means the newest run, not the newest successful run. A latest sweep
+that is incomplete or recorded as failed produces an error rather than silently
+substituting an older result. With `--all-tools`, other tools still get their
+reports, and the command exits nonzero if any selected run fails. Benchmarks
+without any saved sweeps are skipped. To explicitly report an older run, use
+`--results-dir /absolute/path/to/that/sweep`; an accompanying `--tool` checks its
+recorded identity. The runner also prints that exact-run report command.
 
 Default reports include both engine and benchmark names, for example:
 
@@ -716,7 +737,8 @@ non-optimized, and speedup. The timing columns, total checks, original/final
 tokens, and token reduction percentage are unchanged. Time speedups are
 non-optimized / optimized; throughput speedup is optimized / non-optimized.
 Values below 1 are retained if an optimization was slower. Explicit `--output`
-and `--csv-output` paths still override the default report names.
+and `--csv-output` paths still override the default report names for a single
+run; they cannot be combined with `--all-tools`.
 
 Collect existing CSV files from the entire `benchmark/library-bug` tree:
 
@@ -733,6 +755,9 @@ a unique `csv_collection_*.json` mapping source paths to collected names.
 `temp/` is ignored by Git. Use `--output-dir` to choose another destination
 outside the benchmark tree. Existing CSV contents/names are not rewritten to
 guess an engine; engine-bearing names come from the updated table generator.
+Selecting latest runs for report generation does not delete historical reports.
+The collector still collects **all existing CSV files**, including older reports
+already on disk; it does not itself filter to the latest runs.
 
 ## Reducer throughput baseline
 

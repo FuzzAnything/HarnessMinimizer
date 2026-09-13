@@ -45,5 +45,6 @@ latest_profile_split_symbolize_path.txt
 
 harnessreducer-perf-comparison*/
 latest_harnessreducer_perf_run.txt
+latest_harnessreducer_perf_run_*.txt
 performance-csvs*
 /temp/

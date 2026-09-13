@@ -2,6 +2,7 @@
 
 import csv
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -59,6 +60,10 @@ def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
         output = Path(command[command.index("-o") + 1])
         work = Path(command[command.index("--work-dir") + 1])
         assert work == output.parent / "work"
+        sweep_root = output.parents[2]
+        assert json.loads((sweep_root / "run_manifest.json").read_text())["status"] == "running"
+        marker = bench / sweep.TOOL_MARKER_TEMPLATE.format(tool=tool)
+        assert marker.read_text().strip() == str(sweep_root)
         output.write_text("int main() { return 0; }\n")
         write_json(output.parent / "reduction_profile.json", profile(tool, optimized))
         return subprocess.CompletedProcess(command, 0)
@@ -75,6 +80,7 @@ def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
     manifest = json.loads((root / "run_manifest.json").read_text())
     assert manifest["schema_version"] == 2
     assert manifest["tool"] == tool
+    assert manifest["status"] == "completed"
     assert {run["tool"] for run in manifest["runs"]} == {tool}
     assert len({run["work_dir"] for run in manifest["runs"]}) == 4
     for run in manifest["runs"]:
@@ -223,3 +229,156 @@ def test_collector_default_paths_do_not_depend_on_working_directory(tmp_path, mo
     monkeypatch.setattr(sys, "argv", ["collect"])
     assert collector.main() == 0
     assert (root / "temp/values.csv").is_file()
+
+
+def saved_sweep(bench, name, tool="wdd", created="2026-09-01T00:00:00+00:00", status="completed"):
+    bench.mkdir(parents=True, exist_ok=True)
+    (bench / "harness.cpp").write_text("int original; int main() { return 0; }")
+    root = bench / name
+    root.mkdir(parents=True)
+    write_json(root / "run_manifest.json", {
+        "tool": tool, "created": created, "status": status, "jobs": [1],
+    })
+    for variant in ("optimized", "split-symbolize"):
+        job = root / variant / "jobs-1"
+        job.mkdir(parents=True)
+        write_json(job / "reduction_profile.json", profile(tool, variant == "optimized"))
+        (job / "reduced.cpp").write_text("int main() { return 0; }")
+        (job / "full_command_wall_seconds.txt").write_text("12.0")
+    return root
+
+
+def test_latest_per_tool_reports_only_newest_and_ignores_report_mtime(tmp_path, monkeypatch):
+    bench = tmp_path / "libaom-1"
+    old_runs = {}
+    new_runs = {}
+    for index, tool in enumerate(("treereduce", "perses", "wdd", "cdd", "sfc")):
+        old_runs[tool] = saved_sweep(bench, f"harnessreducer-perf-comparison-{tool}-old", tool)
+        new_runs[tool] = saved_sweep(
+            bench, f"harnessreducer-perf-comparison-{tool}-new", tool,
+            created=f"2026-09-02T0{index}:00:00+00:00",
+        )
+        # Rewriting an old report must not make that sweep become the latest.
+        os.utime(old_runs[tool], (2_000_000_000, 2_000_000_000))
+    (bench / sweep.LATEST_MARKER_NAME).write_text(str(old_runs["perses"]))
+    (bench / sweep.TOOL_MARKER_TEMPLATE.format(tool="wdd")).write_text(str(old_runs["wdd"]))
+    assert tables.latest_results_by_tool(bench) == new_runs
+    assert tables.latest_results_dir(bench) == new_runs["sfc"]
+
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench), "--tool", "wdd"])
+    assert tables.main() == 0
+    assert len(list(bench.glob("*/performance_comparison_*.csv"))) == 1
+    assert (new_runs["wdd"] / "performance_comparison_wdd_libaom-1.csv").is_file()
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench), "--all-tools"])
+    assert tables.main() == 0
+    for tool, root in new_runs.items():
+        assert (root / f"performance_comparison_{tool}_libaom-1.csv").is_file()
+        assert (root / f"performance_tables_{tool}_libaom-1.txt").is_file()
+    for root in old_runs.values():
+        assert not list(root.glob("performance_*"))
+    assert tables.latest_results_by_tool(bench) == new_runs
+
+
+def test_latest_markers_find_custom_paths_and_skip_stale_markers(tmp_path):
+    bench = tmp_path / "libaom-1"
+    bench.mkdir()
+    external = tmp_path / "external"
+    wdd = saved_sweep(external, "custom wdd path")
+    perses = saved_sweep(external, "custom perses path", "perses")
+    for tool, root in (("wdd", wdd), ("perses", perses)):
+        (bench / sweep.TOOL_MARKER_TEMPLATE.format(tool=tool)).write_text(str(root))
+    (bench / sweep.LATEST_MARKER_NAME).write_text(str(wdd))
+    (bench / sweep.TOOL_MARKER_TEMPLATE.format(tool="sfc")).write_text(str(tmp_path / "deleted"))
+    (bench / sweep.TOOL_MARKER_TEMPLATE.format(tool="cdd")).write_text("\n")
+    assert tables.latest_results_by_tool(bench) == {"perses": perses, "wdd": wdd}
+
+
+def test_latest_legacy_falls_back_to_directory_timestamp_and_profile_tool(tmp_path):
+    bench = tmp_path / "libaom-1"
+    roots = []
+    for date in ("20200101", "20200102"):
+        root = saved_sweep(bench, f"harnessreducer-perf-comparison-{date}-010203", "treereduce")
+        (root / "run_manifest.json").unlink()
+        for variant in ("optimized", "split-symbolize"):
+            data = profile("treereduce", variant == "optimized")
+            del data["configuration"]
+            write_json(root / variant / "jobs-1/reduction_profile.json", data)
+        roots.append(root)
+    os.utime(roots[0], (2_000_000_000, 2_000_000_000))
+    only_profile = saved_sweep(bench, "harnessreducer-perf-comparison-20200103-010203", "cdd")
+    (only_profile / "run_manifest.json").unlink()
+    assert tables.latest_results_by_tool(bench) == {"treereduce": roots[1], "cdd": only_profile}
+
+
+@pytest.mark.parametrize("status", ["running", "failed"])
+def test_newest_incomplete_run_is_not_replaced_with_older_success(tmp_path, monkeypatch, capsys, status):
+    bench = tmp_path / "libaom-1"
+    older = saved_sweep(bench, "harnessreducer-perf-comparison-wdd-older")
+    latest = bench / "harnessreducer-perf-comparison-wdd-latest"
+    latest.mkdir()
+    write_json(latest / "run_manifest.json", {
+        "tool": "wdd", "created": "2026-09-02T00:00:00+00:00", "status": status,
+    })
+    other_tool = saved_sweep(bench, "harnessreducer-perf-comparison-sfc-good", "sfc")
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench), "--all-tools"])
+    assert tables.main() == 1
+    assert "not marked completed" in capsys.readouterr().err
+    assert not list(older.glob("performance_*"))
+    assert not list(latest.glob("performance_*"))
+    assert (other_tool / "performance_comparison_sfc_libaom-1.csv").is_file()
+    assert tables.latest_results_dir(bench, "wdd") == latest
+
+
+def test_legacy_partial_worker_sweep_does_not_silently_make_partial_comparison(tmp_path, monkeypatch):
+    bench = tmp_path / "libaom-1"
+    root = saved_sweep(bench, "harnessreducer-perf-comparison-partial")
+    write_json(root / "run_manifest.json", {"tool": "wdd", "jobs": [1, 2]})
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench), "--tool", "wdd"])
+    with pytest.raises(SystemExit, match="not all requested worker"):
+        tables.main()
+    assert not list(root.glob("performance_*"))
+
+
+def test_explicit_results_tool_must_match_and_all_tools_disallows_single_output(tmp_path, monkeypatch):
+    bench = tmp_path / "libaom-1"
+    root = saved_sweep(bench, "harnessreducer-perf-comparison-wdd-example")
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench), "--tool", "perses", "--results-dir", str(root)])
+    with pytest.raises(SystemExit, match="requested tool perses, but results record wdd"):
+        tables.main()
+    base = ["tables", "--dir", str(bench), "--all-tools"]
+    for extra in (["--results-dir", str(root)], ["--output", "one.txt"], ["--csv-output", "one.csv"], ["--tool", "wdd"]):
+        monkeypatch.setattr(sys, "argv", base + extra)
+        with pytest.raises(SystemExit):
+            tables.main()
+    assert not list(root.glob("performance_*"))
+
+
+def test_latest_empty_benchmark_skips_all_but_explicit_tool_errors(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(tmp_path), "--all-tools"])
+    assert tables.main() == 0
+    monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(tmp_path), "--tool", "wdd"])
+    with pytest.raises(SystemExit, match="no performance result"):
+        tables.main()
+
+
+def test_runner_publishes_per_tool_marker_even_when_sweep_fails(tmp_path, monkeypatch):
+    bench = tmp_path / "libaom-1"
+    bench.mkdir()
+    (bench / "harness.cpp").write_text("int main() {}")
+    (bench / "crash-input").write_bytes(b"input")
+    external = tmp_path / "custom results"
+
+    def fail(command, **kwargs):
+        marker = bench / sweep.TOOL_MARKER_TEMPLATE.format(tool="wdd")
+        assert marker.read_text().strip() == str(external)
+        assert json.loads((external / "run_manifest.json").read_text())["status"] == "running"
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(sweep, "run_supervised", fail)
+    monkeypatch.setattr(sys, "argv", [
+        "sweep", "--dir", str(bench), "--tool", "wdd", "--jobs", "1",
+        "--compile-flags=", "--link-flags=", "--output-root", str(external),
+    ])
+    assert sweep.main() == 1
+    assert json.loads((external / "run_manifest.json").read_text())["status"] == "failed"
+    assert tables.latest_results_dir(bench, "wdd") == external

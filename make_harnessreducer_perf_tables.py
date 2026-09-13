@@ -9,11 +9,13 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Iterable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
+TOOL_MARKER_GLOB = "latest_harnessreducer_perf_run_*.txt"
 DEFAULT_VARIANT_DIRS = {
     "optimized": "optimized",
     "split_symbolize": "split-symbolize",
@@ -52,23 +54,84 @@ def benchmark_dir(value: str) -> Path:
     )
 
 
-def latest_results_dir(bench_dir: Path) -> Path:
-    marker = bench_dir / LATEST_MARKER_NAME
-    if marker.is_file():
-        path = Path(marker.read_text(encoding="utf-8").strip()).expanduser()
-        if path.exists():
-            return path.resolve()
+def result_directories(bench_dir: Path) -> list[Path]:
+    candidates = {path.resolve() for path in bench_dir.glob("harnessreducer-perf-comparison-*") if path.is_dir()}
+    # Include old/global and new/per-tool markers, including custom output roots.
+    for marker in [bench_dir / LATEST_MARKER_NAME, *sorted(bench_dir.glob(TOOL_MARKER_GLOB))]:
+        if marker.is_file():
+            value = marker.read_text(encoding="utf-8").strip()
+            if not value:
+                continue
+            path = Path(value).expanduser()
+            if not path.is_absolute():
+                path = bench_dir / path
+            if path.is_dir():
+                candidates.add(path.resolve())
+    return sorted(candidates)
 
-    candidates = sorted(
-        bench_dir.glob("harnessreducer-perf-comparison-*"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if candidates:
-        return candidates[0].resolve()
+
+def run_start_key(results_dir: Path) -> tuple[float, str]:
+    """Report writes change directory mtime, so prefer the recorded run start."""
+    manifest = read_json_if_exists(results_dir / "run_manifest.json")
+    created = manifest.get("created")
+    if isinstance(created, str):
+        try:
+            return datetime.fromisoformat(created).timestamp(), str(results_dir)
+        except (ValueError, OverflowError):
+            pass
+    match = re.search(r"(\d{8}-\d{6}(?:-\d{6})?)$", results_dir.name)
+    if match:
+        for pattern in ("%Y%m%d-%H%M%S-%f", "%Y%m%d-%H%M%S"):
+            try:
+                return datetime.strptime(match[1], pattern).timestamp(), str(results_dir)
+            except ValueError:
+                pass
+    # Last resort for old custom names without timestamps: prefer the manifest's
+    # mtime, which generating a report does not change, to the directory's mtime.
+    manifest_path = results_dir / "run_manifest.json"
+    dated_path = manifest_path if manifest_path.is_file() else results_dir
+    return dated_path.stat().st_mtime, str(results_dir)
+
+
+def recorded_tool(results_dir: Path) -> str:
+    manifest_path = results_dir / "run_manifest.json"
+    manifest = read_json(manifest_path) if manifest_path.is_file() else {}
+    if not isinstance(manifest, dict):
+        raise SystemExit(f"invalid run manifest: {manifest_path}")
+    # A manifest can identify an incomplete run before any profile exists.
+    if manifest.get("tool") is not None:
+        return infer_tool(manifest)
+    # Older sweeps may record the tool only in their job metadata/profiles.
+    rows = {}
+    for directory in variant_dirs_from_manifest(results_dir).values():
+        for job_dir in sorted((results_dir / directory).glob("jobs-*")):
+            rows[len(rows)] = {
+                "run_info": read_json_if_exists(job_dir / "run_info.json"),
+                "summary": read_json_if_exists(job_dir / "reduction_profile.json"),
+            }
+    return infer_tool(manifest, rows)
+
+
+def latest_results_by_tool(bench_dir: Path) -> dict[str, Path]:
+    latest: dict[str, Path] = {}
+    for path in sorted(result_directories(bench_dir), key=run_start_key):
+        latest[recorded_tool(path)] = path
+    return latest
+
+
+def latest_results_dir(bench_dir: Path, tool: str | None = None) -> Path:
+    if tool is None:
+        candidates = result_directories(bench_dir)
+        if candidates:
+            return max(candidates, key=run_start_key)
+    else:
+        candidate = latest_results_by_tool(bench_dir).get(tool)
+        if candidate is not None:
+            return candidate
     raise SystemExit(
-        f"no performance result directory found for {bench_dir}. "
-        "Run run_harnessreducer_perf_sweep.py first, or pass --results-dir."
+        f"no performance result directory found for {bench_dir}"
+        + (f" with tool {tool}" if tool else "")
+        + ". Run run_harnessreducer_perf_sweep.py first, or pass --results-dir."
     )
 
 
@@ -647,8 +710,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Result directory created by run_harnessreducer_perf_sweep.py. "
-            "Default: latest marker under the selected benchmark."
+            "Overrides latest-run selection; without it, select by recorded run start time."
         ),
+    )
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--tool", default=None,
+        help="Report the latest sweep for this tool; with --results-dir, verify its recorded tool matches.",
+    )
+    selection.add_argument(
+        "--all-tools", action="store_true",
+        help="Report only the latest sweep for each tool available for this benchmark.",
     )
     parser.add_argument(
         "--output",
@@ -663,18 +735,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    bench_dir = benchmark_dir(args.dir)
-    results_dir = (
-        Path(args.results_dir).expanduser().resolve()
-        if args.results_dir
-        else latest_results_dir(bench_dir)
-    )
+def validate_sweep(
+    manifest: dict[str, object],
+    optimized: dict[int, dict[str, object]],
+    split_symbolize: dict[int, dict[str, object]],
+) -> None:
+    requested_jobs = manifest.get("jobs")
+    if isinstance(requested_jobs, list):
+        expected = {int(job) for job in requested_jobs}
+        if set(optimized) != expected or set(split_symbolize) != expected:
+            raise SystemExit("incomplete sweep: not all requested worker counts have both configurations")
+    for rows in (optimized, split_symbolize):
+        for row in rows.values():
+            run_info = row.get("run_info", {})
+            for record in (run_info, get_reducer(row)):
+                if isinstance(record, dict) and record.get("returncode") not in (None, 0):
+                    raise SystemExit(f"failed run: {row['job_dir']}; not reporting it as a successful comparison")
+            if manifest.get("status") == "completed" and row.get("final_size") is None:
+                raise SystemExit(f"incomplete run: missing reduced.cpp in {row['job_dir']}")
+
+
+def write_reports(bench_dir: Path, results_dir: Path, args: argparse.Namespace) -> int:
     if not results_dir.is_dir():
         raise SystemExit(f"results directory not found: {results_dir}")
 
     manifest = read_json_if_exists(results_dir / "run_manifest.json")
+    if manifest.get("status") not in (None, "completed"):
+        raise SystemExit(
+            f"sweep is not marked completed (status={manifest['status']}): {results_dir}. "
+            "No older run has been substituted."
+        )
     harness_name = str(manifest.get("harness", "harness.cpp"))
     harness_path = Path(harness_name).expanduser()
     original_harness_path = (
@@ -697,6 +787,9 @@ def main() -> int:
         original_harness_path,
     )
     tool = infer_tool(manifest, optimized, split_symbolize)
+    if args.tool is not None and args.tool != tool:
+        raise SystemExit(f"requested tool {args.tool}, but results record {tool}: {results_dir}")
+    validate_sweep(manifest, optimized, split_symbolize)
 
     output_path = (
         Path(args.output).expanduser().resolve()
@@ -804,6 +897,36 @@ def main() -> int:
     print(output_path)
     print(csv_output_path)
     return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.all_tools and any((args.results_dir, args.output, args.csv_output)):
+        parser.error("--all-tools cannot be combined with --results-dir, --output, or --csv-output")
+    if args.tool is not None and not re.fullmatch(r"[a-z][a-z0-9_-]*", args.tool):
+        parser.error("invalid --tool name")
+    bench_dir = benchmark_dir(args.dir)
+    if not args.all_tools:
+        results_dir = (
+            Path(args.results_dir).expanduser().resolve()
+            if args.results_dir else latest_results_dir(bench_dir, args.tool)
+        )
+        return write_reports(bench_dir, results_dir, args)
+
+    latest = latest_results_by_tool(bench_dir)
+    if not latest:
+        print(f"No performance sweeps found for {bench_dir}; skipped.")
+        return 0
+    failed = False
+    for tool, results_dir in sorted(latest.items()):
+        print(f"Latest {tool}: {results_dir}")
+        try:
+            write_reports(bench_dir, results_dir, args)
+        except (SystemExit, OSError, ValueError) as exc:
+            print(f"Report failed for {tool}: {exc}", file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
