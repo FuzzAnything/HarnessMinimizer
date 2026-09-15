@@ -8,7 +8,8 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import chdir, nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -120,18 +121,112 @@ class TestPersesAdapter(unittest.TestCase):
             candidate_dir = root / "separate candidate directory"
             candidate_dir.mkdir()
             candidate = candidate_dir / "candidate.cpp"
-            quoted_flags = "--compile-flags=-I/a path -DMSG=\"hi there\";$(touch never-created)"
+            quoted_flags = "--compile-flags=-I/a path -DMSG=\"hi there\";$(touch never-created);@@.cpp"
             script = candidate_dir / "interesting.sh"
-            write_perses_test_script(script, [str(checker), CANDIDATE_PLACEHOLDER, str(arguments), quoted_flags])
+            write_perses_test_script(
+                script, [str(checker), CANDIDATE_PLACEHOLDER, str(arguments), quoted_flags],
+                checker_cwd=root,
+            )
             for result_code in (77, 1, -1, 0, 2, 124):
                 with self.subTest(result=result_code):
                     candidate.write_text(str(result_code))
                     proc = run_supervised(["/bin/sh", str(script)], cwd=candidate_dir, timeout=5)
                     self.assertEqual(proc.returncode, 0 if result_code == 77 else 1)
-                    self.assertEqual(json.loads(arguments.read_text()), ["./candidate.cpp", str(arguments), quoted_flags])
+                    self.assertEqual(json.loads(arguments.read_text()), [str(candidate), str(arguments), quoted_flags])
             candidate.unlink()
             self.assertNotEqual(run_supervised(["/bin/sh", str(script)], cwd=candidate_dir).returncode, 0)
             self.assertFalse((candidate_dir / "never-created").exists())
+            self.assertFalse((root / "never-created").exists())
+
+    def test_relative_data_and_current_candidates_with_parallel_workers(self):
+        with tempfile.TemporaryDirectory(prefix="adapter $ ' ") as tmp:
+            root = Path(tmp)
+            benchmark = root / "original invocation directory"
+            (benchmark / "data" / "nested").mkdir(parents=True)
+            resource = benchmark / "data" / "nested" / "value.txt"
+            resource.write_text("ready")
+            (root / "shared.txt").write_text("shared")
+            # A stale original must never be substituted for the current file.
+            (benchmark / "candidate.cpp").write_text("77")
+            checker = root / "checker.py"
+            checker.write_text(
+                "import json, sys\nfrom pathlib import Path\n"
+                "candidate = Path(sys.argv[1])\n"
+                "assert candidate.is_absolute()\n"
+                "(candidate.parent / 'observed.json').write_text(json.dumps({\n"
+                "    'cwd': str(Path.cwd()), 'candidate': str(candidate),\n"
+                "    'content': candidate.read_text()}))\n"
+                "if not Path('data/nested/value.txt').is_file(): sys.exit(1)\n"
+                "assert Path('data/nested/value.txt').read_text() == 'ready'\n"
+                "assert Path('../shared.txt').read_text() == 'shared'\n"
+                "sys.exit(int(candidate.read_text()))\n"
+            )
+            template = root / "interesting.sh"
+            with chdir(benchmark):
+                write_perses_test_script(template, [str(checker), CANDIDATE_PLACEHOLDER])
+            parent_cwd = Path.cwd()
+            candidates = []
+            for index, code in enumerate((77, 1, -1, 77)):
+                directory = root / f"worker {index} ' $(touch forbidden)"
+                directory.mkdir()
+                candidate = directory / "candidate.cpp"
+                candidate.write_text(str(code))
+                shutil.copy2(template, directory / "interesting.sh")
+                candidates.append((directory, code))
+
+            def run_candidate(item):
+                directory, code = item
+                # A stale inherited PWD must not redirect the candidate lookup.
+                result = run_supervised(
+                    ["/bin/sh", "interesting.sh"], cwd=directory, timeout=5,
+                    env={**os.environ, "PWD": str(benchmark)},
+                )
+                return directory, code, result.returncode
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                for directory, code, result_code in pool.map(run_candidate, candidates):
+                    self.assertEqual(result_code, 0 if code == 77 else 1)
+                    self.assertEqual(json.loads((directory / "observed.json").read_text()), {
+                        "cwd": str(benchmark), "candidate": str(directory / "candidate.cpp"),
+                        "content": str(code),
+                    })
+            self.assertEqual(Path.cwd(), parent_cwd)
+            self.assertEqual(resource.read_text(), "ready")
+            directory, _ = candidates[0]
+            (directory / "candidate.cpp").write_text("1")
+            self.assertEqual(run_candidate((directory, 1))[2], 1)
+            (directory / "candidate.cpp").write_text("77")
+            resource.unlink()
+            self.assertEqual(run_candidate((directory, 77))[2], 1)
+            (directory / "candidate.cpp").unlink()
+            self.assertEqual(run_candidate((directory, 77))[2], 1)
+            self.assertEqual((benchmark / "candidate.cpp").read_text(), "77")
+            self.assertFalse((benchmark / "forbidden").exists())
+
+    def test_missing_original_directory_rejects_before_invoking_checker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original_cwd = root / "original"
+            original_cwd.mkdir()
+            (root / "candidate.cpp").write_text("unused")
+            checker = root / "checker.py"
+            checker.write_text("raise AssertionError('checker must not run')\n")
+            script = root / "interesting.sh"
+            write_perses_test_script(
+                script, [str(checker), CANDIDATE_PLACEHOLDER], checker_cwd=original_cwd,
+            )
+            original_cwd.rmdir()
+            result = run_supervised(
+                ["/bin/sh", str(script)], cwd=root, timeout=5,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("AssertionError", result.stderr)
+            self.assertIn(str(original_cwd), result.stderr)
+            with self.assertRaisesRegex(ValueError, "Checker working directory does not exist"):
+                write_perses_test_script(
+                    script, [str(checker), CANDIDATE_PLACEHOLDER], checker_cwd=original_cwd,
+                )
 
     def test_timeout_cleans_up_supervised_checker_descendants(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,11 +238,16 @@ class TestPersesAdapter(unittest.TestCase):
                 "import sys\nfrom harnessreducer.process_supervisor import run_supervised\n"
                 f"run_supervised([sys.executable, '-c', {child_code!r}], timeout=None)\n",
             )
-            (root / "candidate.cpp").write_text("unused")
-            script = root / "interesting.sh"
-            write_perses_test_script(script, [str(checker), CANDIDATE_PLACEHOLDER], timeout_seconds=1)
+            candidate_dir = root / "candidate directory"
+            candidate_dir.mkdir()
+            (candidate_dir / "candidate.cpp").write_text("unused")
+            script = candidate_dir / "interesting.sh"
+            write_perses_test_script(
+                script, [str(checker), CANDIDATE_PLACEHOLDER],
+                timeout_seconds=1, checker_cwd=root,
+            )
             start = time.monotonic()
-            result = run_supervised(["/bin/sh", str(script)], cwd=root, timeout=5)
+            result = run_supervised(["/bin/sh", str(script)], cwd=candidate_dir, timeout=5)
             self.assertNotEqual(result.returncode, 0)
             self.assertLess(time.monotonic() - start, 5)
             self.assertTrue(child_pid.is_file(), "The test must actually launch a descendant")
@@ -179,6 +279,7 @@ class TestPersesAdapter(unittest.TestCase):
             self.assertEqual(original.read_text(), "int original;")
             metadata = json.loads((root / "reduction_engine.json").read_text())
             self.assertEqual(metadata["perses"]["source_commit"], PERSES_COMMIT)
+            self.assertEqual(metadata["checker_working_directory"], str(Path.cwd()))
 
     @patch("harnessreducer.reduction_engines.check_perses", side_effect=lambda: fake_runtime())
     def test_upstream_vulcan_failure_is_not_treated_as_success(self, _probe):
@@ -252,6 +353,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                 checker = metadata["checker_command"]
                 self.assertEqual("--check-reference-file" in checker, diagnostic)
                 self.assertEqual(metadata["tool"], "cdd")
+                self.assertEqual(metadata["checker_working_directory"], str(Path.cwd()))
                 if not diagnostic:
                     profile = json.loads((root / "reduction_profile.json").read_text())
                     self.assertEqual(profile["configuration"]["tool"], "cdd")
@@ -292,7 +394,9 @@ class TestEngineRunnerRouting(unittest.TestCase):
                     str(source), str(root / "trace.log"), "pattern", None, None,
                     str(root / "input.bin"), tool="perses", phase3_mode="pch", amortize_link=True,
                 )
-            checker = json.loads((root / "reduction_engine.json").read_text())["checker_command"]
+            metadata = json.loads((root / "reduction_engine.json").read_text())
+            self.assertEqual(metadata["checker_working_directory"], str(Path.cwd()))
+            checker = metadata["checker_command"]
             self.assertEqual(checker[checker.index("--pch-path") + 1], str(pch))
             self.assertEqual(checker[checker.index("--amortized-runner-socket") + 1], socket)
             self.assertEqual(checker[checker.index("--fdp-trace") + 1], str(root / "trace.log"))

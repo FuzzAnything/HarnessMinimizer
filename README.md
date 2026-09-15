@@ -225,6 +225,12 @@ their include paths with `--compile-flags` and their library paths/names with
 `--link-flags`, as shown below. The tool builds its native persistent runner
 when `--amortize-link` is requested; there is no separate runner install step.
 
+If your harness opens data files using relative paths, run HarnessReducer from
+the directory where those paths work for the original harness. Perses, WDD,
+CDD, and SFC keep candidate files in private directories, but their checker
+executes from that original invocation directory. This also applies without
+`--amortize-link`; it does not require copying data into each candidate folder.
+
 HarnessReducer automatically isolates external LLVM symbolizers from the
 target library directories it adds to `LD_LIBRARY_PATH`. This prevents a
 symbolizer that depends on libcurl, for example, from loading the instrumented

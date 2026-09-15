@@ -180,6 +180,7 @@ def check_perses() -> PersesRuntime:
 
 def write_perses_test_script(
     path: Path, checker_command: list[str], *, timeout_seconds: float = 300,
+    checker_cwd: Path | None = None,
 ) -> None:
     if checker_command.count(CANDIDATE_PLACEHOLDER) != 1:
         raise ValueError("The checker command must contain exactly one candidate placeholder")
@@ -188,10 +189,10 @@ def write_perses_test_script(
     timeout = shutil.which("timeout")
     if not timeout:
         raise RuntimeError("GNU coreutils 'timeout' is required for the Perses adapter")
-    candidate_command = [
-        "./candidate.cpp" if part == CANDIDATE_PLACEHOLDER else part
-        for part in checker_command
-    ]
+    checker_cwd = Path(checker_cwd if checker_cwd is not None else Path.cwd()).resolve()
+    if not checker_cwd.is_dir():
+        raise ValueError(f"Checker working directory does not exist: {checker_cwd}")
+    candidate_command = list(checker_command)
     # Use this process's Python interpreter for the Python tester, including when
     # the caller imported the API without activating its virtual environment.
     if Path(candidate_command[0]).suffix == ".py":
@@ -200,12 +201,26 @@ def write_perses_test_script(
         timeout, "--signal=TERM", "--kill-after=1s", f"{timeout_seconds:g}s",
         *candidate_command,
     ]
+    # Expand only the candidate placeholder. All other arguments remain quoted
+    # literals, including strings that contain shell syntax or the placeholder.
+    shell_command = " ".join(
+        '"$hr_candidate"' if part == CANDIDATE_PLACEHOLDER else shlex.quote(part)
+        for part in command
+    )
     path.write_text(
         "#!/bin/sh\n"
         "# Perses copies this script beside each candidate; never test the original file.\n"
-        "test -f ./candidate.cpp || exit 1\n"
+        # /bin/sh initializes PWD to its working directory. Capture it before
+        # cd so we keep testing the current candidate, without a realpath/pwd
+        # subprocess. Neither the parent process nor other workers change cwd.
+        'hr_candidate="$PWD/candidate.cpp"\n'
+        'if ! test -f "$hr_candidate"; then\n'
+        '  printf "Missing Perses candidate: %s\\n" "$hr_candidate" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        f"cd {shlex.quote(str(checker_cwd))} || exit 1\n"
         # No set -e: 77 is deliberately a successful interestingness verdict.
-        + shlex.join(command) + "\n"
+        + shell_command + "\n"
         "checker_status=$?\n"
         "if [ \"$checker_status\" -eq 77 ]; then exit 0; fi\n"
         "exit 1\n",
@@ -298,6 +313,7 @@ def prepare_reducer_invocation(
             command=command, result=destination, destination=destination,
             metadata={"tool": tool, "command": command},
         )
+    checker_cwd = Path.cwd()
     runtime = check_perses()
     checker_command = absolute_checker_paths(checker_command)
     # A fresh subdirectory prevents a stale result being published after a failed
@@ -308,7 +324,7 @@ def prepare_reducer_invocation(
     candidate = inputs / "candidate.cpp"
     shutil.copy2(source, candidate)
     script = inputs / "interesting.sh"
-    write_perses_test_script(script, checker_command)
+    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd)
     output_dir = root / "output"
     flags = perses_flags(tool, stable=stable, jobs=jobs)
     command = [
@@ -319,6 +335,7 @@ def prepare_reducer_invocation(
     metadata = {
         "tool": tool, "command": command, "perses": runtime.metadata(),
         "checker_command": checker_command, "candidate_timeout_seconds": 300,
+        "checker_working_directory": str(checker_cwd),
         "input_source": str(Path(source).resolve()), "engine_directory": str(root),
         "log": str(root / "reducer.log"),
         "check_count_definition": "completed checker profile records; excludes unexecuted cached candidates",

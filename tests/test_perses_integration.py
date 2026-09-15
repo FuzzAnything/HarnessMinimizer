@@ -19,12 +19,15 @@ from harnessreducer.process_supervisor import run_supervised
 @pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_PERSES") != "1", reason="opt-in real Perses test")
 @pytest.mark.parametrize("tool", ("perses", "wdd", "cdd", "sfc", "vulcan"))
 @pytest.mark.parametrize("stable,jobs", ((False, 1), (True, 2)))
-def test_presets_reduce_a_compilable_cpp_program(tool, stable, jobs):
+def test_presets_reduce_a_compilable_cpp_program(tool, stable, jobs, monkeypatch):
     runtime = check_perses()
     if not shutil.which("clang++"):
         raise RuntimeError("These integration tests require clang++")
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="perses relative ' ") as tmp:
         root = Path(tmp)
+        (root / "data").mkdir()
+        (root / "data" / "value.txt").write_text("7")
+        monkeypatch.chdir(root)
         source = root / "harness.cpp"
         original = (
             "int unused_function(int x) { return x + 3; }\n"
@@ -34,13 +37,18 @@ def test_presets_reduce_a_compilable_cpp_program(tool, stable, jobs):
         source.write_text(original)
         checker = root / "checker.py"
         checker.write_text(
-            "import subprocess,sys\n"
+            "import os,subprocess,sys,tempfile\nfrom pathlib import Path\n"
             "from harnessreducer.process_supervisor import run_supervised\n"
-            "p=run_supervised(['clang++','-std=c++17',sys.argv[1],'-o','program'], "
+            f"assert Path.cwd() == Path({str(root)!r})\n"
+            "assert Path('data/value.txt').read_text() == '7'\n"
+            "assert Path(sys.argv[1]).is_absolute()\n"
+            "with tempfile.TemporaryDirectory(dir=os.environ.get('HARNESSREDUCER_TMPDIR')) as build:\n"
+            "  program=str(Path(build)/'program')\n"
+            "  p=run_supervised(['clang++','-std=c++17',sys.argv[1],'-o',program], "
             "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)\n"
-            "if p.returncode: sys.exit(255)\n"
-            "p=run_supervised(['./program'],timeout=5)\n"
-            "sys.exit(77 if p.returncode==7 else 1)\n"
+            "  if p.returncode: sys.exit(255)\n"
+            "  p=run_supervised([program],timeout=5)\n"
+            "  sys.exit(77 if p.returncode==7 else 1)\n"
         )
         result_file = root / "reduced.cpp"
         invocation = prepare_reducer_invocation(
@@ -69,6 +77,9 @@ def test_presets_reduce_a_compilable_cpp_program(tool, stable, jobs):
         assert len(re.findall(r"\w+|[^\s\w]", reduced)) < len(re.findall(r"\w+|[^\s\w]", original))
         assert "unused_function" not in reduced
         assert source.read_text() == original
+        assert (root / "data" / "value.txt").read_text() == "7"
+        assert invocation.metadata["checker_working_directory"] == str(root)
+        assert not (root / "program").exists()
         engine_log = invocation.log_path.read_text()
         for unexpected in ("Latra does not support", "Exception in thread"):
             assert unexpected not in engine_log
