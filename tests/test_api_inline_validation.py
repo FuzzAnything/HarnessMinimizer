@@ -63,6 +63,7 @@ def test_inline_literals_uses_fast_pattern_when_symbolized_pattern_is_missing(
     mock_validate.assert_called_once()
     assert mock_validate.call_args.args[1] == "FastPattern"
     assert mock_validate.call_args.args[2] is None
+    assert mock_validate.call_args.kwargs["fdp_trace_file"] is None
     assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
 
 
@@ -183,7 +184,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
     trace.write_text("", encoding="utf-8")
 
     inline_result = InlineResult(
-        source="int y = 1;\n",
+        source="auto bytes = fdp.ConsumeBytes<uint8_t>(length, /*FDP_ID:100012*/ 100012);\n",
         replaced=1,
         skipped=(
             InlineSkip(
@@ -210,8 +211,8 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
         )
 
     captured = capsys.readouterr()
-    assert "Could not header-replay some repeated FDP callsites" in captured.out
-    assert "100012(ConsumeBytes, 200 records)" in captured.out
+    assert "FDP callsites left unchanged" in captured.out
+    assert "ID 100012: ConsumeBytes (unsupported record format, 200 record(s))" in captured.out
 
 
 def test_inline_literals_validates_unreplayed_repeated_calls_and_cleans_ids(
@@ -254,12 +255,15 @@ def test_inline_literals_validates_unreplayed_repeated_calls_and_cleans_ids(
 
     assert out == str(reduced.with_suffix(".inline.cpp"))
     assert generated_headers == ()
-    mock_validate.assert_called_once()
+    assert mock_validate.call_count == 2
+    assert mock_validate.call_args_list[0].kwargs["fdp_trace_file"] == str(trace)
+    assert mock_validate.call_args_list[1].kwargs["fdp_trace_file"] is None
     content = Path(out).read_text(encoding="utf-8")
     assert "100001" not in content
     assert "100001" in reduced.read_text(encoding="utf-8")
     captured = capsys.readouterr()
-    assert "FDP callsites remain" in captured.out
+    assert "FDP callsite(s) remain after replacement" in captured.out
+    assert "ID 100001: ConsumeBytes (unsupported record format, 12 record(s))" in captured.out
     assert "Skipping inline validation" not in captured.out
 
 
@@ -292,10 +296,147 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
 
     assert out.endswith(".inline.cpp")
     assert generated_headers == ()
-    mock_validate.assert_called_once()
-    assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
+    assert mock_validate.call_count == 2
+    assert mock_validate.call_args_list[0].kwargs["fdp_trace_file"] == str(trace)
+    assert mock_validate.call_args_list[1].kwargs["fdp_trace_file"] is None
+    assert mock_validate.call_args_list[0].kwargs["retry_oom_without_rss_limit"] is True
     captured = capsys.readouterr()
-    assert "FDP callsites remain" in captured.out
+    assert "FDP callsite(s) remain after replacement" in captured.out
+
+
+def test_inline_literals_reports_missing_record_without_injected_id(
+    tmp_path: Path, capsys
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text(
+        "auto value = fdp.ConsumeIntegral<int>();\n",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+
+    inline_result = InlineResult(
+        source=reduced.read_text(encoding="utf-8"),
+        replaced=0,
+        detected_calls=1,
+        skipped=(
+            InlineSkip(
+                key=None,
+                method="ConsumeIntegral",
+                reason="missing-trace-record",
+                record_count=0,
+            ),
+        ),
+    )
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        return_value=inline_result,
+    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+        inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    captured = capsys.readouterr()
+    assert "no injected ID: ConsumeIntegral (missing matching record)" in captured.out
+
+
+def test_inline_literals_reports_unsupported_record_format(
+    tmp_path: Path, capsys
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text(
+        "auto flag = fdp.ConsumeBool(/*FDP_ID:100004*/ 100004);\n",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+
+    inline_result = InlineResult(
+        source=reduced.read_text(encoding="utf-8"),
+        replaced=0,
+        detected_calls=1,
+        skipped=(
+            InlineSkip(
+                key=100004,
+                method="ConsumeBool",
+                reason="unsupported-record-format",
+                record_count=1,
+            ),
+        ),
+    )
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        return_value=inline_result,
+    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+        inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    captured = capsys.readouterr()
+    assert "ID 100004: ConsumeBool (unsupported record format, 1 record(s))" in captured.out
+
+
+def test_inline_literals_rejects_replay_success_when_final_output_fails(
+    tmp_path: Path, capsys
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text(
+        "auto value = fdp.ConsumeIntegral<int>(/*FDP_ID:100001*/ 100001);\n",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+    inline_result = InlineResult(
+        source=reduced.read_text(encoding="utf-8"),
+        replaced=0,
+        detected_calls=1,
+        skipped=(
+            InlineSkip(
+                key=100001,
+                method="ConsumeIntegral",
+                reason="missing-trace-record",
+                record_count=0,
+            ),
+        ),
+    )
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        return_value=inline_result,
+    ), patch(
+        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        side_effect=[True, False, False],
+    ) as mock_validate:
+        out, generated_headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+        )
+
+    assert out == str(reduced)
+    assert generated_headers == ()
+    assert mock_validate.call_count == 3
+    assert mock_validate.call_args_list[0].kwargs["fdp_trace_file"] == str(trace)
+    assert mock_validate.call_args_list[1].kwargs["fdp_trace_file"] is None
+    assert mock_validate.call_args_list[2].kwargs["fdp_trace_file"] is None
+    captured = capsys.readouterr()
+    assert "Replay validation preserved crash behavior" in captured.out
+    assert "Final output validation failed" in captured.out
 
 
 def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys) -> None:
@@ -402,7 +543,7 @@ def test_inline_literals_falls_back_to_snapshot_base_when_snapshot_inline_fails(
         ],
     ), patch(
         "harnessreducer.api.validate_crash_pattern_and_stack_trace",
-        side_effect=[False, False],
+        side_effect=[False, False, False],
     ), patch(
         "harnessreducer.api.get_last_interesting_file",
         return_value=str(snapshot),

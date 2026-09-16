@@ -77,7 +77,7 @@ class CallSite:
 
 @dataclass(frozen=True)
 class InlineSkip:
-    key: int
+    key: int | None
     method: str
     reason: str
     record_count: int
@@ -282,6 +282,15 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
         )
 
     return calls
+
+
+def count_fdp_calls(source: str) -> int:
+    """Count supported FDP expressions actually present in this source.
+
+    Reparse after inlining: replacing an outer call may also remove nested calls,
+    so subtracting the replacement count from the original count is not enough.
+    """
+    return len(_find_fdp_calls_for_inline(source))
 
 
 def _find_argument_list_ranges(source_bytes: bytes) -> list[tuple[int, int]]:
@@ -1155,6 +1164,12 @@ def inline_source_with_report(
             break
 
         if matched_key is None:
+            skipped.append(InlineSkip(
+                key=call.key if not call.fallback_keys else None,
+                method=call.method,
+                reason="missing-trace-record",
+                record_count=0,
+            ))
             continue
 
         result_type = _scalar_result_type(call)
@@ -1196,6 +1211,10 @@ def inline_source_with_report(
 
             literal = _literal_for_single_record(call, record_type, value, result_type)
             if literal is None:
+                skipped.append(InlineSkip(
+                    key=matched_key, method=call.method,
+                    reason="unsupported-record-format", record_count=record_count,
+                ))
                 continue
             if record_type == "S" and _needs_numeric_limits([value]):
                 source_includes.add("<limits>")

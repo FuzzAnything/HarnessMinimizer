@@ -44,7 +44,11 @@ def test_zero_fdp_calls_still_validate(tmp_path: Path, capsys, symbolize, preser
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("S 100001 42\n")
     with ExitStack() as stack:
-        selected, other = validators(stack, symbolize, iter([preserved]))
+        selected, other = validators(
+            stack,
+            symbolize,
+            iter([preserved] if preserved else [False, False]),
+        )
         out, headers = api.inline_literals_in_reduced_harness(
             str(reduced), str(trace), "Symbolized", "seed.bin", "-I/include", "-ltarget",
             crash_pattern_symbolize_0="Fast", symbolize=symbolize,
@@ -52,21 +56,22 @@ def test_zero_fdp_calls_still_validate(tmp_path: Path, capsys, symbolize, preser
     prepared = reduced.with_suffix(".inline.cpp")
     assert out == str(prepared if preserved else reduced)
     assert headers == ()
-    selected.assert_called_once()
+    assert selected.call_count == (1 if preserved else 2)
     other.assert_not_called()
-    assert selected.call_args.args[0] == str(prepared)
-    assert selected.call_args.kwargs["fdp_trace_file"] == str(trace)
-    assert selected.call_args.kwargs["phase3_mode"] == "direct"
-    assert selected.call_args.kwargs["retry_oom_without_rss_limit"] is True
+    first_call = selected.call_args_list[0]
+    assert first_call.args[0] == str(prepared)
+    assert first_call.kwargs["fdp_trace_file"] is None
+    assert first_call.kwargs["phase3_mode"] == "direct"
+    assert first_call.kwargs["retry_oom_without_rss_limit"] is True
     assert source in prepared.read_text()
     output = capsys.readouterr().out
-    assert "No FDP callsites remain" in output
+    assert "No FDP callsites remain after replacement" in output
     assert "Skipping inline validation" not in output
     assert "tree-reduced" not in output
     if preserved:
         assert reduced.read_text() == source
     else:
-        assert "has not passed final validation" in output
+        assert "Cleaned fallback harness did not pass final validation" in output
         assert "Controlled validation failure" in Path(f"{prepared}.validation.log").read_text()
 
 
@@ -95,7 +100,11 @@ def test_direct_input_shapes_validate(tmp_path: Path, capsys, parameters, assign
     seed = tmp_path / "seed.bin"
     seed.write_bytes(b"abc")
     with ExitStack() as stack:
-        selected, other = validators(stack, symbolize, iter([preserved]))
+        selected, other = validators(
+            stack,
+            symbolize,
+            iter([preserved] if preserved else [False, False]),
+        )
         out, headers = api.inline_literals_in_reduced_harness(
             str(reduced), None, "Symbolized", str(seed), "-I/include", "-ltarget",
             crash_pattern_symbolize_0="Fast", symbolize=symbolize,
@@ -117,12 +126,13 @@ def test_direct_input_shapes_validate(tmp_path: Path, capsys, parameters, assign
         assert "fuzz_values" not in text and "harness_values.h" not in text
     if assignments:
         assert text.count(" = ::fuzz_") + text.count(" = reinterpret_cast") + text.count(" = static_cast") == len(assignments)
-    selected.assert_called_once()
+    assert selected.call_count == (1 if preserved else 2)
     other.assert_not_called()
-    assert selected.call_args.kwargs["fdp_trace_file"] is None
-    assert selected.call_args.kwargs["phase3_mode"] == "direct"
-    assert selected.call_args.kwargs["retry_oom_without_rss_limit"] is True
-    assert str(seed) in selected.call_args.args
+    first_call = selected.call_args_list[0]
+    assert first_call.kwargs["fdp_trace_file"] is None
+    assert first_call.kwargs["phase3_mode"] == "direct"
+    assert first_call.kwargs["retry_oom_without_rss_limit"] is True
+    assert str(seed) in first_call.args
     output = capsys.readouterr().out
     assert "tree-reduced" not in output
     if not assignments:
@@ -160,11 +170,15 @@ def test_unsupported_direct_signature_validates_unchanged(tmp_path: Path, capsys
     header = tmp_path / api.DIRECT_INPUT_HEADER_NAME
     header.write_text("// existing header\n")
     with ExitStack() as stack:
-        selected, other = validators(stack, symbolize, iter([preserved]))
+        selected, other = validators(
+            stack,
+            symbolize,
+            iter([preserved] if preserved else [False, False]),
+        )
         out, headers = api.inline_literals_in_reduced_harness(
             str(reduced), None, "Pattern", str(seed), None, None, symbolize=symbolize,
         )
-    selected.assert_called_once()
+    assert selected.call_count == (1 if preserved else 2)
     other.assert_not_called()
     assert out == str(reduced.with_suffix(".inline.cpp") if preserved else reduced)
     assert headers == ()
@@ -176,7 +190,7 @@ def test_unsupported_direct_signature_validates_unchanged(tmp_path: Path, capsys
     assert "Input parameters could not be mapped safely" in output
     assert "No named input parameters remain" not in output
     if not preserved:
-        assert "has not passed final validation" in output
+        assert "Cleaned fallback harness did not pass final validation" in output
 
 
 @pytest.mark.parametrize("fdp_trace", [False, True])
@@ -192,13 +206,16 @@ def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, sym
     trace = tmp_path / "trace.log"
     trace.write_text("S 100001 42\n")
     with ExitStack() as stack:
-        selected, other = validators(stack, symbolize, iter([False, snapshot_success]))
+        outcomes = [False, snapshot_success]
+        if not snapshot_success:
+            outcomes.append(False)
+        selected, other = validators(stack, symbolize, iter(outcomes))
         stack.enter_context(patch.object(api, "get_last_interesting_file", return_value=str(snapshot)))
         out, headers = api.inline_literals_in_reduced_harness(
             str(reduced), str(trace) if fdp_trace else None, "Pattern", str(seed), None, None,
             symbolize=symbolize, snapshot=True,
         )
-    assert selected.call_count == 2
+    assert selected.call_count == (2 if snapshot_success else 3)
     other.assert_not_called()
     assert headers == ()
     assert out == str(snapshot.with_suffix(".inline.cpp") if snapshot_success else snapshot)
@@ -206,7 +223,7 @@ def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, sym
     assert "tree-reduced" not in output
     if not snapshot_success:
         assert "non-inlined last interesting snapshot harness" in output
-        assert "has not passed final validation" in output
+        assert "Cleaned fallback harness did not pass final validation" in output
 
 
 def test_empty_direct_input_still_embeds_zero_length(tmp_path: Path):
@@ -231,12 +248,12 @@ def test_no_snapshot_retry_without_flag(tmp_path: Path, fdp_trace):
     trace = tmp_path / "trace.log"
     trace.write_text("")
     with ExitStack() as stack:
-        selected, _ = validators(stack, False, iter([False]))
+        selected, _ = validators(stack, False, iter([False, False]))
         snapshot = stack.enter_context(patch.object(api, "get_last_interesting_file"))
         out, headers = api.inline_literals_in_reduced_harness(
             str(reduced), str(trace) if fdp_trace else None, "Pattern", str(seed), None, None,
         )
-    selected.assert_called_once()
+    assert selected.call_count == 2
     snapshot.assert_not_called()
     assert out == str(reduced) and headers == ()
 
@@ -287,7 +304,7 @@ def test_pipeline_validates_reduced_no_input_harness(tmp_path: Path, tool, optim
     selected.assert_called_once()
     other.assert_not_called()
     assert selected.call_args.kwargs["phase3_mode"] == "direct"
-    assert selected.call_args.kwargs["fdp_trace_file"] == (str(trace) if fdp_trace else None)
+    assert selected.call_args.kwargs["fdp_trace_file"] is None
 
 
 @pytest.mark.skipif(not shutil.which("clang++"), reason="Clang required for generated-source checks")

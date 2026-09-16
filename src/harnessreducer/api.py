@@ -15,6 +15,7 @@ from harnessreducer.check_mode import (
 from harnessreducer.fdp_transform import (
     PARSER,
     VALUES_HEADER_NAME,
+    count_fdp_calls,
     _iter_nodes,
     _node_text,
     inline_source_with_report,
@@ -84,6 +85,13 @@ ADDITIONAL_HEADERS = [
 ]
 
 DIRECT_INPUT_HEADER_NAME = VALUES_HEADER_NAME
+
+INLINE_SKIP_REASON_LABELS = {
+    "missing-trace-record": "missing matching record",
+    "unsupported-result-type": "unsupported type",
+    "unsupported-record-format": "unsupported record format",
+    "unsupported-repeated-trace-id": "unsupported record format",
+}
 
 
 @dataclass(frozen=True)
@@ -186,6 +194,160 @@ def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
     _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
+
+
+def _append_validation_summary(
+    validation_log_path: str,
+    *,
+    validation_label: str,
+    harness_path: str,
+    fdp_trace_file: str | None,
+    crash_preserved: bool,
+) -> None:
+    trace_text = fdp_trace_file if fdp_trace_file is not None else "<none>"
+    result_text = "passed" if crash_preserved else "failed"
+    with Path(validation_log_path).open("a", encoding="utf-8") as handle:
+        handle.write(
+            "\n===== HarnessReducer post-reduction validation =====\n"
+            f"stage: {validation_label}\n"
+            f"harness: {harness_path}\n"
+            f"fdp_trace_file: {trace_text}\n"
+            f"result: {result_text}\n"
+            "===== end HarnessReducer post-reduction validation =====\n"
+        )
+
+
+def _validate_post_reduction_harness(
+    harness_path: str,
+    crash_pattern_symbolize_1: str | None,
+    crash_pattern_symbolize_0: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    *,
+    fdp_trace_file: str | None,
+    phase3_mode: str,
+    symbolize: bool,
+    validation_log_path: str,
+    debug_stage: str,
+    validation_label: str,
+) -> bool:
+    if symbolize:
+        if crash_pattern_symbolize_1 is None:
+            raise ValueError(
+                "--symbolize inline validation requires a symbolize=1 crash pattern."
+            )
+        crash_preserved = validate_symbolized_crash_pattern_depth_location(
+            harness_path,
+            crash_pattern_symbolize_1,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=fdp_trace_file,
+            phase3_mode=phase3_mode,
+            validation_log_path=validation_log_path,
+            debug_stage=debug_stage,
+            retry_oom_without_rss_limit=True,
+        )
+    else:
+        crash_preserved = validate_crash_pattern_and_stack_trace(
+            harness_path,
+            crash_pattern_symbolize_0,
+            crash_pattern_symbolize_1,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=fdp_trace_file,
+            phase3_mode=phase3_mode,
+            validation_log_path=validation_log_path,
+            debug_stage=debug_stage,
+            retry_oom_without_rss_limit=True,
+        )
+    _append_validation_summary(
+        validation_log_path,
+        validation_label=validation_label,
+        harness_path=harness_path,
+        fdp_trace_file=fdp_trace_file,
+        crash_preserved=crash_preserved,
+    )
+    return crash_preserved
+
+
+def _finalize_and_validate_fallback_harness(
+    reduced_harness_path: str,
+    start_id: int,
+    crash_pattern_symbolize_1: str | None,
+    crash_pattern_symbolize_0: str,
+    crash_input: str | None,
+    compile_flags: str | None,
+    link_flags: str | None,
+    *,
+    phase3_mode: str,
+    symbolize: bool,
+    fallback_label: str,
+) -> str:
+    fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id)
+    validation_log_path = f"{fallback_path}.fallback.validation.log"
+    print(
+        "Verifying crash preservation for cleaned fallback harness without FDP replay: "
+        f"{fallback_path}"
+    )
+    crash_preserved = _validate_post_reduction_harness(
+        fallback_path,
+        crash_pattern_symbolize_1,
+        crash_pattern_symbolize_0,
+        crash_input,
+        compile_flags,
+        link_flags,
+        fdp_trace_file=None,
+        phase3_mode=phase3_mode,
+        symbolize=symbolize,
+        validation_log_path=validation_log_path,
+        debug_stage="post_reduction_fallback",
+        validation_label=f"{fallback_label} fallback final-output",
+    )
+    if crash_preserved:
+        print("[+] Cleaned fallback harness preserved crash behavior.")
+    else:
+        print(
+            "[-] Cleaned fallback harness did not pass final validation. "
+            f"Validation log: {validation_log_path}"
+        )
+    return fallback_path
+
+
+def _format_inline_skip(skip) -> str:
+    reason = INLINE_SKIP_REASON_LABELS.get(skip.reason, skip.reason)
+    id_text = f"ID {skip.key}" if skip.key is not None else "no injected ID"
+    record_text = f", {skip.record_count} record(s)" if skip.record_count else ""
+    return f"{id_text}: {skip.method} ({reason}{record_text})"
+
+
+def _report_inline_replacement_result(
+    inline_result,
+    *,
+    inline_harness_path: str,
+    remaining_calls: int,
+) -> None:
+    print(
+        f"Replaced {inline_result.replaced} FDP callsites with recorded values in "
+        f"{inline_harness_path}"
+    )
+    if inline_result.skipped:
+        print("[!] FDP callsites left unchanged:")
+        for skip in inline_result.skipped:
+            print(f"    - {_format_inline_skip(skip)}")
+    if remaining_calls == 0:
+        print(
+            "[+] No FDP callsites remain after replacement; validating final output "
+            "without FDP replay."
+        )
+    else:
+        print(
+            f"[!] {remaining_calls} FDP callsite(s) remain after replacement; "
+            "validating with FDP replay first, then validating the cleaned output "
+            "without FDP replay."
+        )
 
 
 def _run_inline_stack_diagnostic(
@@ -554,37 +716,20 @@ def _inline_direct_input_in_reduced_harness(
             "Verifying crash preservation for post-reduction harness: "
             f"{inline_harness_path}"
         )
-        if symbolize:
-            if crash_pattern_symbolize_1 is None:
-                raise ValueError(
-                    "--symbolize inline validation requires a symbolize=1 crash pattern."
-                )
-            crash_preserved = validate_symbolized_crash_pattern_depth_location(
-                inline_harness_path,
-                crash_pattern_symbolize_1,
-                crash_input,
-                compile_flags,
-                link_flags,
-                fdp_trace_file=None,
-                phase3_mode=phase3_mode,
-                validation_log_path=validation_log_path,
-                debug_stage="post_reduction_direct_input_inline",
-                retry_oom_without_rss_limit=True,
-            )
-        else:
-            crash_preserved = validate_crash_pattern_and_stack_trace(
-                inline_harness_path,
-                crash_pattern_symbolize_0,
-                crash_pattern_symbolize_1,
-                crash_input,
-                compile_flags,
-                link_flags,
-                fdp_trace_file=None,
-                phase3_mode=phase3_mode,
-                validation_log_path=validation_log_path,
-                debug_stage="post_reduction_direct_input_inline",
-                retry_oom_without_rss_limit=True,
-            )
+        crash_preserved = _validate_post_reduction_harness(
+            inline_harness_path,
+            crash_pattern_symbolize_1,
+            crash_pattern_symbolize_0,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=None,
+            phase3_mode=phase3_mode,
+            symbolize=symbolize,
+            validation_log_path=validation_log_path,
+            debug_stage="post_reduction_direct_input_inline",
+            validation_label="direct-input final-output",
+        )
         if crash_preserved:
             print("[+] Post-reduction validation preserved crash behavior.")
             return inline_harness_path, generated_headers
@@ -631,16 +776,37 @@ def _inline_direct_input_in_reduced_harness(
                 return snapshot_result
             print(
                 "[-] Snapshot post-reduction validation also failed. "
-                "Returning the non-inlined last interesting snapshot harness; "
-                "this fallback has not passed final validation."
+                "Returning the non-inlined last interesting snapshot harness "
+                "after fallback validation."
             )
-            return _finalize_fallback_harness(last_interesting_path, start_id), ()
+            return _finalize_and_validate_fallback_harness(
+                last_interesting_path,
+                start_id,
+                crash_pattern_symbolize_1,
+                crash_pattern_symbolize_0,
+                crash_input,
+                compile_flags,
+                link_flags,
+                phase3_mode=phase3_mode,
+                symbolize=symbolize,
+                fallback_label="last interesting snapshot",
+            ), ()
 
     print(
-        "[-] Returning the non-inlined reduced harness; "
-        "this fallback has not passed final validation."
+        "[-] Returning the non-inlined reduced harness after fallback validation."
     )
-    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+    return _finalize_and_validate_fallback_harness(
+        reduced_harness_path,
+        start_id,
+        crash_pattern_symbolize_1,
+        crash_pattern_symbolize_0,
+        crash_input,
+        compile_flags,
+        link_flags,
+        phase3_mode=phase3_mode,
+        symbolize=symbolize,
+        fallback_label="reduced",
+    ), ()
 
 
 def inline_literals_in_reduced_harness(
@@ -677,7 +843,7 @@ def inline_literals_in_reduced_harness(
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
         streams = load_trace(Path(fdp_trace_file))
         inline_result = inline_source_with_report(source, streams)
-        transformed, count = inline_result.source, inline_result.replaced
+        transformed = inline_result.source
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
         Path(inline_harness_path).write_text(transformed, encoding="utf-8")
 
@@ -698,87 +864,86 @@ def inline_literals_in_reduced_harness(
             )
 
         _prepend_additional_headers(inline_harness_path)
-        print(f"Inlined/replayed {count} FDP calls into {inline_harness_path}")
+        remaining_calls = count_fdp_calls(Path(inline_harness_path).read_text(
+            encoding="utf-8", errors="ignore"
+        ))
+        _report_inline_replacement_result(
+            inline_result,
+            inline_harness_path=inline_harness_path,
+            remaining_calls=remaining_calls,
+        )
 
-        unsupported_skips = [
-            skip for skip in inline_result.skipped if skip.reason == "unsupported-repeated-trace-id"
-        ]
-        if unsupported_skips:
-            skipped_ids = ", ".join(
-                f"{skip.key}({skip.method}, {skip.record_count} records)" for skip in unsupported_skips
-            )
+        if remaining_calls:
+            replay_validation_log_path = f"{inline_harness_path}.replay.validation.log"
             print(
-                "[!] Could not header-replay some repeated FDP callsites; "
-                f"they remain as FDP calls for validation/replay: {skipped_ids}"
+                "Verifying crash preservation for replay-prepared harness: "
+                f"{inline_harness_path}"
             )
-
-        if count == 0 and inline_result.detected_calls == 0:
-            print(
-                "[+] No FDP callsites remain; validating the reduced harness "
-                "without FDP inlining."
-            )
-        elif count == 0:
-            print(
-                "[!] No FDP callsites were replayed, but FDP callsites remain in the "
-                "reduced harness; validating crash preservation before accepting it."
-            )
-
-        print(f"Verifying crash preservation for post-reduction harness: {inline_harness_path}")
-        validation_log_path = f"{inline_harness_path}.validation.log"
-        if symbolize:
-            if crash_pattern_symbolize_1 is None:
-                raise ValueError(
-                    "--symbolize inline validation requires a symbolize=1 crash pattern."
-                )
-            crash_preserved = validate_symbolized_crash_pattern_depth_location(
+            replay_preserved = _validate_post_reduction_harness(
                 inline_harness_path,
                 crash_pattern_symbolize_1,
-                crash_input,
-                compile_flags,
-                link_flags,
-                fdp_trace_file=fdp_trace_file,
-                phase3_mode=phase3_mode,
-                validation_log_path=validation_log_path,
-                debug_stage="post_reduction_fdp_inline",
-                retry_oom_without_rss_limit=True,
-            )
-        else:
-            crash_preserved = validate_crash_pattern_and_stack_trace(
-                inline_harness_path,
                 fast_crash_pattern,
-                crash_pattern_symbolize_1,
                 crash_input,
                 compile_flags,
                 link_flags,
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=phase3_mode,
-                validation_log_path=validation_log_path,
-                debug_stage="post_reduction_fdp_inline",
-                retry_oom_without_rss_limit=True,
+                symbolize=symbolize,
+                validation_log_path=replay_validation_log_path,
+                debug_stage="post_reduction_fdp_replay",
+                validation_label="fdp-replay",
             )
+            if not replay_preserved:
+                print(
+                    f"[-] Replay validation failed to preserve crash behavior for the "
+                    f"{attempt_label} harness. Validation log: {replay_validation_log_path}"
+                )
+                _append_inline_stack_diagnostics(
+                    replay_validation_log_path,
+                    before_path=base_harness_path,
+                    after_path=inline_harness_path,
+                    crash_pattern=crash_pattern_symbolize_1 or fast_crash_pattern,
+                    crash_pattern_symbolize_0=fast_crash_pattern,
+                    crash_input=crash_input,
+                    compile_flags=compile_flags,
+                    link_flags=link_flags,
+                    fdp_trace_file=fdp_trace_file,
+                )
+                return None
+            print("[+] Replay validation preserved crash behavior.")
+
+        inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
+        cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
+        if removed:
+            Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
+            print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
+
+        print(
+            "Verifying crash preservation for final output without FDP replay: "
+            f"{inline_harness_path}"
+        )
+        validation_log_path = f"{inline_harness_path}.validation.log"
+        crash_preserved = _validate_post_reduction_harness(
+            inline_harness_path,
+            crash_pattern_symbolize_1,
+            fast_crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=None,
+            phase3_mode=phase3_mode,
+            symbolize=symbolize,
+            validation_log_path=validation_log_path,
+            debug_stage="post_reduction_final_output",
+            validation_label="final-output",
+        )
         if crash_preserved:
-            print("[+] Post-reduction validation preserved crash behavior.")
-            inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
-            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
-            if removed:
-                Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
-                print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
+            print("[+] Final output preserved crash behavior.")
             return inline_harness_path, tuple(generated_headers)
 
         print(
-            f"[-] Post-reduction validation failed to preserve crash behavior for the {attempt_label} harness. "
+            f"[-] Final output validation failed to preserve crash behavior for the {attempt_label} harness. "
             f"Validation log: {validation_log_path}"
-        )
-        _append_inline_stack_diagnostics(
-            validation_log_path,
-            before_path=base_harness_path,
-            after_path=inline_harness_path,
-            crash_pattern=crash_pattern_symbolize_1 or fast_crash_pattern,
-            crash_pattern_symbolize_0=fast_crash_pattern,
-            crash_input=crash_input,
-            compile_flags=compile_flags,
-            link_flags=link_flags,
-            fdp_trace_file=fdp_trace_file,
         )
         return None
 
@@ -804,16 +969,37 @@ def inline_literals_in_reduced_harness(
                 return snapshot_inline_result
             print(
                 "[-] Snapshot post-reduction validation also failed. "
-                "Returning the non-inlined last interesting snapshot harness; "
-                "this fallback has not passed final validation."
+                "Returning the non-inlined last interesting snapshot harness "
+                "after fallback validation."
             )
-            return _finalize_fallback_harness(last_interesting_path, start_id), ()
+            return _finalize_and_validate_fallback_harness(
+                last_interesting_path,
+                start_id,
+                crash_pattern_symbolize_1,
+                fast_crash_pattern,
+                crash_input,
+                compile_flags,
+                link_flags,
+                phase3_mode=phase3_mode,
+                symbolize=symbolize,
+                fallback_label="last interesting snapshot",
+            ), ()
 
     print(
-        "[-] Returning the non-inlined reduced harness; "
-        "this fallback has not passed final validation."
+        "[-] Returning the non-inlined reduced harness after fallback validation."
     )
-    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+    return _finalize_and_validate_fallback_harness(
+        reduced_harness_path,
+        start_id,
+        crash_pattern_symbolize_1,
+        fast_crash_pattern,
+        crash_input,
+        compile_flags,
+        link_flags,
+        phase3_mode=phase3_mode,
+        symbolize=symbolize,
+        fallback_label="reduced",
+    ), ()
 
 
 @termination_guard()
