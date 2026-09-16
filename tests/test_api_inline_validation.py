@@ -214,7 +214,7 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
     assert "100012(ConsumeBytes, 200 records)" in captured.out
 
 
-def test_inline_literals_skips_validation_when_nothing_was_inlined(
+def test_inline_literals_validates_unreplayed_repeated_calls_and_cleans_ids(
     tmp_path: Path, capsys
 ) -> None:
     reduced = tmp_path / "reduced.cpp"
@@ -228,6 +228,7 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
     inline_result = InlineResult(
         source=reduced.read_text(encoding="utf-8"),
         replaced=0,
+        detected_calls=1,
         skipped=(
             InlineSkip(
                 key=100001,
@@ -241,7 +242,7 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
     with patch("harnessreducer.api.load_trace", return_value={}), patch(
         "harnessreducer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace") as mock_validate:
+    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
@@ -251,13 +252,15 @@ def test_inline_literals_skips_validation_when_nothing_was_inlined(
             "",
         )
 
-    assert out == str(reduced)
+    assert out == str(reduced.with_suffix(".inline.cpp"))
     assert generated_headers == ()
-    mock_validate.assert_not_called()
-    content = reduced.read_text(encoding="utf-8")
+    mock_validate.assert_called_once()
+    content = Path(out).read_text(encoding="utf-8")
     assert "100001" not in content
+    assert "100001" in reduced.read_text(encoding="utf-8")
     captured = capsys.readouterr()
-    assert "Skipping inline validation because no FDP callsites were inlined" in captured.out
+    assert "FDP callsites remain" in captured.out
+    assert "Skipping inline validation" not in captured.out
 
 
 def test_inline_literals_validates_when_fdp_calls_remain_unreplayed(

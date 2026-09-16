@@ -134,8 +134,8 @@ class ReductionResult:
 @dataclass(frozen=True)
 class DirectInputEntry:
     insert_pos: int
-    data_name: str
-    size_name: str
+    data_name: str | None
+    size_name: str | None
     data_uses_canonical_type: bool
     size_uses_canonical_type: bool
 
@@ -331,14 +331,17 @@ def _find_first_descendant(node, node_type: str):
     return None
 
 
-def _last_identifier_text(node, source_bytes: bytes) -> str | None:
-    identifiers: list[str] = []
-    for child in _iter_nodes(node):
-        if child.type == "identifier":
-            text = _node_text(source_bytes, child).strip()
-            if text:
-                identifiers.append(text)
-    return identifiers[-1] if identifiers else None
+def _declarator_identifier_text(node, source_bytes: bytes) -> str | None:
+    """Follow the declared name, never identifiers in types, sizes or defaults."""
+    while node is not None:
+        if node.type == "identifier":
+            return _node_text(source_bytes, node).strip()
+        child = node.child_by_field_name("declarator")
+        if child is None and node.type in {"parenthesized_declarator", "attributed_declarator"}:
+            children = [n for n in node.named_children if n.type != "comment"]
+            child = children[0] if children else None
+        node = child
+    return None
 
 
 def _function_declarator_has_name(
@@ -346,27 +349,44 @@ def _function_declarator_has_name(
     source_bytes: bytes,
     expected_name: str,
 ) -> bool:
-    return any(
-        child.type == "identifier"
-        and _node_text(source_bytes, child).strip() == expected_name
-        for child in _iter_nodes(node)
-    )
+    return _declarator_identifier_text(node, source_bytes) == expected_name
 
 
 def _normalized_type_text(text: str) -> str:
     return " ".join(text.strip().split())
 
 
-def _parameter_name_and_shape(node, source_bytes: bytes) -> tuple[str, str, str] | None:
-    name = _last_identifier_text(node, source_bytes)
+def _parameter_name_and_shape(node, source_bytes: bytes) -> tuple[str | None, str, str]:
     type_node = node.child_by_field_name("type")
     declarator_node = node.child_by_field_name("declarator")
-    if name is None or type_node is None or declarator_node is None:
-        return None
+    if type_node is None or node.has_error:
+        raise ValueError("Unsupported input parameter declaration.")
+    name = _declarator_identifier_text(declarator_node, source_bytes)
+    if declarator_node is not None:
+        if any(child.type in {
+            "function_declarator", "abstract_function_declarator",
+            "reference_declarator", "abstract_reference_declarator",
+            "pointer_type_declarator", "variadic_declarator",
+        } for child in _iter_nodes(declarator_node)):
+            raise ValueError("Unsupported input parameter declarator.")
+        if name is None and not declarator_node.type.startswith("abstract_"):
+            raise ValueError("Could not identify the input parameter name safely.")
+        # Assigning to a const pointer is invalid. Pointee constness, which is
+        # outside the pointer declarator, remains supported.
+        if name is not None and declarator_node.type == "pointer_declarator" and any(
+            child.type == "type_qualifier" and _node_text(source_bytes, child) == "const"
+            for child in declarator_node.children
+        ):
+            raise ValueError("The input pointer parameter is not assignable.")
+    if name is not None and declarator_node.type == "identifier" and any(
+        child.type == "type_qualifier" and _node_text(source_bytes, child) == "const"
+        for child in node.children
+    ):
+        raise ValueError("The input parameter is not assignable.")
     return (
         name,
         _normalized_type_text(_node_text(source_bytes, type_node)),
-        _node_text(source_bytes, declarator_node),
+        _node_text(source_bytes, declarator_node) if declarator_node is not None else "",
     )
 
 
@@ -385,6 +405,7 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
 
+    entries = []
     for node in _iter_nodes(tree.root_node):
         if node.type != "function_definition":
             continue
@@ -394,44 +415,44 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
         ):
             continue
 
-        parameter_list = _find_first_descendant(declarator, "parameter_list")
-        if parameter_list is None:
-            break
-        parameters = [
-            shape
-            for child in parameter_list.named_children
-            if child.type == "parameter_declaration"
-            for shape in [_parameter_name_and_shape(child, source_bytes)]
-            if shape is not None
-        ]
-        if len(parameters) < 2:
-            break
-        data_name, data_type, data_declarator = parameters[0]
-        size_name, size_type, _size_declarator = parameters[1]
+        entries.append((node, declarator))
 
-        body = next(
-            (child for child in node.children if child.type == "compound_statement"),
-            None,
-        )
-        if body is None:
-            break
-        return DirectInputEntry(
-            insert_pos=body.start_byte + 1,
-            data_name=data_name,
-            size_name=size_name,
-            data_uses_canonical_type=_is_canonical_direct_data_parameter(
-                data_type, data_declarator
-            ),
-            size_uses_canonical_type=_is_canonical_direct_size_parameter(size_type),
-        )
+    if len(entries) != 1:
+        raise ValueError("Could not identify a unique LLVMFuzzerTestOneInput definition.")
+    node, declarator = entries[0]
+    function = _find_first_descendant(declarator, "function_declarator")
+    parameter_list = function.child_by_field_name("parameters") if function is not None else None
+    body = node.child_by_field_name("body")
+    if declarator.has_error or parameter_list is None or body is None or body.type != "compound_statement":
+        raise ValueError("Unsupported LLVMFuzzerTestOneInput definition.")
+    parameter_nodes = [n for n in parameter_list.named_children if n.type != "comment"]
+    if any(n.type not in {"parameter_declaration", "optional_parameter_declaration"} for n in parameter_nodes) or any(
+        n.type == "..." for n in parameter_list.children
+    ):
+        raise ValueError("Unsupported LLVMFuzzerTestOneInput parameter list.")
 
-    raise ValueError(
-        "Could not find LLVMFuzzerTestOneInput with named data and size parameters."
+    # Keep unnamed parameters in their original positions. Filtering them out
+    # would misidentify a remaining length parameter as the data pointer.
+    parameters = [_parameter_name_and_shape(n, source_bytes) for n in parameter_nodes]
+    if not parameters or parameters == [(None, "void", "")]:
+        return DirectInputEntry(body.start_byte + 1, None, None, False, False)
+    if len(parameters) != 2:
+        raise ValueError("Cannot safely map a reduced parameter list to data and size.")
+    data_name, data_type, data_declarator = parameters[0]
+    size_name, size_type, _size_declarator = parameters[1]
+    return DirectInputEntry(
+        insert_pos=body.start_byte + 1,
+        data_name=data_name,
+        size_name=size_name,
+        data_uses_canonical_type=_is_canonical_direct_data_parameter(data_type, data_declarator),
+        size_uses_canonical_type=_is_canonical_direct_size_parameter(size_type),
     )
 
 
 def _inline_direct_input_source(source: str, header_name: str) -> str:
     entry = _find_fuzzer_entry_for_direct_input(source)
+    if entry.data_name is None and entry.size_name is None:
+        return source
     data_value = (
         "::fuzz_values"
         if entry.data_uses_canonical_type
@@ -442,11 +463,17 @@ def _inline_direct_input_source(source: str, header_name: str) -> str:
         if entry.size_uses_canonical_type
         else f"static_cast<decltype({entry.size_name})>(::fuzz_index)"
     )
-    assignment = (
-        f"\n    {entry.data_name} = {data_value};\n"
-        f"    {entry.size_name} = {size_value};\n"
-    )
-    transformed = source[: entry.insert_pos] + assignment + source[entry.insert_pos :]
+    assignments = []
+    if entry.data_name is not None:
+        assignments.append(f"    {entry.data_name} = {data_value};")
+    if entry.size_name is not None:
+        assignments.append(f"    {entry.size_name} = {size_value};")
+    assignment = "\n" + "\n".join(assignments) + "\n"
+    # Tree-sitter offsets are UTF-8 byte offsets, not Python string indices.
+    source_bytes = source.encode("utf-8")
+    transformed = (
+        source_bytes[: entry.insert_pos] + assignment.encode("utf-8") + source_bytes[entry.insert_pos :]
+    ).decode("utf-8")
     include_line = f'#include "{header_name}"\n'
     if include_line.strip() not in transformed:
         transformed = include_line + transformed
@@ -468,7 +495,7 @@ def _inline_direct_input_in_reduced_harness(
     if not crash_input:
         print(
             "[!] Direct-input inlining requires --crash-input. "
-            "Returning the tree-reduced harness."
+            "Returning the non-inlined reduced harness without final validation."
         )
         return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
@@ -476,7 +503,7 @@ def _inline_direct_input_in_reduced_harness(
     if not crash_input_path.exists():
         print(
             f"[!] Direct-input inlining could not find crash input {crash_input}. "
-            "Returning the tree-reduced harness."
+            "Returning the non-inlined reduced harness without final validation."
         )
         return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
@@ -490,31 +517,41 @@ def _inline_direct_input_in_reduced_harness(
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
         header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
+        generated_headers: tuple[str, ...] = ()
         try:
             transformed = _inline_direct_input_source(
                 source,
                 DIRECT_INPUT_HEADER_NAME,
             )
         except ValueError as exc:
+            transformed = source
             print(
-                f"[!] Direct-input inlining skipped for the {attempt_label} harness: {exc}"
+                "[!] Input parameters could not be mapped safely; validating without "
+                f"direct-input inlining for the {attempt_label} harness: {exc}"
             )
-            return _finalize_fallback_harness(base_harness_path, start_id), ()
+        else:
+            if transformed == source:
+                print(
+                    "[+] No named input parameters remain; validating without "
+                    "direct-input inlining."
+                )
 
-        header_path.write_text(
-            _direct_input_header_source(crash_bytes),
-            encoding="utf-8",
-        )
+        if transformed != source:
+            header_path.write_text(
+                _direct_input_header_source(crash_bytes),
+                encoding="utf-8",
+            )
+            generated_headers = (str(header_path),)
+            print(
+                f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
+                f"{inline_harness_path} using {header_path}"
+            )
         Path(inline_harness_path).write_text(transformed, encoding="utf-8")
         _prepend_additional_headers(inline_harness_path)
-        print(
-            f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
-            f"{inline_harness_path} using {header_path}"
-        )
 
         validation_log_path = f"{inline_harness_path}.validation.log"
         print(
-            "Verifying crash preservation for direct-input inlined harness: "
+            "Verifying crash preservation for post-reduction harness: "
             f"{inline_harness_path}"
         )
         if symbolize:
@@ -549,11 +586,11 @@ def _inline_direct_input_in_reduced_harness(
                 retry_oom_without_rss_limit=True,
             )
         if crash_preserved:
-            print("[+] Direct-input inline reduction preserved crash behavior.")
-            return inline_harness_path, (str(header_path),)
+            print("[+] Post-reduction validation preserved crash behavior.")
+            return inline_harness_path, generated_headers
 
         print(
-            f"[-] Direct-input inline reduction failed to preserve crash behavior for "
+            f"[-] Post-reduction validation failed to preserve crash behavior for "
             f"the {attempt_label} harness. Validation log: {validation_log_path}"
         )
         _append_inline_stack_diagnostics(
@@ -571,7 +608,7 @@ def _inline_direct_input_in_reduced_harness(
 
     direct_result = _attempt_direct_inline(
         reduced_harness_path,
-        attempt_label="tree-reduced",
+        attempt_label="reduced",
     )
     if direct_result is not None:
         return direct_result
@@ -583,7 +620,7 @@ def _inline_direct_input_in_reduced_harness(
             and not candidate_files_match(reduced_harness_path, last_interesting_path)
         ):
             print(
-                "[!] Retrying direct-input inline reduction from the last interesting "
+                "[!] Retrying direct-input preparation and validation from the last interesting "
                 f"snapshot: {last_interesting_path}"
             )
             snapshot_result = _attempt_direct_inline(
@@ -593,12 +630,16 @@ def _inline_direct_input_in_reduced_harness(
             if snapshot_result is not None:
                 return snapshot_result
             print(
-                "[-] Snapshot direct-input inline reduction also failed. "
-                "Falling back to the last interesting snapshot harness."
+                "[-] Snapshot post-reduction validation also failed. "
+                "Returning the non-inlined last interesting snapshot harness; "
+                "this fallback has not passed final validation."
             )
             return _finalize_fallback_harness(last_interesting_path, start_id), ()
 
-    print("[-] Falling back to the tree-reduced harness.")
+    print(
+        "[-] Returning the non-inlined reduced harness; "
+        "this fallback has not passed final validation."
+    )
     return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
 
@@ -673,17 +714,16 @@ def inline_literals_in_reduced_harness(
 
         if count == 0 and inline_result.detected_calls == 0:
             print(
-                "[!] Skipping inline validation because no FDP callsites were inlined/replayed; "
-                f"returning the {attempt_label} harness."
+                "[+] No FDP callsites remain; validating the reduced harness "
+                "without FDP inlining."
             )
-            return _finalize_fallback_harness(base_harness_path, start_id), ()
-        if count == 0:
+        elif count == 0:
             print(
                 "[!] No FDP callsites were replayed, but FDP callsites remain in the "
                 "reduced harness; validating crash preservation before accepting it."
             )
 
-        print(f"Verifying crash preservation for inlined harness: {inline_harness_path}")
+        print(f"Verifying crash preservation for post-reduction harness: {inline_harness_path}")
         validation_log_path = f"{inline_harness_path}.validation.log"
         if symbolize:
             if crash_pattern_symbolize_1 is None:
@@ -717,7 +757,7 @@ def inline_literals_in_reduced_harness(
                 retry_oom_without_rss_limit=True,
             )
         if crash_preserved:
-            print("[+] Inline reduction preserved crash behavior.")
+            print("[+] Post-reduction validation preserved crash behavior.")
             inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
             cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
             if removed:
@@ -726,7 +766,7 @@ def inline_literals_in_reduced_harness(
             return inline_harness_path, tuple(generated_headers)
 
         print(
-            f"[-] Inline reduction failed to preserve crash behavior for the {attempt_label} harness. "
+            f"[-] Post-reduction validation failed to preserve crash behavior for the {attempt_label} harness. "
             f"Validation log: {validation_log_path}"
         )
         _append_inline_stack_diagnostics(
@@ -742,7 +782,7 @@ def inline_literals_in_reduced_harness(
         )
         return None
 
-    inline_result = _attempt_inline(reduced_harness_path, attempt_label="tree-reduced")
+    inline_result = _attempt_inline(reduced_harness_path, attempt_label="reduced")
     if inline_result is not None:
         return inline_result
 
@@ -763,11 +803,16 @@ def inline_literals_in_reduced_harness(
             if snapshot_inline_result is not None:
                 return snapshot_inline_result
             print(
-                "[-] Snapshot inline reduction also failed. Falling back to the last interesting snapshot harness."
+                "[-] Snapshot post-reduction validation also failed. "
+                "Returning the non-inlined last interesting snapshot harness; "
+                "this fallback has not passed final validation."
             )
             return _finalize_fallback_harness(last_interesting_path, start_id), ()
 
-    print("[-] Falling back to the tree-reduced harness.")
+    print(
+        "[-] Returning the non-inlined reduced harness; "
+        "this fallback has not passed final validation."
+    )
     return _finalize_fallback_harness(reduced_harness_path, start_id), ()
 
 
@@ -970,7 +1015,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if config.debug:
         print(
             "[DEBUG] Recording direct post-reduction validation for the "
-            "tree-reduced harness."
+            "reduced harness."
         )
         if config.symbolize:
             validate_symbolized_crash_pattern_depth_location(

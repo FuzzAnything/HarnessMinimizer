@@ -454,7 +454,7 @@ runs multiple workers concurrently. The CLI copies the log next to the requested
 Enables optional last-interesting snapshot behavior:
 
 - during tree reduction, candidates that actually return `77` may update `last_interesting.cpp`
-- after reduction, if inline validation of the tree-reduced result fails, HarnessReducer may retry from that snapshot and fall back to it if needed
+- after reduction, if final validation of the prepared result fails, HarnessReducer may retry from that snapshot and fall back to its non-inlined version if needed
 
 When `--snapshot` is omitted, no snapshot file is maintained and no snapshot-based fallback is attempted.
 
@@ -723,8 +723,8 @@ During reduction, the work directory may also contain artifacts such as:
 - `reduction_profile.json` and `reduction_profile.txt` — aggregate tree-reduction throughput and stage timing when `--profile` is enabled
 - `reduction_debug.log` — per-candidate and post-reduction oracle details when `--debug` is enabled
 - `last_interesting.cpp` — optional snapshot of the latest candidate source that actually returned `77`; created only when `--snapshot` is enabled
-- `reduced_harness.cpp` — tree-reducer output before final copy
-- `*.inline.cpp` — FDP-inlined variant
+- `reduced_harness.cpp` — selected reduction engine's output before final preparation
+- `*.inline.cpp` — prepared output for final validation, including unchanged copies when no input values need to be inlined
 - `harness_values.h` — recorded sequences for repeated FDP calls, large buffers, and any required byte-conversion helpers
 - `harness_runner` — persistent sanitizer runner built for `--amortize-link`
 
@@ -732,7 +732,8 @@ During reduction, the work directory may also contain artifacts such as:
 
 - FDP inlining runs after tree reduction. It preserves the FDP result type for scalar replacements and reconstructs fresh strings/vectors from recorded values. Header storage uses globally available types; local aliases and deduced types are resolved at the original call site. This adds no candidate checks or compiler invocations to tree reduction. Final source generation and compilation do additional type-conversion work. Executing the generated harness may require copies where the previous inliner incorrectly substituted references to stored strings/vectors; the cost depends on the harness and buffer sizes.
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
-- If `--snapshot` is enabled and inline validation of `reduced_harness.inline.cpp` fails, the tool retries the same FDP inlining + inline-validation flow from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool falls back to the snapshot base harness; otherwise it falls back to the tree-reduced harness. Without `--snapshot`, it falls back directly to the tree-reduced harness. By default, inline validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, inline validation uses the symbolized crash pattern, symbolized stack depth, and recorded crash location.
+- Final validation is performed even when reduction removes every FDP call or removes the names or parameters of `LLVMFuzzerTestOneInput`. In direct-input mode, two named parameters retain the usual byte/length inlining; if only one of the two is named, only that value is assigned. An empty parameter list or two unnamed parameters need no assignments. Unsupported signatures are left unchanged and validated with the original input, rather than guessing which parameter represents data or size. A values header is generated only when input assignments are added. Signatures are not rewritten; a successful check applies to the current build/runtime environment, not arbitrary calling conventions on other machines.
+- If `--snapshot` is enabled and final validation of `reduced_harness.inline.cpp` fails, the tool retries preparation and validation from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool returns the non-inlined snapshot. Without an eligible snapshot, it returns the non-inlined reduced harness. These fallbacks are retained outputs, not a claim that final validation passed, and do not switch engines or rerun reduction. By default, final validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, it uses the symbolized crash pattern, symbolized stack depth, and recorded crash location. Both optimized and non-optimized reductions retain the existing standalone final-validation path. Direct-input embedding still requires an available crash-input file; missing input is reported explicitly rather than invented.
 - If LLM validation fails, the tool falls back to the non-LLM harness.
 
 ## Performance sweeps and CSV collection
