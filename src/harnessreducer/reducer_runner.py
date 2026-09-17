@@ -37,7 +37,12 @@ PHASE3_PLUGIN_SANITIZER_FLAGS = ["-fsanitize=address,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-gline-tables-only", "-O0"]
 PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
-PHASE3_WARNING_FLAGS = ["-Werror=uninitialized"]
+PHASE3_WARNING_FLAGS = [
+    "-Werror=uninitialized",
+    "-Werror=unused-value",
+    "-Werror=return-type",
+]
+POST_REDUCTION_VALIDATION_ATTEMPTS = 5
 PCH_PREFIX_HEADER_NAME = "harness_prefix.h"
 PCH_PREFIX_FILE_NAME = "harness_prefix.pch"
 COVERAGE_BIN_FILE_NAME = "poc_cov.out"
@@ -2007,6 +2012,12 @@ def retry_oom_tester_args(enabled: bool) -> list[str]:
     return ["--retry-oom-without-rss-limit"]
 
 
+def evidence_attempt_tester_args(attempts: int | None) -> list[str]:
+    if attempts is None:
+        return []
+    return ["--evidence-attempts", str(max(1, attempts))]
+
+
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
     proc = run_supervised(
         cmd,
@@ -3728,6 +3739,7 @@ def validate_crash_pattern(
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
+    evidence_attempts: int | None = None,
 ) -> bool:
     """Run a fast symbolize=0 crash-pattern/depth validation."""
     validate_phase3_mode(phase3_mode)
@@ -3754,14 +3766,16 @@ def validate_crash_pattern(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
+    cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
 
     proc = None
+    retry_attempts = evidence_attempts or CANDIDATE_EVIDENCE_ATTEMPTS
     max_attempts = (
-        CANDIDATE_EVIDENCE_ATTEMPTS
+        retry_attempts
         if get_dynamic_reference_crash_site() is not None
         else 1
     )
@@ -3798,6 +3812,7 @@ def validate_stack_trace(
     require_crash_pattern: bool = True,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
+    evidence_attempts: int | None = None,
 ) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
@@ -3851,6 +3866,7 @@ def validate_stack_trace(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
+    cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -3874,6 +3890,7 @@ def validate_symbolized_crash_pattern_depth_location(
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
+    evidence_attempts: int | None = None,
 ) -> bool:
     """Run a symbolize=1 crash-pattern/depth/location validation."""
     if not crash_pattern:
@@ -3903,14 +3920,16 @@ def validate_symbolized_crash_pattern_depth_location(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
+    cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
 
     proc = None
+    retry_attempts = evidence_attempts or CANDIDATE_EVIDENCE_ATTEMPTS
     max_attempts = (
-        CANDIDATE_EVIDENCE_ATTEMPTS
+        retry_attempts
         if get_symbolized_reference_crash_location_pattern()
         else 1
     )
@@ -3947,6 +3966,7 @@ def validate_crash_pattern_and_stack_trace(
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
+    evidence_attempts: int | None = None,
 ) -> bool:
     """Validate crash identity with symbolize=0, then stack identity with symbolize=1."""
     if not validate_crash_pattern(
@@ -3960,6 +3980,7 @@ def validate_crash_pattern_and_stack_trace(
         validation_log_path=validation_log_path,
         debug_stage=(f"{debug_stage}_symbolize_0" if debug_stage else None),
         retry_oom_without_rss_limit=retry_oom_without_rss_limit,
+        evidence_attempts=evidence_attempts,
     ):
         return False
 
@@ -3980,6 +4001,7 @@ def validate_crash_pattern_and_stack_trace(
         require_crash_pattern=crash_pattern_symbolize_1 is not None,
         debug_stage=(f"{debug_stage}_symbolize_1" if debug_stage else None),
         retry_oom_without_rss_limit=retry_oom_without_rss_limit,
+        evidence_attempts=evidence_attempts,
     )
 
 

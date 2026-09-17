@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from harnessreducer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
 from harnessreducer.fdp_transform import InlineResult, InlineSkip
+from harnessreducer.reducer_runner import POST_REDUCTION_VALIDATION_ATTEMPTS
 
 
 def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path) -> None:
@@ -110,6 +111,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     mock_validate.assert_called_once()
     assert mock_validate.call_args.kwargs["fdp_trace_file"] is None
     assert mock_validate.call_args.kwargs["retry_oom_without_rss_limit"] is True
+    assert mock_validate.call_args.kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
 
 
 def test_inline_literals_supports_direct_input_after_parameter_type_reduction(
@@ -258,6 +260,8 @@ def test_inline_literals_validates_unreplayed_repeated_calls_and_cleans_ids(
     assert mock_validate.call_count == 2
     assert mock_validate.call_args_list[0].kwargs["fdp_trace_file"] == str(trace)
     assert mock_validate.call_args_list[1].kwargs["fdp_trace_file"] is None
+    assert mock_validate.call_args_list[0].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
+    assert mock_validate.call_args_list[1].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
     content = Path(out).read_text(encoding="utf-8")
     assert "100001" not in content
     assert "100001" in reduced.read_text(encoding="utf-8")
@@ -300,6 +304,8 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
     assert mock_validate.call_args_list[0].kwargs["fdp_trace_file"] == str(trace)
     assert mock_validate.call_args_list[1].kwargs["fdp_trace_file"] is None
     assert mock_validate.call_args_list[0].kwargs["retry_oom_without_rss_limit"] is True
+    assert mock_validate.call_args_list[0].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
+    assert mock_validate.call_args_list[1].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
     captured = capsys.readouterr()
     assert "FDP callsite(s) remain after replacement" in captured.out
 

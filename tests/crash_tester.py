@@ -1163,6 +1163,12 @@ def main() -> int:
     parser.add_argument("--profile-file", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--retry-oom-without-rss-limit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
+        "--evidence-attempts",
+        type=int,
+        default=CANDIDATE_EVIDENCE_ATTEMPTS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--amortized-plugin-fallback-link-flags",
         "--amortized-plugin-link-flags",
         dest="amortized_plugin_fallback_link_flags",
@@ -1171,6 +1177,7 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    args.evidence_attempts = max(1, args.evidence_attempts)
     args._profile_main_started_ns = main_started_ns
     args._profile_compile_ns = 0
     args._profile_compile_link_ns = 0
@@ -1232,7 +1239,7 @@ def main() -> int:
             env["FDP_TRACE_PATH"] = args.fdp_trace
             env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_path(args.fdp_trace)
 
-        for attempt in range(1, CANDIDATE_EVIDENCE_ATTEMPTS + 1):
+        for attempt in range(1, args.evidence_attempts + 1):
             execution_started_ns = time.perf_counter_ns() if args.profile_file else None
             execution_failure = None
             try:
@@ -1268,7 +1275,7 @@ def main() -> int:
             if result is EvidenceResult.MISMATCH:
                 return _finalize_result(args, 1)
             if not retry_missing_evidence(
-                missing, attempt, CANDIDATE_EVIDENCE_ATTEMPTS, context="candidate",
+                missing, attempt, args.evidence_attempts, context="candidate",
             ):
                 print(f"[-] Rejecting candidate without required evidence. Execution log:\n{run_log}")
                 return _finalize_result(args, 1)

@@ -1,7 +1,15 @@
 import unittest
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
-from harnessreducer.api import ReductionConfig, TaggedHarness, process, reduce_with_config
+from harnessreducer.api import (
+    ReductionConfig,
+    TaggedHarness,
+    _prepare_fuzzer_entry_return,
+    process,
+    reduce_with_config,
+)
 from harnessreducer.reducer_runner import HarnessCrashDetected
 
 
@@ -28,6 +36,140 @@ class TestApiPipeline(unittest.TestCase):
                     phase3_mode="direct",
                     amortize_link=True,
                 )
+            )
+
+    def test_prepare_fuzzer_entry_return_adds_return_0_to_int_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src_dir = root / "source"
+            work_dir = root / "work"
+            src_dir.mkdir()
+            work_dir.mkdir()
+            harness = src_dir / "harness.cpp"
+            original = (
+                '#include "local_header.h"\n'
+                '#include <stddef.h>\n'
+                '#include <stdint.h>\n'
+                'extern "C" int LLVMFuzzerTestOneInput('
+                'const uint8_t *data, size_t size) {\n'
+                '  (void)data;\n'
+                '  (void)size;\n'
+                '}\n'
+            )
+            harness.write_text(original, encoding="utf-8")
+
+            prepared = _prepare_fuzzer_entry_return(
+                str(harness),
+                "-std=c++17",
+                str(work_dir),
+            )
+
+            self.assertNotEqual(prepared.path, str(harness))
+            self.assertEqual(harness.read_text(encoding="utf-8"), original)
+            prepared_source = Path(prepared.path).read_text(encoding="utf-8")
+            self.assertIn("  return 0;\n}", prepared_source)
+            self.assertIn(f"-I{src_dir.resolve()}", prepared.compile_flags)
+
+    def test_prepare_fuzzer_entry_return_keeps_existing_return(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness.cpp"
+            harness.write_text(
+                '#include <stddef.h>\n'
+                '#include <stdint.h>\n'
+                'extern "C" int LLVMFuzzerTestOneInput('
+                'const uint8_t *data, size_t size) {\n'
+                '  (void)data;\n'
+                '  (void)size;\n'
+                '  return 0;\n'
+                '}\n',
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_fuzzer_entry_return(
+                str(harness),
+                "-std=c++17",
+                str(root),
+            )
+
+            self.assertEqual(prepared.path, str(harness))
+            self.assertEqual(prepared.compile_flags, "-std=c++17")
+
+    def test_prepare_fuzzer_entry_return_keeps_void_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness = root / "harness.cpp"
+            harness.write_text(
+                '#include <stddef.h>\n'
+                '#include <stdint.h>\n'
+                'extern "C" void LLVMFuzzerTestOneInput('
+                'const uint8_t *data, size_t size) {\n'
+                '  (void)data;\n'
+                '  (void)size;\n'
+                '}\n',
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_fuzzer_entry_return(
+                str(harness),
+                "-std=c++17",
+                str(root),
+            )
+
+            self.assertEqual(prepared.path, str(harness))
+            self.assertEqual(prepared.compile_flags, "-std=c++17")
+
+    @patch("harnessreducer.api.extract_crash_pattern_from_output")
+    @patch("harnessreducer.api.check_harness_compilation")
+    @patch("harnessreducer.api.check_tree_reducer")
+    def test_reduce_with_config_uses_prepared_missing_return_harness(
+        self,
+        mock_check_tree,
+        mock_check_compile,
+        mock_extract,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src_dir = root / "source"
+            work_dir = root / "work"
+            src_dir.mkdir()
+            harness = src_dir / "harness.cpp"
+            harness.write_text(
+                '#include "local_header.h"\n'
+                '#include <stddef.h>\n'
+                '#include <stdint.h>\n'
+                'extern "C" int LLVMFuzzerTestOneInput('
+                'const uint8_t *data, size_t size) {\n'
+                '  (void)data;\n'
+                '  (void)size;\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            mock_extract.side_effect = HarnessCrashDetected("harness.cpp:4:1")
+
+            result = reduce_with_config(
+                ReductionConfig(
+                    harness_path=str(harness),
+                    compile_flags="-std=c++17",
+                    crash_input="seed.bin",
+                    work_dir=str(work_dir),
+                )
+            )
+
+            self.assertFalse(result.success)
+            mock_check_tree.assert_called_once_with()
+            prepared_path = mock_check_compile.call_args.args[0]
+            prepared_flags = mock_check_compile.call_args.args[1]
+            self.assertNotEqual(prepared_path, str(harness))
+            self.assertIn(
+                "return 0;",
+                Path(prepared_path).read_text(encoding="utf-8"),
+            )
+            self.assertIn(f"-I{src_dir.resolve()}", prepared_flags)
+            mock_extract.assert_called_once_with(
+                "seed.bin",
+                harness_path=prepared_path,
+                link_flags=None,
             )
 
     @patch("harnessreducer.api.run_treereducer")

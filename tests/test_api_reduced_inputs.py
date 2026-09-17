@@ -63,6 +63,7 @@ def test_zero_fdp_calls_still_validate(tmp_path: Path, capsys, symbolize, preser
     assert first_call.kwargs["fdp_trace_file"] is None
     assert first_call.kwargs["phase3_mode"] == "direct"
     assert first_call.kwargs["retry_oom_without_rss_limit"] is True
+    assert first_call.kwargs["evidence_attempts"] == api.POST_REDUCTION_VALIDATION_ATTEMPTS
     assert source in prepared.read_text()
     output = capsys.readouterr().out
     assert "No FDP callsites remain after replacement" in output

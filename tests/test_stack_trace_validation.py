@@ -984,6 +984,43 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 2)
 
     @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_uses_custom_evidence_attempts(self, mock_run):
+        reset_stack_trace_state()
+        set_dynamic_reference_crash_site(
+            DynamicCrashSite(
+                library_path="/tmp/build/lib/libtarget.so",
+                library_name="libtarget.so",
+                offset="0xbeaf0",
+            )
+        )
+        miss = SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "Crash pattern did not match. Exit status: 77\n"
+                "Execution log:\nother sanitizer report\n"
+            ),
+            stderr="",
+        )
+        mock_run.side_effect = [miss, miss, miss, miss, SimpleNamespace(
+            returncode=77, stdout="", stderr="",
+        )]
+
+        ok = validate_crash_pattern(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+            evidence_attempts=5,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_count, 5)
+        cmd = mock_run.call_args_list[0].args[0]
+        self.assertIn("--evidence-attempts", cmd)
+        self.assertIn("5", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_crash_pattern_does_not_retry_text_miss_without_dynamic_anchor(self, mock_run):
         reset_stack_trace_state()
         mock_run.return_value = SimpleNamespace(
@@ -1116,6 +1153,40 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(mock_run.call_count, 2)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_symbolized_validation_uses_custom_evidence_attempts(self, mock_run):
+        reset_stack_trace_state()
+        set_symbolized_reference_stack_depth(6)
+        set_symbolized_reference_crash_location_pattern(
+            normalize_crash_signature("/src/lib.c:10:3", escape=True)
+        )
+        miss = SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "Crash pattern did not match. Exit status: 77\n"
+                "Execution log:\nother sanitizer report\n"
+            ),
+            stderr="",
+        )
+        mock_run.side_effect = [miss, miss, miss, miss, SimpleNamespace(
+            returncode=77, stdout="", stderr="",
+        )]
+
+        ok = validate_symbolized_crash_pattern_depth_location(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+            evidence_attempts=5,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_count, 5)
+        cmd = mock_run.call_args_list[0].args[0]
+        self.assertIn("--evidence-attempts", cmd)
+        self.assertIn("5", cmd)
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_symbolized_validation_does_not_retry_other_failures(self, mock_run):

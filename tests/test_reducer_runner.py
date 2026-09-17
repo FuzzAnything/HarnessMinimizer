@@ -354,11 +354,19 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.PHASE3_DIRECT,
         )
 
-    def test_phase3_compile_flags_use_o1_and_uninitialized_error(self):
+    def test_phase3_compile_flags_use_strict_reduction_warnings(self):
         self.assertEqual(reducer_runner.PHASE3_DIRECT_OPT_FLAGS, ["-gline-tables-only", "-O0"])
         self.assertEqual(reducer_runner.PHASE3_SPLIT_OPT_FLAGS, ["-O0", "-gline-tables-only"])
         self.assertEqual(reducer_runner.PHASE3_PCH_OPT_FLAGS, ["-O0", "-gline-tables-only"])
-        self.assertEqual(reducer_runner.PHASE3_WARNING_FLAGS, ["-Werror=uninitialized"])
+        self.assertEqual(
+            reducer_runner.PHASE3_WARNING_FLAGS,
+            [
+                "-Werror=uninitialized",
+                "-Werror=unused-value",
+                "-Werror=return-type",
+            ],
+        )
+        self.assertEqual(reducer_runner.POST_REDUCTION_VALIDATION_ATTEMPTS, 5)
 
     def test_pch_tester_args_preserve_amortized_link_compile_mode(self):
         artifacts = reducer_runner.PchArtifacts(

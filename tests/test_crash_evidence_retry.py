@@ -137,6 +137,14 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
                 self.assertEqual((result, attempts), (1, 3))
                 self.assertIn("attempts exhausted", log)
 
+    def test_custom_evidence_attempts_are_honored(self):
+        result, attempts, log, _ = self.run_candidate(
+            [(77, EMPTY, 7)] * 4 + [(77, FAST, 8)],
+            extra=["--evidence-attempts", "5"],
+        )
+        self.assertEqual((result, attempts), (77, 5))
+        self.assertIn("attempt 4/5; retrying", log)
+
     def test_ubsan_values_can_change_with_or_without_evidence_retry(self):
         message = "/src/target.c:42:3: runtime error: left shift of negative value -391"
         pattern = runner._extract_crash_signature_from_output(message)

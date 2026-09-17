@@ -28,6 +28,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_SPLIT,
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
+    POST_REDUCTION_VALIDATION_ATTEMPTS,
     apply_coverage_guided_slice,
     append_exec_timeout_tester_args,
     candidate_files_match,
@@ -148,6 +149,12 @@ class DirectInputEntry:
     size_uses_canonical_type: bool
 
 
+@dataclass(frozen=True)
+class PreparedHarnessSource:
+    path: str
+    compile_flags: str | None
+
+
 def tag_harness_with_fdp_ids(
     harness_path: str,
     start_id: int,
@@ -248,6 +255,7 @@ def _validate_post_reduction_harness(
             validation_log_path=validation_log_path,
             debug_stage=debug_stage,
             retry_oom_without_rss_limit=True,
+            evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
         )
     else:
         crash_preserved = validate_crash_pattern_and_stack_trace(
@@ -262,6 +270,7 @@ def _validate_post_reduction_harness(
             validation_log_path=validation_log_path,
             debug_stage=debug_stage,
             retry_oom_without_rss_limit=True,
+            evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
         )
     _append_validation_summary(
         validation_log_path,
@@ -561,6 +570,99 @@ def _is_canonical_direct_data_parameter(type_text: str, declarator_text: str) ->
 
 def _is_canonical_direct_size_parameter(type_text: str) -> bool:
     return type_text in {"size_t", "std::size_t"}
+
+
+def _last_body_statement_type(body) -> str | None:
+    for child in reversed(body.named_children):
+        if child.type != "comment":
+            return child.type
+    return None
+
+
+def _append_compile_include_dir(
+    compile_flags: str | None,
+    include_dir: Path,
+) -> str:
+    resolved_include_dir = include_dir.resolve()
+    flag = f"-I{resolved_include_dir}"
+    if not compile_flags:
+        return flag
+    tokens = compile_flags.split()
+    for index, token in enumerate(tokens):
+        if token == flag:
+            return compile_flags
+        if token == "-I" and index + 1 < len(tokens):
+            try:
+                if Path(tokens[index + 1]).resolve() == resolved_include_dir:
+                    return compile_flags
+            except OSError:
+                pass
+        elif token.startswith("-I"):
+            try:
+                if Path(token[2:]).resolve() == resolved_include_dir:
+                    return compile_flags
+            except OSError:
+                pass
+    return f"{compile_flags} {flag}"
+
+
+def _prepare_fuzzer_entry_return(
+    harness_path: str,
+    compile_flags: str | None,
+    work_dir: str,
+) -> PreparedHarnessSource:
+    source_path = Path(harness_path)
+    if not source_path.is_file():
+        return PreparedHarnessSource(harness_path, compile_flags)
+
+    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    source_bytes = source.encode("utf-8")
+    tree = PARSER.parse(source_bytes)
+    matches = []
+    for node in _iter_nodes(tree.root_node):
+        if node.type != "function_definition":
+            continue
+        declarator = node.child_by_field_name("declarator")
+        if declarator is None or not _function_declarator_has_name(
+            declarator, source_bytes, "LLVMFuzzerTestOneInput"
+        ):
+            continue
+        matches.append(node)
+
+    if len(matches) != 1:
+        return PreparedHarnessSource(harness_path, compile_flags)
+
+    node = matches[0]
+    return_type = node.child_by_field_name("type")
+    body = node.child_by_field_name("body")
+    if return_type is None or body is None or body.type != "compound_statement":
+        return PreparedHarnessSource(harness_path, compile_flags)
+    if _normalized_type_text(_node_text(source_bytes, return_type)) == "void":
+        return PreparedHarnessSource(harness_path, compile_flags)
+    if _last_body_statement_type(body) == "return_statement":
+        return PreparedHarnessSource(harness_path, compile_flags)
+
+    insert_at = body.end_byte - 1
+    indentation = "\n  return 0;\n"
+    transformed = (
+        source_bytes[:insert_at]
+        + indentation.encode("utf-8")
+        + source_bytes[insert_at:]
+    ).decode("utf-8")
+    prepared_name = (
+        f"{source_path.stem}.return-prepared{source_path.suffix or '.cpp'}"
+    )
+    prepared_path = Path(work_dir) / prepared_name
+    prepared_path.write_text(transformed, encoding="utf-8")
+    prepared_flags = _append_compile_include_dir(
+        compile_flags,
+        source_path.resolve().parent,
+    )
+    print(
+        "[+] Added explicit return 0 to LLVMFuzzerTestOneInput in prepared harness: "
+        f"{prepared_path}"
+    )
+    return PreparedHarnessSource(str(prepared_path), prepared_flags)
 
 
 def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
@@ -1036,14 +1138,21 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         check_tree_reducer()
     else:
         check_perses()
-    check_harness_compilation(config.harness_path, config.compile_flags, config.link_flags)
+    prepared_source = _prepare_fuzzer_entry_return(
+        config.harness_path,
+        config.compile_flags,
+        get_work_dir(),
+    )
+    harness_path = prepared_source.path
+    compile_flags = prepared_source.compile_flags
+    check_harness_compilation(harness_path, compile_flags, config.link_flags)
     crash_pattern_kwargs = {}
     if config.symbolize:
         crash_pattern_kwargs["record_symbolized_crash_location"] = True
     try:
         crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
             config.crash_input,
-            harness_path=config.harness_path,
+            harness_path=harness_path,
             link_flags=config.link_flags,
             **crash_pattern_kwargs,
         )
@@ -1083,27 +1192,27 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 "--symbolize requires an extractable symbolize=1 crash pattern."
             )
         check_reducer_symbolized_reduction_oracle(
-            config.harness_path,
+            harness_path,
             crash_pattern_symbolize_1,
             config.crash_input,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             phase3_mode=validation_phase3_mode,
         )
     else:
         check_reducer_crash_pattern(
-            config.harness_path,
+            harness_path,
             crash_pattern_symbolize_0,
             config.crash_input,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             phase3_mode=validation_phase3_mode,
         )
         check_reducer_symbolized_crash_pattern(
-            config.harness_path,
+            harness_path,
             recorded_symbolized_pattern,
             config.crash_input,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             phase3_mode=validation_phase3_mode,
         )
@@ -1126,17 +1235,17 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
     if config.slice_enabled:
         effective_harness_path = apply_coverage_guided_slice(
-            config.harness_path,
+            harness_path,
             recorded_symbolized_pattern,
             config.crash_input,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             phase3_mode=validation_phase3_mode,
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
             symbolize=config.symbolize,
         )
     else:
-        effective_harness_path = config.harness_path
+        effective_harness_path = harness_path
     tagged_harness = tag_harness_with_fdp_ids(
         effective_harness_path,
         start_id=config.start_id,
@@ -1148,7 +1257,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if fdp_callsite_count > 0:
         tagged_harness_bin = compile_dump_mode_harness(
             tagged_harness_file,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
         )
         fdp_trace_file = dump_fdp_trace(
@@ -1166,7 +1275,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             tagged_harness_file,
             fdp_trace_file,
             recorded_symbolized_pattern,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             config.crash_input,
             stable=config.stable,
@@ -1184,7 +1293,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             tagged_harness_file,
             fdp_trace_file,
             crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             config.crash_input,
             stable=config.stable,
@@ -1208,7 +1317,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 reduced_harness,
                 crash_pattern_symbolize_1,
                 config.crash_input,
-                config.compile_flags,
+                compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=validation_phase3_mode,
@@ -1220,7 +1329,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 reduced_harness,
                 crash_pattern_symbolize_0,
                 config.crash_input,
-                config.compile_flags,
+                compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=validation_phase3_mode,
@@ -1231,7 +1340,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
                 reduced_harness,
                 crash_pattern_symbolize_1,
                 config.crash_input,
-                config.compile_flags,
+                compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
                 phase3_mode=validation_phase3_mode,
@@ -1245,7 +1354,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         fdp_trace_file,
         recorded_symbolized_pattern,
         config.crash_input,
-        config.compile_flags,
+        compile_flags,
         config.link_flags,
         config.start_id,
         phase3_mode=validation_phase3_mode,
@@ -1260,7 +1369,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             post_inline_harness,
             crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
             config.crash_input,
-            config.compile_flags,
+            compile_flags,
             config.link_flags,
             fdp_trace_file,
             phase3_mode=validation_phase3_mode,
