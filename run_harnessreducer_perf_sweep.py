@@ -202,6 +202,7 @@ def run_case(
         "--crash-input",
         crash_input,
         *extra_args,
+        "--protect-initializers",
         "--profile",
         "--jobs",
         str(job),
@@ -253,6 +254,7 @@ def run_case(
 
     run_info = {
         "tool": tool,
+        "protect_initializers": True,
         "variant": variant["key"],
         "variant_label": variant["label"],
         "jobs": job,
@@ -301,6 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=parse_jobs,
         default=list(DEFAULT_JOBS),
         help="Comma-separated worker counts. Default: 1,2,4,8,16,32,60.",
+    )
+    parser.add_argument(
+        "--protect-initializers", action="store_true", default=True,
+        help="Accepted for compatibility; initializer recovery is always enabled in performance sweeps.",
     )
     parser.add_argument(
         "--harness",
@@ -368,6 +374,7 @@ def main() -> int:
     manifest: dict[str, object] = {
         "schema_version": 2,
         "tool": args.tool,
+        "protect_initializers": True,
         "status": "running",
         "created": datetime.now().astimezone().isoformat(),
         "benchmark_dir": str(bench_dir),

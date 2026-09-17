@@ -227,6 +227,16 @@ def render_profile_text(summary: dict[str, object]) -> str:
         "Stage                               N    Mean ms  Median ms  P95 ms   Min ms   Max ms",
         "----------------------------------  ---  -------  ---------  -------  -------  -------",
     ]
+    recovery = configuration.get("initializer_recovery")
+    if isinstance(recovery, dict):
+        lines[3:3] = [
+            f"initializer_recovery: {recovery.get('status')}",
+            f"reduction_attempts: {recovery.get('attempt_count', 1)}",
+            f"final_validated: {recovery.get('final_validated', False)}",
+            f"diagnosis_seconds: {float(recovery.get('diagnosis_ns', 0)) / 1e9:.6f}",
+            "Combined candidate metrics include every reduction attempt; diagnosis/validation are excluded.",
+            "",
+        ]
     labels = dict(STAGE_FIELDS)
     for field, _ in STAGE_FIELDS:
         stats = timing.get(field, {})
@@ -282,3 +292,53 @@ def write_profile_summary(
     )
     Path(text_path).write_text(render_profile_text(summary), encoding="utf-8")
     return summary
+
+
+def combine_attempt_profiles(
+    attempts: Sequence[dict], destination: Path, recovery: dict, *, jobs: int,
+) -> dict | None:
+    """Pool raw samples (including failed-attempt work), never average averages."""
+    events = []
+    summaries = []
+    malformed = 0
+    wall_ns = 0
+    for index, attempt in enumerate(attempts, 1):
+        root = Path(attempt["directory"])
+        summary_file = root / "reduction_profile.json"
+        if not summary_file.is_file():
+            # A preparation failure is not another reducer invocation.
+            continue
+        summary = json.loads(summary_file.read_text(encoding="utf-8"))
+        summaries.append(summary)
+        wall_ns += int(summary["reducer"]["wall_ns"])
+        records, invalid = read_profile_events(root / "candidate_profile.jsonl")
+        malformed += invalid
+        events.extend({**record, "reduction_attempt": index} for record in records)
+    if not summaries:
+        return None
+    configuration = {
+        **summaries[0]["configuration"], "initializer_recovery": recovery,
+        "reduction_attempts": [
+            {**attempt, "configuration": summary["configuration"],
+             "reducer_returncode": summary["reducer"]["returncode"]}
+            for attempt, summary in zip(
+                [a for a in attempts if (Path(a["directory"]) / "reduction_profile.json").is_file()],
+                summaries,
+            )
+        ],
+    }
+    combined = build_profile_summary(
+        events, wall_ns=wall_ns, jobs=jobs,
+        returncode=int(summaries[-1]["reducer"]["returncode"]),
+        configuration=configuration, malformed_lines=malformed,
+    )
+    combined["reducer"]["final_validated"] = recovery.get("final_validated", False)
+    (destination / "candidate_profile.jsonl").write_text(
+        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in events),
+        encoding="utf-8",
+    )
+    (destination / "reduction_profile.json").write_text(
+        json.dumps(combined, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    (destination / "reduction_profile.txt").write_text(render_profile_text(combined), encoding="utf-8")
+    return combined

@@ -39,6 +39,7 @@ def profile(tool, optimized):
 
 @pytest.mark.parametrize("tool", sweep.TOOL_CHOICES)
 def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
+    jobs = list(sweep.DEFAULT_JOBS)
     bench = tmp_path / "benchmark with spaces"
     bench.mkdir()
     (bench / "harness.cpp").write_text("int unused; int main() { return 0; }\n")
@@ -51,6 +52,7 @@ def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
         assert command[command.index("--tool") + 1] == tool
         assert kwargs["cwd"] == bench
         assert "--profile" in command and "--stable" in command
+        assert command.count("--protect-initializers") == 1
         assert f"--compile-flags=-I{bench}/include" in command
         assert f"--link-flags=-L{bench}/lib -lexample" in command
         optimized = "--pch" in command
@@ -65,31 +67,39 @@ def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
         marker = bench / sweep.TOOL_MARKER_TEMPLATE.format(tool=tool)
         assert marker.read_text().strip() == str(sweep_root)
         output.write_text("int main() { return 0; }\n")
-        write_json(output.parent / "reduction_profile.json", profile(tool, optimized))
+        summary = profile(tool, optimized)
+        summary["configuration"]["initializer_recovery"] = {
+            "status": "not-needed", "attempt_count": 1, "final_validated": True,
+        }
+        write_json(output.parent / "reduction_profile.json", summary)
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(sweep, "run_supervised", fake_reduction)
     monkeypatch.setattr(sys, "argv", [
-        "sweep", "--dir", str(bench), "--tool", tool, "--jobs", "1,2",
+        "sweep", "--dir", str(bench), "--tool", tool,
         "--compile-flags=-I{bench_dir}/include", "--link-flags=-L$(pwd)/lib -lexample",
     ])
     assert sweep.main() == 0
-    assert len(commands) == 4
+    assert len(commands) == 2 * len(jobs)
     root = Path((bench / sweep.LATEST_MARKER_NAME).read_text().strip())
     assert root.name.startswith(f"harnessreducer-perf-comparison-{tool}-")
     manifest = json.loads((root / "run_manifest.json").read_text())
     assert manifest["schema_version"] == 2
     assert manifest["tool"] == tool
+    assert manifest["protect_initializers"] is True
     assert manifest["status"] == "completed"
     assert {run["tool"] for run in manifest["runs"]} == {tool}
-    assert len({run["work_dir"] for run in manifest["runs"]}) == 4
+    assert len({run["work_dir"] for run in manifest["runs"]}) == 2 * len(jobs)
     for run in manifest["runs"]:
+        assert run["protect_initializers"] is True
+        saved_run = json.loads((Path(run["output"]).parent / "run_info.json").read_text())
+        assert saved_run["protect_initializers"] is True
         assert run["total_checks"] == 40
         assert run["source_reduction_metrics"]["token_reduction_percent"] > 0
 
     # Fixed numbers keep speedup assertions independent of this test's runtime.
     for variant, wall in (("optimized", 12.0), ("split-symbolize", 24.0)):
-        for job in (1, 2):
+        for job in jobs:
             (root / variant / f"jobs-{job}" / "full_command_wall_seconds.txt").write_text(str(wall))
     monkeypatch.setattr(sys, "argv", ["tables", "--dir", str(bench)])
     assert tables.main() == 0
@@ -98,11 +108,12 @@ def test_sweep_passes_tool_and_tables_infer_it(tmp_path, monkeypatch, tool):
     assert f"Tool:      {tool}" in text_path.read_text()
     with csv_path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
-    assert [row["jobs"] for row in rows] == ["1"] * 3 + ["2"] * 3
+    assert [row["jobs"] for row in rows] == [str(job) for job in jobs for _ in range(3)]
     assert [row["result_type"] for row in rows[:3]] == [
         "optimized", "non_optimized_split_symbolize", "optimized_speedup_x",
     ]
     assert rows[0]["total_checks"] == "40"
+    assert rows[0]["initializer_recovery"] == "not-needed"
     assert int(rows[0]["original_tokens"]) > int(rows[0]["final_tokens"])
     assert float(rows[0]["token_reduction_percent"]) > 0
     assert float(rows[0]["compile_milliseconds"]) == 100.0
@@ -120,9 +131,39 @@ def test_sweep_defaults_and_invalid_options():
     args = sweep.build_parser().parse_args(base)
     assert args.tool == "treereduce"
     assert args.jobs == [1, 2, 4, 8, 16, 32, 60]
+    assert args.protect_initializers
+    assert sweep.build_parser().parse_args(base + ["--protect-initializers"]).protect_initializers
     for extra in (["--tool", "creduce"], ["--jobs", "64"], ["--jobs", "0"]):
         with pytest.raises(SystemExit):
             sweep.build_parser().parse_args(base + extra)
+
+
+def test_csv_records_recovery_and_uses_combined_summary(tmp_path):
+    optimized = {1: {"summary": profile("perses", True), "full_wall": 12.0}}
+    split = {1: {"summary": profile("perses", False), "full_wall": 24.0}}
+    for row, status, attempts in ((optimized[1], "recovered", 2), (split[1], "not-needed", 1)):
+        row["summary"]["configuration"]["initializer_recovery"] = {
+            "status": status, "attempt_count": attempts, "final_validated": True,
+        }
+    path = tmp_path / "report.csv"
+    tables.write_comparison_csv(path, optimized, split)
+    with path.open() as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows[0]["initializer_recovery"] == "recovered"
+    assert rows[0]["reduction_attempts"] == "2"
+    assert rows[1]["reduction_attempts"] == "1"
+    assert rows[2]["initializer_recovery"] == ""
+    assert float(rows[2]["reduction_wall_seconds"]) == 2.0
+
+
+def test_reports_reject_mixed_protection_policies(tmp_path):
+    first = {"summary": profile("perses", True), "job_dir": tmp_path}
+    second = {"summary": profile("perses", False), "job_dir": tmp_path}
+    first["summary"]["configuration"]["initializer_recovery"] = {
+        "status": "not-needed", "attempt_count": 1, "final_validated": True,
+    }
+    with pytest.raises(SystemExit, match="mixed initializer"):
+        tables.validate_sweep({}, {1: first}, {1: second})
 
 
 def test_infer_legacy_and_profile_only_tools():

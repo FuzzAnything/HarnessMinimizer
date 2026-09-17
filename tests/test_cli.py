@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import patch
+
+from harnessreducer.api import ReductionResult
 
 from harnessreducer.cli import build_parser, main
 
@@ -34,6 +37,21 @@ class TestCliPhase3Mode(unittest.TestCase):
             ["harness.cpp", "-o", "reduced.cpp", "--symbolize"]
         )
         self.assertTrue(args.symbolize)
+
+    def test_initializer_recovery_is_explicitly_opt_in(self):
+        parser = build_parser()
+        self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp"]).protect_initializers)
+        self.assertTrue(parser.parse_args(["h.cpp", "-o", "r.cpp", "--protect-initializers"]).protect_initializers)
+        for additional in ("--slice", "--llm"):
+            with self.assertRaises(SystemExit):
+                main(["h.cpp", "-o", "r.cpp", "--protect-initializers", additional])
+
+    def test_unvalidated_result_is_not_copied_or_reported_as_success(self):
+        result = ReductionResult("failed.cpp", "tagged.cpp", None, success=False)
+        with patch("harnessreducer.cli.reduce_with_config", return_value=result), \
+                patch("harnessreducer.cli.shutil.copy2") as copy:
+            self.assertEqual(main(["h.cpp", "-o", "result.cpp"]), 1)
+            copy.assert_not_called()
 
     def test_debug_argument_is_available(self):
         args = build_parser().parse_args(

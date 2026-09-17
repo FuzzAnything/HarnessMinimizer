@@ -128,6 +128,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--protect-initializers", action="store_true",
+        help=(
+            "After unsuccessful final validation, diagnose uninitialized uses and, "
+            "if relevant, retry reduction once from the original tagged source with "
+            "whole initialized declarations protected. Profiles include both attempts."
+        ),
+    )
+    parser.add_argument(
         "--slice",
         action="store_true",
         help=(
@@ -213,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
     if args.profile and args.check:
         parser.error("--profile currently measures the normal oracle and cannot be combined with --check")
+    if args.protect_initializers and (args.slice or args.llm):
+        parser.error("--protect-initializers cannot currently be combined with --slice or --llm")
     if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
         parser.error(f"--jobs must be between 1 and {MAX_TREEREDUCE_JOBS}")
 
@@ -235,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         jobs=args.jobs,
         profile=args.profile,
         tool=args.tool,
+        protect_initializers=args.protect_initializers,
     )
     try:
         result = reduce_with_config(config)
@@ -245,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             _stage_profile(args.output)
     if not result.success:
         print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
-        return 0
+        return 1
     reduced_harness = result.reduced_harness
 
     if args.output:

@@ -298,6 +298,7 @@ python -m harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 | `--slice` | No | Enable coverage-guided dynamic slicing before tree reduction. When omitted, the original harness goes directly into the rest of the pipeline. |
 | `--statistics` | No | Record how many times `crash_tester.py` returns logical results `77`, `1`, and `-1` during tree reduction, and write `statistics.txt` in the work directory. |
 | `--profile` | No | Record candidate-stage timings, result counts, concurrency, tree-reduction wall time, and checks/s. Writes `candidate_profile.jsonl` and `reduction_profile.{json,txt}`. |
+| `--protect-initializers` | No | Opt in to one protected reduction retry if final validation fails and a one-time analyzer check finds an uninitialized use. Off by default; cannot currently be combined with `--slice` or `--llm`. |
 | `--symbolize` | No | Ablation mode. Runs reduction candidates with sanitizer `symbolize=1` and validates the symbolized crash pattern, symbolized first-stack-trace depth, and symbolized crash location instead of the default fast `symbolize=0` oracle. |
 | `--check` | No | Insight-only mode. Records the first entire stack trace and its frame count from the original crash, then runs tree reduction with `symbolize=1` for every candidate and reports how often the frame count and pre-harness stack-trace prefix stay the same. |
 | `--debug` | No | Keep the normal reduction oracle and write detailed records for every candidate and post-reduction validation to `reduction_debug.log`. Cannot be combined with `--check`. |
@@ -414,6 +415,50 @@ done
 Compare both `checks_per_second` and total `wall_seconds`. A larger job count can
 raise raw checks/s while making the reduction slower if many concurrently tested
 candidates become stale after another worker accepts a reduction.
+
+### `--protect-initializers`
+
+This optional recovery helps when a reducer removes a variable's starting value.
+For example, it may turn `Point p = {2, 3};` into `Point p;`. Compiler warnings do
+not catch every such change, and the result may fail final validation.
+
+Add `--protect-initializers` to your normal command to enable this policy.
+The performance-sweep script enables it automatically for every run.
+
+1. Reduce normally, then try the existing output validation and fallback steps.
+   A successful run needs no static analysis or second reduction.
+2. If no output passes validation, run Clang's analyzer once on the failed
+   cleaned source. Only a relevant uninitialized-use report in the harness
+   triggers recovery; an unrelated warning or failed analyzer does not.
+3. Retry the same engine once from the original tagged source, using the original
+   input, recorded values, and validation reference. Supported initialized local
+   declarations are hidden behind macros during this retry. A reducer can delete
+   an entire declaration, but cannot delete just its initializer.
+4. Restore surviving declarations to ordinary C++ before inlining and final
+   validation. The delivered source does not need the protection header.
+
+This uses the existing Clang installation, not a compiler plugin. There is no
+static analyzer or extra source parser in each candidate check. The protected
+retry can take additional time and retain more code. It is not a general check
+for uninitialized memory: initialization through later assignments or library
+calls is not protected, and dependencies outside a declaration can still change.
+Unsupported declaration forms are recorded as skipped. A one-time preprocessing
+comparison rejects preparation that changes the original token stream.
+
+The flag works with treereduce, Perses, WDD, CDD, and SFC; direct, split, and PCH
+compilation; and either symbolization setting. Amortized linking remains available
+with split/PCH. Existing final-validation requirements are not relaxed. If the
+retry also fails, artifacts remain available for inspection, but the command
+returns nonzero and does not copy an unvalidated file to `--output`.
+
+With `--profile`, the usual top-level reports pool completed checker records from
+both attempts. Reduction wall time is the sum of the two reducer invocation
+times; compilation means still use successful compilations only. Analyzer,
+preparation, and final-validation time belong to full-command wall time, not
+candidate compile time. `initializer_recovery.json` records the outcome and
+diagnosis. A recovery subdirectory preserves separate attempt reports, prepared
+source, and the protection manifest. Source/log artifacts of the normal attempt
+remain in the original work directory.
 
 ### `--symbolize`
 
@@ -695,6 +740,7 @@ config = ReductionConfig(
     amortize_link=False,     # requires split/PCH and shared or static target libraries
     statistics=False,         # optional
     profile=False,            # optional low-overhead hot-loop profile
+    protect_initializers=False,  # optional failure-triggered protected retry
     jobs=8,                   # benchmark for the target and machine; valid range 1..63
     check=False,              # optional insight-only mode
     snapshot=False,           # optional snapshot-based fallback
@@ -754,7 +800,7 @@ During reduction, the work directory may also contain artifacts such as:
 - FDP inlining runs after tree reduction. It preserves the FDP result type for scalar replacements and reconstructs fresh strings/vectors from recorded values. Header storage uses globally available types; local aliases and deduced types are resolved at the original call site. This adds no candidate checks or compiler invocations to tree reduction. Final source generation and compilation do additional type-conversion work. Executing the generated harness may require copies where the previous inliner incorrectly substituted references to stored strings/vectors; the cost depends on the harness and buffer sizes.
 - Dynamic slicing is conservative: if slicing, validation, or coverage collection fails, HarnessReducer falls back to the original harness and continues with the rest of the pipeline.
 - Final validation is performed even when reduction removes every FDP call or removes the names or parameters of `LLVMFuzzerTestOneInput`. In direct-input mode, two named parameters retain the usual byte/length inlining; if only one of the two is named, only that value is assigned. An empty parameter list or two unnamed parameters need no assignments. Unsupported signatures are left unchanged and validated with the original input, rather than guessing which parameter represents data or size. A values header is generated only when input assignments are added. Signatures are not rewritten; a successful check applies to the current build/runtime environment, not arbitrary calling conventions on other machines.
-- If `--snapshot` is enabled and final validation of `reduced_harness.inline.cpp` fails, the tool retries preparation and validation from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, the tool returns the non-inlined snapshot. Without an eligible snapshot, it returns the non-inlined reduced harness. These fallbacks are retained outputs, not a claim that final validation passed, and do not switch engines or rerun reduction. By default, final validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, it uses the symbolized crash pattern, symbolized stack depth, and recorded crash location. Both optimized and non-optimized reductions retain the existing standalone final-validation path. Direct-input embedding still requires an available crash-input file; missing input is reported explicitly rather than invented.
+- If `--snapshot` is enabled and final validation of `reduced_harness.inline.cpp` fails, the tool retries preparation and validation from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, it validates the cleaned non-inlined snapshot. Without an eligible snapshot, it validates the cleaned non-inlined reduced harness. A fallback that passes can be returned successfully. Otherwise, it remains a diagnostic artifact: the API returns `success=False`, and the CLI exits nonzero without copying it to `--output`. These existing fallback steps do not rerun reduction; the optional `--protect-initializers` recovery described above can do so afterward. By default, final validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, it uses the symbolized crash pattern, symbolized stack depth, and recorded crash location. Both optimized and non-optimized reductions retain the existing standalone final-validation path. Direct-input embedding still requires an available crash-input file; missing input is reported explicitly rather than invented.
 - If LLM validation fails, the tool falls back to the non-LLM harness.
 
 ## Performance sweeps and CSV collection
@@ -787,6 +833,18 @@ including custom `--output-root` locations; the existing directory layout does
 not change. Markers are written when a sweep starts. The manifest records
 `running`, then `completed` or `failed` when the sweep exits normally; an
 interrupted sweep may remain marked `running`.
+
+The sweep always passes `--protect-initializers` to both configurations, for every
+engine and job count. You do not need to add it to your sweep command; explicitly
+passing it is still accepted for compatibility. The standalone `harnessreducer`
+command and Python API remain opt-in. This enables failure-triggered recovery,
+not protection during every first reduction. The full-command timer includes any recovery.
+When this policy is present in saved profiles, the TXT report includes recovery
+status and attempt counts; the CSV adds `initializer_recovery` and
+`reduction_attempts` columns. A comparison cannot mix enabled and disabled policies,
+but can compare enabled runs where only some needed a retry. Reports for older or
+disabled runs retain their existing CSV columns. Token counts still compare the
+original harness with the final restored output, not the temporary macro source.
 
 Create TXT and CSV reports for the latest run of **each tool** for a benchmark:
 

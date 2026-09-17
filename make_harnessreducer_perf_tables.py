@@ -568,6 +568,13 @@ def csv_source_metric_values(row: dict[str, object]) -> list[str]:
     ]
 
 
+def recovery_metadata(row: dict[str, object]) -> dict:
+    summary = row.get("summary", {})
+    configuration = summary.get("configuration", {}) if isinstance(summary, dict) else {}
+    recovery = configuration.get("initializer_recovery", {}) if isinstance(configuration, dict) else {}
+    return recovery if isinstance(recovery, dict) else {}
+
+
 def write_comparison_csv(
     output_path: Path,
     optimized: dict[int, dict[str, object]],
@@ -575,6 +582,9 @@ def write_comparison_csv(
 ) -> None:
     """Write three compact rows of metrics for each worker count."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    include_recovery = any(
+        recovery_metadata(row) for group in (optimized, split_symbolize) for row in group.values()
+    )
     with output_path.open("w", encoding="utf-8", newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
@@ -593,6 +603,7 @@ def write_comparison_csv(
                 "original_tokens",
                 "final_tokens",
                 "token_reduction_percent",
+                *(["initializer_recovery", "reduction_attempts"] if include_recovery else []),
             ]
         )
         for jobs in sorted(set(optimized) & set(split_symbolize)):
@@ -609,6 +620,13 @@ def write_comparison_csv(
                     if row_for_metadata is None
                     else csv_source_metric_values(row_for_metadata)
                 )
+                recovery_values = []
+                if include_recovery:
+                    metadata = recovery_metadata(row_for_metadata) if row_for_metadata is not None else {}
+                    recovery_values = (
+                        ["", ""] if row_for_metadata is None
+                        else [str(metadata.get("status", "disabled")), str(metadata.get("attempt_count", 1))]
+                    )
                 writer.writerow(
                     [
                         jobs,
@@ -618,6 +636,7 @@ def write_comparison_csv(
                             for metric in metrics
                         ),
                         *metadata_values,
+                        *recovery_values,
                     ]
                 )
 
@@ -745,14 +764,24 @@ def validate_sweep(
         expected = {int(job) for job in requested_jobs}
         if set(optimized) != expected or set(split_symbolize) != expected:
             raise SystemExit("incomplete sweep: not all requested worker counts have both configurations")
+    policies = set()
     for rows in (optimized, split_symbolize):
         for row in rows.values():
+            recovery = recovery_metadata(row)
+            policies.add(bool(recovery))
+            if recovery.get("final_validated") is False:
+                raise SystemExit(f"unvalidated final output: {row['job_dir']}")
             run_info = row.get("run_info", {})
             for record in (run_info, get_reducer(row)):
                 if isinstance(record, dict) and record.get("returncode") not in (None, 0):
                     raise SystemExit(f"failed run: {row['job_dir']}; not reporting it as a successful comparison")
             if manifest.get("status") == "completed" and row.get("final_size") is None:
                 raise SystemExit(f"incomplete run: missing reduced.cpp in {row['job_dir']}")
+    if len(policies) > 1 or (
+        "protect_initializers" in manifest and policies
+        and policies != {bool(manifest["protect_initializers"])}
+    ):
+        raise SystemExit("mixed initializer-recovery policies; compare runs using the same policy")
 
 
 def write_reports(bench_dir: Path, results_dir: Path, args: argparse.Namespace) -> int:
@@ -822,6 +851,19 @@ def write_reports(bench_dir: Path, results_dir: Path, args: argparse.Namespace) 
         ("optimized", optimized),
         ("split_symbolize", split_symbolize),
     ):
+        if any(recovery_metadata(row) for row in rows_by_job.values()):
+            lines.extend([
+                f"{VARIANT_TITLES[key]} - initializer recovery",
+                "Reduction times/counts pool all attempts; full command time also includes diagnosis and validation.",
+                ascii_table(
+                    ["Jobs", "Recovery", "Attempts", "Final validated"],
+                    [[str(jobs), str(recovery_metadata(row).get("status", "disabled")),
+                      str(recovery_metadata(row).get("attempt_count", 1)),
+                      str(recovery_metadata(row).get("final_validated", "unknown"))]
+                     for jobs, row in sorted(rows_by_job.items())],
+                ),
+                "",
+            ])
         lines.extend(
             [
                 VARIANT_TITLES[key],

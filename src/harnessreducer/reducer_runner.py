@@ -1972,6 +1972,18 @@ def get_work_dir() -> str:
     return configure_work_dir(None)
 
 
+@contextmanager
+def isolated_attempt_work_dir(path: Path):
+    """Temporarily switch artifacts, preserving original reference globals."""
+    global TREEDUCER_DIR, _IS_USER_WORK_DIR
+    previous = TREEDUCER_DIR, _IS_USER_WORK_DIR
+    configure_work_dir(str(path))
+    try:
+        yield
+    finally:
+        TREEDUCER_DIR, _IS_USER_WORK_DIR = previous
+
+
 def configure_debug_logging(enabled: bool) -> str | None:
     global REDUCTION_DEBUG_LOG_PATH
 
@@ -3559,7 +3571,15 @@ def run_treereducer(
         )
         print(f"[+] Running reduction engine: {tool}")
         reduction_started_ns = time.perf_counter_ns()
-        proc = invocation.run(run_supervised)
+        try:
+            proc = invocation.run(run_supervised)
+        except (OSError, subprocess.SubprocessError) as exc:
+            # Preserve spent work in the profile even when a supervised reducer
+            # invocation times out or cannot complete normally.
+            proc = subprocess.CompletedProcess(
+                invocation.command, 124 if isinstance(exc, subprocess.TimeoutExpired) else 1,
+                "", str(exc),
+            )
         reduction_wall_ns = time.perf_counter_ns() - reduction_started_ns
     if profile and profile_events_path is not None:
         profile_summary = write_profile_summary(
