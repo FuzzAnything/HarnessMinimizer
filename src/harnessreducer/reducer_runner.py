@@ -17,7 +17,7 @@ from harnessreducer.process_supervisor import (
     run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
 )
 from harnessreducer.crash_evidence import (
-    REFERENCE_EVIDENCE_ATTEMPTS, retry_missing_evidence,
+    CANDIDATE_EVIDENCE_ATTEMPTS, REFERENCE_EVIDENCE_ATTEMPTS, retry_missing_evidence,
 )
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
@@ -3712,6 +3712,11 @@ def _write_validation_failure_log(
     Path(validation_log_path).write_text(artifact, encoding="utf-8")
 
 
+def _validation_failed_after_sanitizer_exit(proc: subprocess.CompletedProcess[str]) -> bool:
+    output = f"{proc.stdout}\n{proc.stderr}"
+    return "Crash pattern did not match. Exit status: 77" in output
+
+
 def validate_crash_pattern(
     harness_path: str,
     crash_pattern: str,
@@ -3754,15 +3759,31 @@ def validate_crash_pattern(
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
 
-    proc = run_command(
-        cmd,
-        "Fast crash-pattern validation failed.",
-        ignore_errors=True,
+    proc = None
+    max_attempts = (
+        CANDIDATE_EVIDENCE_ATTEMPTS
+        if get_dynamic_reference_crash_site() is not None
+        else 1
     )
-    _record_poc_runtime_args_from_validation(proc)
-    if proc.returncode != 77:
+    for attempt in range(1, max_attempts + 1):
+        proc = run_command(
+            cmd,
+            "Fast crash-pattern validation failed.",
+            ignore_errors=True,
+        )
+        _record_poc_runtime_args_from_validation(proc)
+        if proc.returncode == 77:
+            return True
+        if not _validation_failed_after_sanitizer_exit(proc) or attempt >= max_attempts:
+            break
+        print(
+            "[!] Fast validation saw sanitizer exit 77 but the first crash text "
+            f"did not match on attempt {attempt}/{max_attempts}; retrying because "
+            "a dynamic crash-site anchor is available."
+        )
+    if proc is not None:
         _write_validation_failure_log(validation_log_path, proc)
-    return proc.returncode == 77
+    return False
 
 
 def validate_stack_trace(
@@ -3887,15 +3908,31 @@ def validate_symbolized_crash_pattern_depth_location(
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
 
-    proc = run_command(
-        cmd,
-        "Symbolized crash-location validation failed.",
-        ignore_errors=True,
+    proc = None
+    max_attempts = (
+        CANDIDATE_EVIDENCE_ATTEMPTS
+        if get_symbolized_reference_crash_location_pattern()
+        else 1
     )
-    _record_poc_runtime_args_from_validation(proc)
-    if validation_log_path is not None and proc.returncode != 77:
+    for attempt in range(1, max_attempts + 1):
+        proc = run_command(
+            cmd,
+            "Symbolized crash-location validation failed.",
+            ignore_errors=True,
+        )
+        _record_poc_runtime_args_from_validation(proc)
+        if proc.returncode == 77:
+            return True
+        if not _validation_failed_after_sanitizer_exit(proc) or attempt >= max_attempts:
+            break
+        print(
+            "[!] Symbolized validation saw sanitizer exit 77 but the first crash "
+            f"text did not match on attempt {attempt}/{max_attempts}; retrying "
+            "because a symbolized crash-location anchor is available."
+        )
+    if validation_log_path is not None and proc is not None:
         _write_validation_failure_log(validation_log_path, proc)
-    return proc.returncode == 77
+    return False
 
 
 def validate_crash_pattern_and_stack_trace(

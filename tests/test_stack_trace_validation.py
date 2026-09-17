@@ -950,6 +950,63 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertEqual(get_poc_runtime_args(), ("-rss_limit_mb=0",))
 
     @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_retries_text_miss_with_dynamic_anchor(self, mock_run):
+        reset_stack_trace_state()
+        set_dynamic_reference_crash_site(
+            DynamicCrashSite(
+                library_path="/tmp/build/lib/libtarget.so",
+                library_name="libtarget.so",
+                offset="0xbeaf0",
+            )
+        )
+        mock_run.side_effect = [
+            SimpleNamespace(
+                returncode=1,
+                stdout=(
+                    "Crash pattern did not match. Exit status: 77\n"
+                    "Execution log:\n"
+                    "runtime error: execution reached the end of a value-returning function\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(returncode=77, stdout="", stderr=""),
+        ]
+
+        ok = validate_crash_pattern(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_count, 2)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_does_not_retry_text_miss_without_dynamic_anchor(self, mock_run):
+        reset_stack_trace_state()
+        mock_run.return_value = SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "Crash pattern did not match. Exit status: 77\n"
+                "Execution log:\nother sanitizer report\n"
+            ),
+            stderr="",
+        )
+
+        ok = validate_crash_pattern(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(mock_run.call_count, 1)
+
+    @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1028,6 +1085,61 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertNotIn("--stack-trace-file", cmd)
             self.assertNotIn("--dynamic-crash-site-library", cmd)
             self.assertNotIn("--dynamic-crash-site-offset", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_symbolized_validation_retries_text_miss_with_crash_location_anchor(self, mock_run):
+        reset_stack_trace_state()
+        set_symbolized_reference_stack_depth(6)
+        set_symbolized_reference_crash_location_pattern(
+            normalize_crash_signature("/src/lib.c:10:3", escape=True)
+        )
+        mock_run.side_effect = [
+            SimpleNamespace(
+                returncode=1,
+                stdout=(
+                    "Crash pattern did not match. Exit status: 77\n"
+                    "Execution log:\n"
+                    "runtime error: execution reached the end of a value-returning function\n"
+                ),
+                stderr="",
+            ),
+            SimpleNamespace(returncode=77, stdout="", stderr=""),
+        ]
+
+        ok = validate_symbolized_crash_pattern_depth_location(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_run.call_count, 2)
+
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_symbolized_validation_does_not_retry_other_failures(self, mock_run):
+        reset_stack_trace_state()
+        set_symbolized_reference_stack_depth(6)
+        set_symbolized_reference_crash_location_pattern(
+            normalize_crash_signature("/src/lib.c:10:3", escape=True)
+        )
+        mock_run.return_value = SimpleNamespace(
+            returncode=1,
+            stdout="Crash did not reproduce. Exit status: 0\n",
+            stderr="",
+        )
+
+        ok = validate_symbolized_crash_pattern_depth_location(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(mock_run.call_count, 1)
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_stack_trace_without_stored_pattern_still_runs(self, mock_run):
