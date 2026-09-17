@@ -52,6 +52,15 @@ SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/harness+0x11ae5)
 
 class TestCheckModeHelpers(unittest.TestCase):
     def setUp(self):
+        from harnessreducer.macro_headers import MacroPreparation
+        # The mocked reducer in these routing tests creates no source/output.
+        for mock in (
+            patch("harnessreducer.reduction_engines.prepare_macro_headers",
+                  side_effect=lambda source, work: MacroPreparation(source)),
+            patch("harnessreducer.reduction_engines.ReducerInvocation.publish_result"),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
         reducer_runner.TREEDUCER_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
 

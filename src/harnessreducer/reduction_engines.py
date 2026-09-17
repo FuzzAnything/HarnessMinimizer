@@ -19,6 +19,7 @@ import sys
 import tempfile
 
 from harnessreducer.process_supervisor import run_supervised, treereduce_binary
+from harnessreducer.macro_headers import MacroPreparation, prepare_macro_headers
 
 
 TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd", "sfc", "vulcan")
@@ -261,6 +262,8 @@ class ReducerInvocation:
     metadata: dict[str, object]
     cwd: Path | None = None
     log_path: Path | None = None
+    macros: MacroPreparation | None = None
+    snapshot_paths: tuple[Path, ...] = ()
 
     def run(self, supervisor=run_supervised) -> subprocess.CompletedProcess:
         kwargs = dict(stderr=subprocess.STDOUT, text=True, check=False, timeout=None, private_tmpdir=True)
@@ -295,6 +298,10 @@ class ReducerInvocation:
             raise RuntimeError(f"Reducer did not produce its expected result: {self.result}")
         if self.result.resolve() != self.destination.resolve():
             shutil.copy2(self.result, self.destination)
+        if self.macros is not None:
+            self.macros.restore_file(self.destination)
+            for path in self.snapshot_paths:
+                self.macros.restore_file(path)
 
 
 def prepare_reducer_invocation(
@@ -305,13 +312,28 @@ def prepare_reducer_invocation(
     if not 1 <= jobs <= 63:
         raise ValueError("Reducer jobs must be between 1 and 63")
     destination = Path(output)
+    # This is deliberately shared by every engine and runs after any PCH split.
+    # Do not change the checker: the compiler reads the ordinary macro headers.
+    macros = prepare_macro_headers(Path(source), destination.resolve().parent)
+    if macros.headers:
+        print(f"[+] Prepared {len(macros.headers)} macro definitions as temporary headers for reduction.")
+    prepared_source = str(macros.source)
+    snapshot_paths = tuple(
+        Path(argument.split("=", 1)[1]).resolve()
+        if argument.startswith("--last-interesting-file=")
+        else Path(checker_command[index + 1]).resolve()
+        for index, argument in enumerate(checker_command)
+        if argument.startswith("--last-interesting-file=")
+        or (argument == "--last-interesting-file" and index + 1 < len(checker_command))
+    )
     if tool == "treereduce":
-        command = [treereduce_binary(), "-j", str(jobs), "-s", source, "-o", output]
+        command = [treereduce_binary(), "-j", str(jobs), "-s", prepared_source, "-o", output]
         command.extend(["--stable", "--min-reduction", "1"] if stable else ["--fast"])
         command.extend(["--timeout", "300", "--interesting-exit-code", "77", "--", *checker_command])
         return ReducerInvocation(
             command=command, result=destination, destination=destination,
-            metadata={"tool": tool, "command": command},
+            metadata={"tool": tool, "command": command, "macro_preparation": macros.metadata()},
+            macros=macros, snapshot_paths=snapshot_paths,
         )
     checker_cwd = Path.cwd()
     runtime = check_perses()
@@ -322,7 +344,7 @@ def prepare_reducer_invocation(
     inputs = root / "input"
     inputs.mkdir()
     candidate = inputs / "candidate.cpp"
-    shutil.copy2(source, candidate)
+    shutil.copy2(prepared_source, candidate)
     script = inputs / "interesting.sh"
     write_perses_test_script(script, checker_command, checker_cwd=checker_cwd)
     output_dir = root / "output"
@@ -338,6 +360,7 @@ def prepare_reducer_invocation(
         "checker_working_directory": str(checker_cwd),
         "input_source": str(Path(source).resolve()), "engine_directory": str(root),
         "log": str(root / "reducer.log"),
+        "macro_preparation": macros.metadata(),
         "check_count_definition": "completed checker profile records; excludes unexecuted cached candidates",
     }
     (destination.resolve().parent / "reduction_engine.json").write_text(
@@ -346,4 +369,5 @@ def prepare_reducer_invocation(
     return ReducerInvocation(
         command=command, result=output_dir / candidate.name,
         destination=destination, metadata=metadata, cwd=inputs, log_path=root / "reducer.log",
+        macros=macros, snapshot_paths=snapshot_paths,
     )

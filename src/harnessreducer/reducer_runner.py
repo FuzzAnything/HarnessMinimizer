@@ -3581,8 +3581,7 @@ def run_treereducer(
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
-    if tool != "treereduce":
-        invocation.publish_result()
+    invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

@@ -251,6 +251,27 @@ symbolized crash location.
 
 ## Basic CLI Usage
 
+All reduction engines use the same preparation for harness-local `#define`
+directives. Each definition still present after compilation-mode preparation is
+temporarily replaced, at its original position, with an include of a generated
+header. Existing `#include` directives are left unchanged. This protects
+multiline definitions and macro operators such as `#` and `##` from source
+reconstruction problems in Perses; treereduce uses the same policy for consistent
+comparisons. It applies to direct, split, and PCH compilation, including
+amortized linking and diagnostic check mode.
+
+The compiler reads these as ordinary headers, so split/direct mode gains no PCH
+or compilation caching. Surviving definitions are restored in the result and
+fallback snapshots before post-processing and existing final validation; the
+exported harness needs no temporary macro headers. Original source files and
+library headers are not modified. Preparation adds no candidate checks or
+validation stages. Reducers can remove a generated include but cannot edit the
+macro's hidden body, so this is a new preparation configuration for performance
+comparisons, including treereduce. Runs with no remaining definitions create no
+macro artifacts. With definitions, `reducer-macros-*` under the work directory
+contains the headers, prepared input, and restoration manifest; profile engine
+metadata records the preparation policy and definition count.
+
 ```bash
 harnessreducer <harness.cpp> -o <reduced.cpp> [options]
 ```

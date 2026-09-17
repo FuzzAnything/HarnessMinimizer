@@ -57,7 +57,9 @@ class TestEngineSelection(unittest.TestCase):
                         self.assertEqual(opts[f"--{method}-fixpoint"], str(stable and method == tool).lower())
 
     def test_treereduce_command_is_preserved(self):
-        with patch("harnessreducer.reduction_engines.check_perses") as probe:
+        with tempfile.TemporaryDirectory() as tmp, chdir(tmp), \
+             patch("harnessreducer.reduction_engines.check_perses") as probe:
+            Path("source.cpp").write_text("int value;\n")
             invocation = prepare_reducer_invocation(
                 tool="treereduce", source="source.cpp", output="reduced.cpp",
                 checker_command=["/test/check.py", CANDIDATE_PLACEHOLDER, "pattern"],
@@ -320,7 +322,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
             with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source = root / "harness.cpp"
-                source.write_text("int value;")
+                source.write_text("#define VALUE 7\nint value;\n")
                 reducer_runner.configure_work_dir(tmp)
                 module = check_mode if diagnostic else reducer_runner
                 run = check_mode.run_treereducer_with_check if diagnostic else reducer_runner.run_treereducer
@@ -328,7 +330,9 @@ class TestEngineRunnerRouting(unittest.TestCase):
                 def pretend_perses(command, **kwargs):
                     output = Path(command[command.index("--output-dir") + 1])
                     output.mkdir()
-                    (output / "candidate.cpp").write_text("int result;")
+                    prepared = Path(command[command.index("--input-file") + 1]).read_text()
+                    self.assertNotIn("#define", prepared)
+                    (output / "candidate.cpp").write_text(prepared.replace("int value;", "int result;"))
                     if not diagnostic:
                         metadata = json.loads((root / "reduction_engine.json").read_text())
                         checker = metadata["checker_command"]
@@ -348,7 +352,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                         tool="cdd", jobs=2, stable=True,
                         **({} if diagnostic else {"profile": True}),
                     )
-                self.assertEqual(Path(result).read_text(), "int result;")
+                self.assertEqual(Path(result).read_text(), "#define VALUE 7\nint result;\n")
                 metadata = json.loads((root / "reduction_engine.json").read_text())
                 checker = metadata["checker_command"]
                 self.assertEqual("--check-reference-file" in checker, diagnostic)

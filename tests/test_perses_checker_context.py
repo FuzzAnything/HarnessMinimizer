@@ -16,6 +16,7 @@ import pytest
 from harnessreducer import reducer_runner
 from harnessreducer.process_supervisor import run_supervised
 from harnessreducer.reduction_engines import write_perses_test_script
+from harnessreducer.macro_headers import prepare_macro_headers
 
 
 @pytest.mark.skipif(not shutil.which("clang++") or not shutil.which("timeout"), reason="native tools required")
@@ -52,13 +53,15 @@ def test_real_checker_preserves_relative_data_and_replay(
     source.write_text(
         '#include <cstdio>\n#include <cstdlib>\n#include <target.h>\n'
         '#include <fuzzer/FuzzedDataProvider.h>\n'
+        '#define HR_JOIN(a, b) a##b\n'
+        '#define HR_EQUAL(a, b) \\\n ((a) == (b))\n'
         'extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n'
         '  if (!size) return 0;\n'
         '  FILE *f = std::fopen("data/value.txt", "r");\n'
         '  if (!f) return 0;\n'
         '  int value = std::fgetc(f); std::fclose(f);\n'
         '  FuzzedDataProvider fdp(data, size);\n'
-        '  if (value == \'7\' && fdp.ConsumeIntegral<int>(101) == target_value()) {\n'
+        '  if (value == \'7\' && HR_EQUAL(fdp.ConsumeIntegral<int>(101), HR_JOIN(target_, value)())) {\n'
         '    std::fprintf(stderr, "HR_RELATIVE_RESOURCE_OK\\n");\n'
         '    std::_Exit(77);\n'
         '  }\n'
@@ -79,6 +82,8 @@ def test_real_checker_preserves_relative_data_and_replay(
             str(source), compile_flags, use_replay=True, amortize_link=amortized,
         )
         prepared = Path(pch.body_source)
+    macros = prepare_macro_headers(prepared, work)
+    prepared = macros.source
     runner_context = (
         reducer_runner.start_amortized_runner(
             link_flags, str(input_file), str(trace), symbolize=symbolize,

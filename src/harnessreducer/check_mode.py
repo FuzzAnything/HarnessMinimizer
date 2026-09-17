@@ -628,8 +628,7 @@ def run_treereducer_with_check(
         proc = invocation.run(run_supervised)
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run {tool} reducer in check mode:\n{proc.stdout} {proc.stderr}")
-    if tool != "treereduce":
-        invocation.publish_result()
+    invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from harnessreducer import reducer_runner
 from harnessreducer.dynamic_slicer import CoverageMap
+from harnessreducer.macro_headers import MacroPreparation
 
 
 class _Proc:
@@ -19,6 +20,16 @@ class _Proc:
 
 class TestReducerRunner(unittest.TestCase):
     def setUp(self):
+        # These command-routing tests mock the reducer and use nonexistent
+        # source/output paths. Real preparation and restoration have separate
+        # filesystem/native tests in test_macro_headers and test_reduction_engines.
+        for mock in (
+            patch("harnessreducer.reduction_engines.prepare_macro_headers",
+                  side_effect=lambda source, work: MacroPreparation(source)),
+            patch("harnessreducer.reduction_engines.ReducerInvocation.publish_result"),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
         reducer_runner.TREEDUCER_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
         reducer_runner.set_normal_reference_stack_depth(None)
