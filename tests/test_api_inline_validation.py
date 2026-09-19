@@ -306,6 +306,9 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
     assert mock_validate.call_args_list[0].kwargs["retry_oom_without_rss_limit"] is True
     assert mock_validate.call_args_list[0].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
     assert mock_validate.call_args_list[1].kwargs["evidence_attempts"] == POST_REDUCTION_VALIDATION_ATTEMPTS
+    content = Path(out).read_text(encoding="utf-8")
+    assert "ConsumeIntegralInRange<size_t>(1, 0)" in content
+    assert "ConsumeIntegralInRange<size_t>(1, 0, 0)" not in content
     captured = capsys.readouterr()
     assert "FDP callsite(s) remain after replacement" in captured.out
 

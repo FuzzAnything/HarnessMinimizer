@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
-"""Run the pre-minimization FuzzAgent-style crash triage loop."""
-
+	#!/usr/bin/env python3
+"""Direct LLM crash triage for original or reduced fuzzing harnesses."""
+ 
 from __future__ import annotations
-
+ 
 import argparse
-from dataclasses import dataclass
+import csv
 import json
 import os
 from pathlib import Path
@@ -18,396 +18,191 @@ import time
 from typing import Any, Sequence
 import urllib.error
 import urllib.request
-
-
+ 
+ 
 PROJECT_ROOT = Path(__file__).resolve().parent
+BENCHMARK_ROOT = PROJECT_ROOT / "benchmark" / "library-bug"
+DEFAULT_CSV_PATH = PROJECT_ROOT / "crash_triage_results.csv"
+ 
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
 from harnessreducer import reducer_runner as rr  # noqa: E402
-
-
-# =============================================================================
-# LLM CONFIGURATION - FILL IN THESE THREE VALUES
-# The script reads the API key only from HKU_API_KEY.
-# =============================================================================
-OPENAI_BASE_URL = "https://llm.shtech.org/v1"
-OPENAI_MODEL = "GLM-5.2"
-
-
+ 
+ 
+OPENAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+# OPENAI_BASE_URL = "https://llm.shtech.org/v1"
+OPENAI_MODEL = "glm-5.3"
+# OPENAI_MODEL = "GLM-5.3"
 LLM_TIMEOUT_SECONDS = 240
 LLM_TEMPERATURE = 1.0
 LLM_TOP_P = 0.95
 LLM_RETRIES = 5
-MAX_AGENT_EPOCHS = 50
-MAX_TOOL_OUTPUT_CHARACTERS = 100_000
-MAX_CONTRACT_SEARCH_FILES = 2500
-MAX_CONTRACT_DOC_FILES = 80
-MAX_CONTRACT_MATCHES = 200
-
-CONTRACT_DOC_SUFFIXES = {
-    ".adoc",
-    ".html",
-    ".htm",
-    ".md",
-    ".rst",
-    ".tex",
-    ".txt",
-    ".1",
-    ".2",
-    ".3",
-    ".man",
-    ".pdf",
-}
-CONTRACT_CODE_SUFFIXES = {
-    ".c",
-    ".cc",
-    ".cpp",
-    ".cxx",
-    ".h",
-    ".hh",
-    ".hpp",
-    ".hxx",
-}
-CONTRACT_DOC_NAME_PREFIXES = (
-    "api",
-    "changelog",
-    "contract",
-    "guide",
-    "install",
-    "manual",
-    "news",
-    "readme",
-    "reference",
-    "spec",
-    "standard",
-    "usage",
-)
-CONTRACT_SEARCH_PRUNE_DIRS = {
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "__pycache__",
-}
-CONTRACT_GENERIC_TERMS = (
-    "api",
-    "contract",
-    "documentation",
-    "invalid",
-    "length",
-    "manual",
-    "must",
-    "non-zero",
-    "nonzero",
-    "null",
-    "precondition",
-    "range",
-    "required",
-    "shall",
-    "size",
-    "specification",
-    "standard",
-    "valid",
-    "zero",
-)
-
-
-def log_found_file(path: Path, reason: str) -> None:
-    print(f"[source] found file for LLM ({reason}): {path}")
-
-
-def log_missing_file(path: Path, reason: str) -> None:
-    print(f"[source] missing file ({reason}): {path}")
-
-
-# This is FuzzAgent's CrashAnalyzerAgent prompt immediately before commit
-# 45fe0ef ("Add harness minization tool"). It intentionally contains the old
-# tool names and does not mention harness minimization.
-FUZZAGENT_SYSTEM_PROMPT = r"""
-# Role Definition
-You are the **Crash Analysis & Triage Specialist**. Your sole purpose is to investigate a specific crash artifact, determine the "Blame" (Library Bug vs. Harness Bug), and file a formal report.
-
-## Core Mission
-You act as a Judge. You have two suspects:
-1.  **The Library**: Did it fail to handle valid input safe? (Genuine Bug)
-2.  **The Harness**: Did it violate the API contract or manage memory poorly? (Invalid Bug)
-
-Your goal is to rule out the Harness first. If the Harness is correct, the Library is guilty.
-
-## Authority & Constraints
-
-### PERMITTED ACTIONS
-1.  **Forensics**: Use `crash_initial_analysis` to get stack traces and ASAN reports.
-2.  **Investigation**: Use `read_file` to inspect the source code of the harness and the library frames in the stack trace.
-3.  **Debugging**: Use `crash_context_inspection` extract runtime information to debug the crash.
-4.  **Contract Discovery**: Use `discover_contract_evidence` to search local manuals, specifications, API references, README files, examples, tests, headers, and source comments for API/input validity rules.
-5.  **Reporting**: Use `generate_crash_report` to submit your final verdict.
-
-### PROHIBITED ACTIONS
-1.  **No Guessing**: Do not guess API behavior. You MUST read the header file/documentation for the crashing function to verify preconditions (e.g., "Must not be NULL").
-2.  **No Assumption**: Do not assume runtime behavior. You MUST debug the crash to extract runtime information to confirm the root cause.
-3.  **No Evidenceless Triage**: Do not triage the crash as a library bug without evidence. If you are not sure, report it as a harness bug.
-4.  **No Code Changes**: You are an analyst, not a developer. Do not edit files.
-5.  **No Vague Reports**: A report without a specific "Root Cause" and "Blame" is a failed task.
-6.  **No Slow-unit Detection**: Do not try to triage slow-unit artifacts. They are not crashes.
-7.  **No Contract-by-Omission**: The absence of a precondition in one header comment is NOT evidence that arbitrary input is valid. You MUST search broader local documentation/specifications/examples/tests where available.
-8.  **No Defensive-Programming Liability Shortcut**: A library crash on invalid API input is **Harness Misuse** for this triage task, even if the library could have returned an error more gracefully.
-9.  **No Uncited Judgements**: Every substantive judgement in the report MUST cite its basis: a tool observation, a local file path with line numbers, runtime debugger/sanitizer evidence, or `LLM prior knowledge (not verified in local repository)`. Do not present prior knowledge as if it came from a checked source.
-10. **Explicit Rule Selection**: The final report MUST state exactly which Phase 3 decision-tree rule determined the classification, including the rule number and title.
-
-## Mandatory Workflow
-
-### Phase 1: Forensics (Data Gathering)
-1.  Receive the **Crash Artifact Path** (from user input).
-2.  Call `crash_initial_analysis` with the crash artifact path to get call traces.
-3.  **Identify the "Crash Point"**: The top-most stack frame that belongs to the project (skip standard library frames like `libc.so` or `asan_report`).
-
-### Phase 2: Debugging (Runtime Information Gathering)
-1.  Call `crash_context_inspection` on the suspect API or function to inspect the runtime context frames of this invocation.
-2.  Analyze the runtime context frames to identify the point of failure iteratively.
-3.  Read the file/documentation of the suspect API or function to verify the preconditions and postconditions.
-4.  Call `discover_contract_evidence` with:
-    - the suspect public API names,
-    - the relevant data structure or file format names,
-    - the crash-relevant fields/arguments (for example: size, length, width, height, count, offset, pointer, flags).
-    - any source directories from stack-trace frames if they are outside the harness directory.
-5.  Inspect any decisive documentation/header/source matches with `read_file`.
-6.  Repeat the process until the point of failure and the input-validity status are identified.
-
-### Phase 2.5: Validity Proof Gate
-Before selecting **Genuine Library Bug**, you MUST prove that the harness supplied valid input under the applicable API contract, local manual, local specification, examples/tests, or clearly enforced library preconditions.
-
-- Identify each externally controlled argument/field that reaches the crashing API.
-- Identify applicable preconditions: non-NULL, initialized object state, ranges, non-zero constraints, size/length relationships, ownership/lifetime rules, file-format validity, enum/flag validity, call ordering, and required setup/cleanup.
-- Prove the harness satisfies those preconditions using concrete code lines and runtime values.
-- If a crash-relevant value is uninitialized, unconstrained, out of range, violates a file-format/API contract, or cannot be proven valid, classify the crash as **Harness Misuse**.
-- If local contract evidence is inconclusive, default to **Harness Misuse**, not **Genuine Library Bug**.
-
-### Phase 3: The "Blame" Decision Tree (Triage Logic)
-Apply these rules IN ORDER. The first match determines the verdict.
-
+LLM_REASONING_EFFORT = "high"
+# LLM_REASONING_EFFORT = "max"
+TRIAGE_REPETITIONS = 3
+# Echo the collected stack trace to the screen before sending it to the LLM.
+PRINT_STACK_TRACE = True
+# PRINT_STACK_TRACE = False
+ 
+ 
+TRIAGE_RULES = r"""
 **Rule 1: The "Harness Fault" Check (Sanity Check)**
 -   **Condition**: Is the top-most frame located directly in the fuzzer harness file (e.g., `fuzz_harness.cpp`)?
 -   **Verdict**: **HARNESS BUG**. (The harness crashed itself before entering the library).
-
+ 
 **Rule 2: The "Null Pointer" Check**
 -   **Condition**: Is it a NULL Dereference inside the library?
 -   **Action**: Trace the NULL value back. Did the Harness pass a NULL pointer to an API directly?
 -   **Verdict**:
     -   If Harness passed NULL violating contract -> **HARNESS BUG**.
     -   If Library generated NULL internally -> **LIBRARY BUG**.
-
+ 
 **Rule 3: The "Memory Ownership" Check (UAF/Double Free)**
 -   **Condition**: Is it a Use-After-Free or Double-Free?
 -   **Action**: Check who freed the memory.
 -   **Verdict**:
     -   If Harness freed it and passed it back -> **HARNESS BUG**.
     -   If Library freed it and tried to use it again -> **LIBRARY BUG**.
-
+ 
 **Rule 4: The "Assertion" Check**
 -   **Condition**: Did an `assert()` fail?
 -   **Verdict**:
     -   If assert is enforcing input requirements (e.g., `assert(input != NULL)`) -> **HARNESS BUG**.
     -   If assert is checking internal state (e.g., `assert(state == VALID)`) -> **LIBRARY BUG**.
-
+ 
 **Rule 5: OOM and Timeout**
--   **Condition**: Is the OOM/Timeout controlled by the harness?
+-   **Condition**: Did the OOM/Timout is controlled by the harness?
 -   **Verdict**:
     -   If allocation size or loop count is passed by the harness -> **HARNESS BUG**.
-    -   If caused by internal states -> **LIBRARY BUG**.
-
-**Rule 6: Contract / Specification Validity Check**
--   **Condition**: Did the harness pass an invalid, uninitialized, out-of-range, or not-provably-valid API argument, struct field, file/data format value, enum, flag, size, length, pointer, or object state?
--   **Verdict**: **HARNESS BUG**.
--   **Important**: If the library crashes before it reaches its normal validation path, that is still **Harness Misuse** when the triggering input violates the API/specification contract.
-
+    -   If casued by internal states -> **LIBRARY BUG**.
+ 
+**Rule 6: API Documentation**
+-   **Condition**: Do the harness inputs and API usageappear to follow the API documentation.
+-   **Verdict**:
+    -   If violating API documentation -> **HARNESS BUG**.
+    -   If not violating API documentation -> **LIBRARY BUG**.
+ 
 **Rule 7: Default Liability**
--   **Condition**: If the crash is inside the library, and the harness inputs are proven to follow the applicable API/manual/specification contracts.
+-   **Condition**: If the crash is inside the library, and the harness inputs appear to follow the API documentation.
 -   **Verdict**: **LIBRARY BUG**.
--   **Otherwise**: **HARNESS BUG**.
-
-### Phase 4: Reporting
-1.  Construct the report content.
-2.  In `## Triage Verdict`, include `**Decision Rule Applied**: Rule N: [exact Phase 3 rule title]` and `**Decision Rule Rationale**: [why that first matching rule applies]`.
-3.  Add a `## Judgement Citations` section. For every judgement that affects root cause, contract validity, decision-rule selection, or final classification, list the claim and its source.
-4.  If a claim comes from your general knowledge rather than a checked local file/tool observation, cite it exactly as `LLM prior knowledge (not verified in local repository)`. Such prior knowledge may provide context, but it is not a substitute for local contract evidence in a **Genuine Library Bug** validity proof.
-5.  Call `generate_crash_report` with the results and content.
-
-## Report Content Template
-When calling `generate_crash_report`, format the `content` string strictly as follows:
-
-```markdown
-# Crash Report: [Unique ID]
-
-## Triage Verdict
-**Classification**: [Genuine Library Bug | Harness Misuse]
-**Confidence**: [High/Medium/Low]
-**Decision Rule Applied**: [Rule N: exact Phase 3 rule title, e.g. "Rule 6: Contract / Specification Validity Check"]
-**Decision Rule Rationale**: [One sentence explaining why this is the first matching rule]
-
-## Crash Summary
-[Brief description: e.g., "Heap-buffer-overflow in parse_json function"]
-
-## Root Cause Analysis
-**The "Why"**:
-[Explain the exact logical failure. E.g., "The library assumes 'len' is positive, but casts it to unsigned without checking, leading to a massive memcpy."]
-
-**Evidence**:
-- **Stack Frame #0**: `src/parser.c:105`
-- **Variable State**: `input_len = -1`
-
-## Contract and Validity Analysis
-**Contract Sources Checked**:
-- [Exact local file/manual/spec/header/example/test path and lines, or "No decisive local contract found after searching ..."]
-
-**Applicable Preconditions**:
-- [List the API/spec preconditions relevant to the crash]
-
-**Validity Proof**:
-- [For Genuine Library Bug: prove the harness satisfies every applicable precondition using concrete harness lines and runtime values. For Harness Misuse: identify the violated or unproven precondition.]
-
-## Judgement Citations
-- **Claim**: [Crash root cause judgement]
-  **Source**: [Tool observation or `/absolute/path/file.c:line`; use `LLM prior knowledge (not verified in local repository)` only for uncited model knowledge]
-- **Claim**: [Contract/precondition judgement]
-  **Source**: [Tool observation or `/absolute/path/file.h:line`; if no local source was found, say so explicitly]
-- **Claim**: [Final classification judgement]
-  **Source**: [Harness line(s), runtime value(s), and contract/precondition source(s)]
-- **Claim**: [Decision rule selection]
-  **Source**: [The Phase 3 rule number/title and the evidence that satisfies that rule's condition]
-
-## Code Snippet (Harness)
-```cpp
-// Show the lines of the harness that called the API
-func(data, size); // <--- Harness calls API here
-// Show the lines where the crash happened
-memcpy(dest, src, len); // <--- Crash here
-```
-## Recommendation
-[Fix suggestion. E.g., "Add a check for negative length in parser.c" or "Update harness to sanitize input size."]
-```
-"""
-
-FUZZAGENT_SYSTEM_PROMPT = FUZZAGENT_SYSTEM_PROMPT.replace(
-    "Each harness targets different APIs/strategies\n",
-    "Each harness targets different APIs/strategies  \n",
-    1,
-)
-
-RESPONSE_FORMAT_PROMPT = """
-# Response Format
-Your response must follow the following format:
-- **Reasoning**: Reasoning about the feedback from the system (should be concise).
-- **Thought**: Provide the strategy to achieve the goal (should be concise).
-- **Action**: What you want to do next. (should be concise)
-
---- BEGIN OF EXAMPLE ---
-**Reasoning**: The last function call get the location of source code directory.
-**Thought**: First, I will check source directory contents.
-**Action**: I will call the `bash` function to check source directory contents.
---- END OF EXAMPLE ---
-"""
-
-NEXT_ACTION_PLANNING_PROMPT = """
-Base on the previous interaction with the system, plan the next action you want to take. Your response must exactly follow the following format (without any other text):
-- **Reasoning**: Reasoning about the feedback from the system (should be concise).
-- **Thought**: Provide the strategy to achieve the goal (should be concise).
-- **Action**: What you want to do next. (should be concise).
-"""
-
-CLASSIFICATION_PATTERN = re.compile(
-    r"\*\*Classification\*\*:\s*(Genuine Library Bug|Harness Misuse)",
-    re.IGNORECASE,
-)
-
-
-@dataclass(frozen=True)
-class ExecutionEvidence:
-    command: tuple[str, ...]
-    returncode: int
-    stdout: str
-    stderr: str
-    timed_out: bool = False
-
-    @property
-    def combined_output(self) -> str:
-        pieces = []
-        if self.stdout:
-            pieces.append("--- stdout ---\n" + self.stdout)
-        if self.stderr:
-            pieces.append("--- stderr ---\n" + self.stderr)
-        if self.timed_out:
-            pieces.append("--- status ---\nExecution timed out.")
-        return "\n".join(pieces) or "(no output)"
-
-
-@dataclass
-class TriageContext:
-    harness: Path
-    crash_input: Path
-    binary: Path
-    compile_command: list[str]
-    compile_flags: str | None
-    link_flags: str | None
-    timeout_seconds: int
-    output_path: Path
-    work_dir: Path
-    report_written: bool = False
-    report_content: str = ""
-    triage: str = "unclassified"
-
-
+""".strip()
+ 
+ 
+class TriageError(RuntimeError):
+    """Raised when the triage script cannot prepare or parse a run."""
+ 
+ 
 def format_command(command: Sequence[str]) -> str:
     return shlex.join(str(part) for part in command)
-
-
-def limit_text(value: str, limit: int = MAX_TOOL_OUTPUT_CHARACTERS) -> str:
-    if len(value) <= limit:
-        return value
-    omitted = len(value) - limit
-    return value[:limit] + f"\n\n[... {omitted} characters omitted ...]"
-
-
+ 
+ 
+def split_flags(flags: str | None) -> list[str]:
+    return rr._split_flags(flags)
+ 
+ 
+def resolve_benchmark_dir(value: str) -> Path:
+    supplied = Path(value).expanduser()
+    candidates = [supplied]
+    if not supplied.is_absolute():
+        candidates.append(BENCHMARK_ROOT / value)
+        candidates.append(PROJECT_ROOT / value)
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_dir():
+            return resolved
+    raise TriageError(
+        f"Could not find benchmark directory {value!r}. Tried: "
+        + ", ".join(str(path) for path in candidates)
+    )
+ 
+ 
+def select_latest_reduced_harness(benchmark_dir: Path, tool: str) -> Path:
+    pattern = f"harnessreducer-perf-comparison-{tool}-*/optimized/jobs-*/reduced.cpp"
+    candidates = [path for path in benchmark_dir.glob(pattern) if path.is_file()]
+    if not candidates:
+        raise TriageError(
+            f"No reduced harness found for tool {tool!r} under {benchmark_dir}. "
+            f"Expected files matching {pattern!r}."
+        )
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+ 
+ 
+def is_original_tool(tool: str | None) -> bool:
+    return tool is None or tool.strip().lower() in {"", "none", "original"}
+ 
+ 
+def find_generated_values_header(harness: Path) -> Path | None:
+    local_header = harness.parent / "harness_values.h"
+    if local_header.is_file():
+        return local_header
+ 
+    work_header = harness.parent / "work" / "harness_values.h"
+    if work_header.is_file():
+        return work_header
+ 
+    work_headers = sorted(
+        harness.parent.glob("work/**/harness_values.h"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if work_headers:
+        return work_headers[0]
+    return None
+ 
+ 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+ 
+ 
+def expand_benchmark_flags(flags: str | None, benchmark_dir: Path) -> str | None:
+    if flags is None:
+        return None
+    return flags.replace("$(pwd)", str(benchmark_dir))
+ 
+ 
 def build_compile_command(
     harness: Path,
     output_binary: Path,
     compile_flags: str | None,
     link_flags: str | None,
+    values_header: Path | None,
 ) -> list[str]:
-    """Match reducer_runner.check_harness_compilation exactly."""
+    include_dirs = [harness.parent]
+    if values_header is not None and values_header.parent not in include_dirs:
+        include_dirs.append(values_header.parent)
+ 
     return [
         "clang++",
         *rr.PHASE3_SANITIZER_FLAGS,
         *rr.PHASE3_DIRECT_OPT_FLAGS,
         *rr.PHASE3_WARNING_FLAGS,
-        *rr._split_flags(compile_flags),
+        *(f"-I{path}" for path in include_dirs),
+        *split_flags(compile_flags),
         str(harness),
         "-o",
         str(output_binary),
-        *rr._split_flags(link_flags),
+        *split_flags(link_flags),
     ]
-
-
+ 
+ 
 def compile_harness(command: Sequence[str]) -> None:
     process = subprocess.run(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
         check=False,
     )
     if process.returncode == 0:
         return
-    compiler_output = process.stderr.strip() or process.stdout.strip() or "(no output)"
-    raise RuntimeError(
+    output = process.stderr.strip() or process.stdout.strip() or "(no output)"
+    raise TriageError(
         "Harness compilation failed.\n\n"
         f"Command:\n{format_command(command)}\n\n"
-        f"Compiler output:\n{compiler_output}"
+        f"Compiler output:\n{output}"
     )
-
-
+ 
+ 
 def sanitizer_environment(link_flags: str | None) -> dict[str, str]:
     env = rr.runtime_library_env(link_flags)
     env["DEBUGINFOD_URLS"] = ""
@@ -416,23 +211,20 @@ def sanitizer_environment(link_flags: str | None) -> dict[str, str]:
         env.setdefault("ASAN_SYMBOLIZER_PATH", symbolizer)
         env.setdefault("UBSAN_SYMBOLIZER_PATH", symbolizer)
     env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
-    env["UBSAN_OPTIONS"] = (
-        "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
-    )
+    env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=1"
     return env
-
-
-def execute_harness(
+ 
+ 
+def run_harness_for_stack_trace(
     binary: Path,
     crash_input: Path,
     link_flags: str | None,
-    *,
     timeout_seconds: int,
-) -> ExecutionEvidence:
-    command = (str(binary), str(crash_input))
+) -> str:
+    command = [str(binary), str(crash_input)]
     try:
         process = subprocess.run(
-            list(command),
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -441,664 +233,71 @@ def execute_harness(
             timeout=timeout_seconds,
             check=False,
         )
-        return ExecutionEvidence(
-            command=command,
-            returncode=process.returncode,
-            stdout=process.stdout,
-            stderr=process.stderr,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return ExecutionEvidence(
-            command=command,
-            returncode=124,
-            stdout=stdout,
-            stderr=stderr,
-            timed_out=True,
-        )
-
-
-def render_casr_report(report_path: Path) -> str:
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return f"Could not read CASR report {report_path}: {exc}"
-
-    severity = report.get("CrashSeverity", {})
-    if isinstance(severity, dict):
-        severity = severity.get("ShortDescription", "N/A")
-
-    def render_lines(value: object) -> str:
-        if isinstance(value, list):
-            return "\n".join(str(line) for line in value)
-        if value:
-            return str(value)
-        return "N/A"
-
-    stacktrace = render_lines(report.get("Stacktrace"))
-    if stacktrace == "N/A":
-        parts = []
-        if report.get("UbsanReport"):
-            parts.append(render_lines(report.get("UbsanReport")))
-        if report.get("AsanReport"):
-            parts.append(render_lines(report.get("AsanReport")))
-        stacktrace = "\n".join(parts) or "No stacktrace available"
-
-    return (
-        "Crash Report Summary:\n"
-        "----------------------\n"
-        f"Date: {report.get('Date', 'N/A')}\n"
-        f"Executable Path: {report.get('ExecutablePath', 'N/A')}\n"
-        f"Crash Severity: {severity}\n"
-        f"Crash Line: {report.get('CrashLine', 'N/A')}\n"
-        "Related Source Code:\n"
-        f"{render_lines(report.get('Source'))}\n\n"
-        "Stacktrace:\n"
-        f"{stacktrace}"
-    )
-
-
-def collect_casr_evidence(ctx: TriageContext) -> str:
-    casr_directory = ctx.work_dir / "casr"
-    casr_directory.mkdir(parents=True, exist_ok=True)
-    input_directory = casr_directory / "input"
-    input_directory.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ctx.crash_input, input_directory / ctx.crash_input.name)
-
-    casr_libfuzzer = shutil.which("casr-libfuzzer")
-    casr_san = shutil.which("casr-san")
-    casr_ubsan = shutil.which("casr-ubsan")
-
-    commands: list[list[str]] = []
-    if casr_libfuzzer is not None:
-        libfuzzer_dir = casr_directory / "libfuzzer"
-        libfuzzer_dir.mkdir(parents=True, exist_ok=True)
-        commands.append(
-            [
-                casr_libfuzzer,
-                "-i",
-                str(input_directory),
-                "-o",
-                str(libfuzzer_dir),
-                "-t",
-                str(ctx.timeout_seconds),
-                "--",
-                str(ctx.binary),
-            ]
-        )
-    if casr_san is not None:
-        commands.append(
-            [
-                casr_san,
-                "-o",
-                str(casr_directory / "asan.casrep"),
-                "--",
-                str(ctx.binary),
-                str(ctx.crash_input),
-            ]
-        )
-    if casr_ubsan is not None:
-        ubsan_directory = casr_directory / "ubsan"
-        ubsan_directory.mkdir(parents=True, exist_ok=True)
-        commands.append(
-            [
-                casr_ubsan,
-                "-i",
-                str(input_directory),
-                "-o",
-                str(ubsan_directory),
-                "-t",
-                str(ctx.timeout_seconds),
-                "--",
-                str(ctx.binary),
-                "@@",
-            ]
-        )
-
-    if not commands:
-        symbolized = execute_harness(
-            ctx.binary,
-            ctx.crash_input,
-            ctx.link_flags,
-            timeout_seconds=ctx.timeout_seconds,
-        )
         return (
-            "CASR is not installed: no casr-libfuzzer, casr-san, or casr-ubsan "
-            "executable was found in PATH.\n\n"
-            "Raw symbolized sanitizer execution:\n"
-            f"Exit status: {symbolized.returncode}\n"
-            f"{limit_text(symbolized.combined_output)}"
-        )
-
-    observations: list[str] = []
-    env = sanitizer_environment(ctx.link_flags)
-    for command in commands:
-        try:
-            process = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                errors="replace",
-                env=env,
-                timeout=ctx.timeout_seconds + 10,
-                check=False,
-            )
-            observations.append(
-                f"Command: {format_command(command)}\n"
-                f"Exit status: {process.returncode}\n"
-                f"{process.stderr or process.stdout or '(no command output)'}"
-            )
-        except subprocess.TimeoutExpired as exc:
-            output = (
-                exc.stdout.decode(errors="replace")
-                if isinstance(exc.stdout, bytes)
-                else (exc.stdout or "")
-            )
-            observations.append(
-                f"Command timed out: {format_command(command)}\n{output}"
-            )
-
-    report_paths = sorted(casr_directory.rglob("*.casrep"))
-    if report_paths:
-        selected_report = next(
-            (path for path in report_paths if path.name == "asan.casrep"),
-            report_paths[0],
-        )
-        log_found_file(selected_report, "CASR crash report")
-        return limit_text(render_casr_report(selected_report))
-    return limit_text(
-        "CASR did not generate a .casrep file.\n\n" + "\n\n".join(observations)
-    )
-
-
-def run_gdb_context(ctx: TriageContext, target_func: str | None = None) -> str:
-    gdb = shutil.which("gdb")
-    if gdb is None:
-        return "GDB was not found in PATH; no debugger observation is available."
-
-    commands = ["set pagination off", "run", "thread apply all bt full"]
-    if target_func:
-        commands.extend([f"info functions {target_func}", f"break {target_func}"])
-
-    command = [gdb, "-q", "--batch"]
-    for gdb_command in commands:
-        command.extend(["-ex", gdb_command])
-    command.extend(["--args", str(ctx.binary), str(ctx.crash_input)])
-
-    env = sanitizer_environment(ctx.link_flags)
-    env["ASAN_OPTIONS"] += ":detect_leaks=0"
-    try:
-        process = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-            env=env,
-            timeout=ctx.timeout_seconds,
-            check=False,
-        )
-        return limit_text(
             f"Command: {format_command(command)}\n"
             f"Exit status: {process.returncode}\n\n"
-            f"{process.stdout or '(no output)'}"
+            "--- stdout ---\n"
+            f"{process.stdout or '(empty)'}\n\n"
+            "--- stderr ---\n"
+            f"{process.stderr or '(empty)'}"
         )
     except subprocess.TimeoutExpired as exc:
-        output = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        return limit_text(f"GDB timed out after {ctx.timeout_seconds} seconds.\n\n{output}")
-
-
-def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> str:
-    source = Path(path).expanduser()
-    if not source.is_absolute():
-        source = (Path.cwd() / source).resolve()
-    if not source.is_file():
-        log_missing_file(source, "read_file")
-        return f"[!] Error: file not found: {source}"
-    log_found_file(source, "read_file/open tool observation")
-    lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
-    start_line = max(1, start_line)
-    if end_line is None:
-        end_line = min(len(lines), start_line + 199)
-    end_line = min(len(lines), max(start_line, end_line))
-    body = "\n".join(
-        f"{line_number:6d}  {lines[line_number - 1]}"
-        for line_number in range(start_line, end_line + 1)
-    )
-    return limit_text(f"File: {source}\n{body}")
-
-
-def search_file(path: str, pattern: str) -> str:
-    source = Path(path).expanduser()
-    if not source.is_absolute():
-        source = (Path.cwd() / source).resolve()
-    if not source.is_file():
-        log_missing_file(source, "search_file")
-        return f"[!] Error: file not found: {source}"
-    log_found_file(source, f"search_file pattern={pattern!r}")
-    matches = []
-    for index, line in enumerate(source.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        if pattern in line:
-            matches.append(f"{source}:{index}: {line}")
-        if len(matches) >= 200:
-            matches.append("[... more matches omitted ...]")
-            break
-    return "\n".join(matches) if matches else f"No matches for {pattern!r} in {source}"
-
-
-def find_file(name: str, root: str | None = None) -> str:
-    root_path = Path(root).expanduser().resolve() if root else PROJECT_ROOT
-    if not root_path.exists():
-        return f"[!] Error: root does not exist: {root_path}"
-    matches = []
-    for path in root_path.rglob("*"):
-        if path.name == name:
-            log_found_file(path, f"find_file name={name!r}")
-            matches.append(str(path))
-        if len(matches) >= 200:
-            matches.append("[... more matches omitted ...]")
-            break
-    return "\n".join(matches) if matches else f"No files named {name!r} under {root_path}"
-
-
-def search_dir(root: str, pattern: str) -> str:
-    root_path = Path(root).expanduser().resolve()
-    if not root_path.exists():
-        return f"[!] Error: root does not exist: {root_path}"
-    print(f"[source] searching directory for LLM: {root_path} pattern={pattern!r}")
-    command = ["rg", "-n", "--", pattern, str(root_path)]
-    try:
-        process = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            errors="replace",
-            timeout=20,
-            check=False,
+        stdout = (
+            exc.stdout.decode(errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else (exc.stdout or "")
         )
-        output = process.stdout or process.stderr or "(no output)"
-        for line in process.stdout.splitlines()[:50]:
-            candidate = line.split(":", 1)[0]
-            candidate_path = Path(candidate)
-            if candidate_path.is_file():
-                log_found_file(candidate_path, f"search_dir pattern={pattern!r}")
-        return limit_text(output)
-    except subprocess.TimeoutExpired:
-        return f"Command timed out: {format_command(command)}"
-
-
-def coerce_string_list(value: object) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    return [str(value).strip()] if str(value).strip() else []
-
-
-def resolve_existing_path(path_text: str) -> Path | None:
-    if not path_text:
-        return None
-    path = Path(path_text).expanduser()
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    try:
-        path = path.resolve()
-    except OSError:
-        return None
-    return path if path.exists() else None
-
-
-def compile_include_roots(compile_flags: str | None) -> list[Path]:
-    tokens = rr._split_flags(compile_flags)
-    roots: list[Path] = []
-    include_switches = {"-I", "-isystem", "-iquote", "-idirafter"}
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        candidate: str | None = None
-        if token in include_switches and index + 1 < len(tokens):
-            candidate = tokens[index + 1]
-            index += 2
-        elif token.startswith("-I") and len(token) > 2:
-            candidate = token[2:]
-            index += 1
-        elif token.startswith("-isystem") and len(token) > len("-isystem"):
-            candidate = token[len("-isystem") :]
-            index += 1
-        elif token.startswith("-iquote") and len(token) > len("-iquote"):
-            candidate = token[len("-iquote") :]
-            index += 1
-        else:
-            index += 1
-
-        if candidate:
-            path = resolve_existing_path(candidate)
-            if path is not None and path.is_dir():
-                roots.append(path)
-    return roots
-
-
-def add_contract_root(roots: list[Path], candidate: Path | None) -> None:
-    if candidate is None:
-        return
-    root = candidate.parent if candidate.is_file() else candidate
-    try:
-        root = root.resolve()
-    except OSError:
-        return
-    if root.exists() and root not in roots:
-        roots.append(root)
-
-
-def contract_search_roots(ctx: TriageContext, extra_roots: list[str]) -> list[Path]:
-    roots: list[Path] = []
-    add_contract_root(roots, ctx.harness.parent)
-    add_contract_root(roots, PROJECT_ROOT)
-
-    for include_root in compile_include_roots(ctx.compile_flags):
-        add_contract_root(roots, include_root)
-        add_contract_root(roots, include_root.parent)
-
-    for library_root in rr.runtime_library_directories(ctx.link_flags):
-        path = resolve_existing_path(library_root)
-        add_contract_root(roots, path)
-        if path is not None:
-            add_contract_root(roots, path.parent)
-            add_contract_root(roots, path.parent.parent)
-
-    for root_text in extra_roots:
-        add_contract_root(roots, resolve_existing_path(root_text))
-
-    return roots
-
-
-def is_doc_like_file(path: Path) -> bool:
-    lower_name = path.name.lower()
-    suffix = path.suffix.lower()
-    return (
-        suffix in CONTRACT_DOC_SUFFIXES
-        or lower_name.startswith(CONTRACT_DOC_NAME_PREFIXES)
-        or "manual" in lower_name
-        or "spec" in lower_name
-        or "standard" in lower_name
-    )
-
-
-def is_contract_candidate_file(path: Path) -> bool:
-    return is_doc_like_file(path) or path.suffix.lower() in CONTRACT_CODE_SUFFIXES
-
-
-def iter_contract_candidate_files(root: Path) -> tuple[list[Path], bool]:
-    files: list[Path] = []
-    truncated = False
-    try:
-        root = root.resolve()
-    except OSError:
-        return files, truncated
-
-    for current_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            dirname
-            for dirname in dirnames
-            if dirname not in CONTRACT_SEARCH_PRUNE_DIRS
-        ]
-        for filename in filenames:
-            path = Path(current_root) / filename
-            if not is_contract_candidate_file(path):
-                continue
-            files.append(path)
-            if len(files) >= MAX_CONTRACT_SEARCH_FILES:
-                truncated = True
-                return files, truncated
-    return files, truncated
-
-
-def readable_contract_file(path: Path) -> bool:
-    if path.suffix.lower() in {".pdf"}:
-        return False
-    try:
-        return path.stat().st_size <= 2_000_000
-    except OSError:
-        return False
-
-
-def contract_line_matches(
-    line: str,
-    primary_terms: list[str],
-    keywords: list[str],
-) -> bool:
-    lower_line = line.lower()
-    if any(term in lower_line for term in primary_terms):
-        return True
-    if keywords and any(term in lower_line for term in keywords):
-        return any(term in lower_line for term in CONTRACT_GENERIC_TERMS)
-    if not primary_terms and not keywords:
-        return any(term in lower_line for term in CONTRACT_GENERIC_TERMS)
-    return False
-
-
-def discover_contract_evidence(
-    ctx: TriageContext,
-    api_names: list[str],
-    keywords: list[str],
-    roots: list[str],
-) -> str:
-    api_terms = [term.lower() for term in api_names if term.strip()]
-    keyword_terms = [term.lower() for term in keywords if term.strip()]
-    search_roots = contract_search_roots(ctx, roots)
-
-    all_candidates: list[Path] = []
-    truncated_roots: list[Path] = []
-    for root in search_roots:
-        candidates, truncated = iter_contract_candidate_files(root)
-        all_candidates.extend(candidates)
-        if truncated:
-            truncated_roots.append(root)
-
-    unique_candidates = list(dict.fromkeys(all_candidates))
-    doc_candidates = [path for path in unique_candidates if is_doc_like_file(path)]
-
-    matches: list[str] = []
-    for path in unique_candidates:
-        if len(matches) >= MAX_CONTRACT_MATCHES:
-            break
-        if not readable_contract_file(path):
-            continue
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for line_number, line in enumerate(lines, 1):
-            if contract_line_matches(line, api_terms, keyword_terms):
-                matches.append(f"{path}:{line_number}: {line.strip()}")
-                if len(matches) >= MAX_CONTRACT_MATCHES:
-                    break
-
-    sections = [
-        "Contract Evidence Search",
-        "------------------------",
-        "Searched roots:",
-    ]
-    sections.extend(f"- {root}" for root in search_roots)
-    if truncated_roots:
-        sections.append("Search was truncated in these roots:")
-        sections.extend(f"- {root}" for root in truncated_roots)
-
-    sections.append("")
-    sections.append("Search terms:")
-    sections.append(f"- API names: {', '.join(api_names) if api_names else '(none supplied)'}")
-    sections.append(f"- Keywords: {', '.join(keywords) if keywords else '(none supplied)'}")
-
-    sections.append("")
-    sections.append("Candidate manuals/specs/docs:")
-    if doc_candidates:
-        for path in doc_candidates[:MAX_CONTRACT_DOC_FILES]:
-            sections.append(f"- {path}")
-        if len(doc_candidates) > MAX_CONTRACT_DOC_FILES:
-            sections.append(f"- [... {len(doc_candidates) - MAX_CONTRACT_DOC_FILES} more omitted ...]")
-    else:
-        sections.append("- No doc-like files found in searched roots.")
-
-    sections.append("")
-    sections.append("Relevant matches:")
-    if matches:
-        sections.extend(matches)
-        if len(matches) >= MAX_CONTRACT_MATCHES:
-            sections.append("[... more matches omitted ...]")
-    else:
-        sections.append("- No relevant local contract matches found.")
-
-    sections.append("")
-    sections.append(
-        "Important: absence of a match is not proof that arbitrary input is valid. "
-        "Inspect decisive files with read_file/search_file before reporting."
-    )
-    return limit_text("\n".join(sections))
-
-
-LIBRARY_BUG_CONTRACT_SECTION_PATTERN = re.compile(
-    r"^##\s+(?:Contract and Validity Analysis|Input Validity Analysis|API Contract Analysis)\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-VALIDITY_PROOF_PATTERN = re.compile(
-    r"^\*\*Validity Proof\*\*:\s*",
-    re.IGNORECASE | re.MULTILINE,
-)
-INSUFFICIENT_VALIDITY_PATTERN = re.compile(
-    r"\*\*Validity Proof\*\*:\s*(?:unknown|none|n/a|not found|not proven|unclear|cannot prove)",
-    re.IGNORECASE,
-)
-JUDGEMENT_CITATIONS_SECTION_PATTERN = re.compile(
-    r"^##\s+Judgement Citations\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-JUDGEMENT_CLAIM_PATTERN = re.compile(r"\*\*Claim\*\*:", re.IGNORECASE)
-JUDGEMENT_SOURCE_PATTERN = re.compile(r"\*\*Source\*\*:", re.IGNORECASE)
-DECISION_RULE_PATTERN = re.compile(
-    r"^\*\*Decision Rule Applied\*\*:\s*Rule\s+[1-7]\s*:",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-def report_decision_rule_error(content: str) -> str | None:
-    if not DECISION_RULE_PATTERN.search(content):
+        stderr = (
+            exc.stderr.decode(errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else (exc.stderr or "")
+        )
         return (
-            "reports must include '**Decision Rule Applied**: Rule N: ...' in "
-            "the '## Triage Verdict' section, naming the exact Phase 3 decision "
-            "rule number and title that determined the classification."
+            f"Command: {format_command(command)}\n"
+            f"Exit status: timeout after {timeout_seconds} seconds\n\n"
+            "--- stdout ---\n"
+            f"{stdout or '(empty)'}\n\n"
+            "--- stderr ---\n"
+            f"{stderr or '(empty)'}"
         )
-    return None
-
-
-def report_citation_error(content: str) -> str | None:
-    if not JUDGEMENT_CITATIONS_SECTION_PATTERN.search(content):
-        return (
-            "reports must include a '## Judgement Citations' section. List each "
-            "root-cause, contract-validity, and classification judgement with a "
-            "source. Use local file paths with line numbers, tool observations, or "
-            "'LLM prior knowledge (not verified in local repository)' for claims "
-            "that come from model knowledge rather than checked evidence."
-        )
-    if not JUDGEMENT_CLAIM_PATTERN.search(content) or not JUDGEMENT_SOURCE_PATTERN.search(content):
-        return (
-            "the '## Judgement Citations' section must contain '**Claim**:' and "
-            "'**Source**:' entries tying each substantive judgement to evidence."
-        )
-    return None
-
-
-def library_bug_report_contract_error(content: str) -> str | None:
-    if not LIBRARY_BUG_CONTRACT_SECTION_PATTERN.search(content):
-        return (
-            "library-bug reports must include a '## Contract and Validity Analysis' "
-            "section. Use discover_contract_evidence, list contract sources checked, "
-            "and provide a positive validity proof. If validity cannot be proven, "
-            "classify the crash as harness-bug."
-        )
-    if not VALIDITY_PROOF_PATTERN.search(content):
-        return (
-            "library-bug reports must include a '**Validity Proof**:' subsection "
-            "that proves the harness satisfies the applicable API/specification "
-            "preconditions."
-        )
-    if INSUFFICIENT_VALIDITY_PATTERN.search(content):
-        return (
-            "the validity proof says validity is unknown or not proven. Under the "
-            "triage policy, classify this as harness-bug unless you can provide a "
-            "positive proof from contract evidence and harness/runtime values."
-        )
-    return None
-
-
-def write_report(
-    output_path: Path,
-    harness: Path,
-    crash_input: Path,
-    triage: str,
-    report_content: str,
-) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        f"## Harness: {harness}\n"
-        f"## Crash Artifact: {crash_input.name}\n"
-        f"## Triage: {triage}\n"
-        "## Content:\n"
-        f"{report_content.rstrip()}\n",
-        encoding="utf-8",
-    )
-
-
-def triage_slug(report: str) -> str:
-    match = CLASSIFICATION_PATTERN.search(report)
-    if not match:
-        return "unclassified"
-    classification = match.group(1).lower()
-    return "library-bug" if classification == "genuine library bug" else "harness-bug"
-
-
+ 
+ 
 def llm_configuration() -> tuple[str, str, str]:
     base_url = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
     model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
-    api_key = os.environ.get("HKU_API_KEY", "").strip()
+    api_key = os.environ.get("GLM_API_KEY", "").strip()
+    # api_key = os.environ.get("HKU_API_KEY", "").strip()
     if not base_url:
-        raise RuntimeError("OPENAI_BASE_URL is empty; fill in the configuration block.")
+        raise TriageError("OPENAI_BASE_URL is empty.")
     if not model:
-        raise RuntimeError("OPENAI_MODEL is empty; fill in the configuration block.")
+        raise TriageError("OPENAI_MODEL is empty.")
     if not api_key:
-        raise RuntimeError(
-            "HKU_API_KEY is empty. Export HKU_API_KEY before running crash_triage.py."
-        )
+        raise TriageError("GLM_API_KEY is empty. Export GLM_API_KEY before running.")
     return base_url, model, api_key
-
-
-def chat_completion_payload(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    _, model, _ = llm_configuration()
-    payload: dict[str, Any] = {
+ 
+ 
+def chat_completions_endpoint(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    return normalized + "/chat/completions"
+ 
+ 
+def post_chat_completion(messages: list[dict[str, str]]) -> str:
+    base_url, model, api_key = llm_configuration()
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": LLM_TEMPERATURE,
         "top_p": LLM_TOP_P,
         "stream": False,
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": LLM_REASONING_EFFORT,
     }
-    if tools is not None:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    return payload
-
-
-def post_chat_completion(payload: dict[str, Any]) -> dict[str, Any]:
-    base_url, _, api_key = llm_configuration()
-    endpoint = base_url.rstrip("/") + "/chat/completions"
     encoded_payload = json.dumps(payload).encode("utf-8")
+    endpoint = chat_completions_endpoint(base_url)
     last_error: Exception | None = None
+ 
     for attempt in range(1, LLM_RETRIES + 1):
         request = urllib.request.Request(
             endpoint,
@@ -1111,542 +310,324 @@ def post_chat_completion(payload: dict[str, Any]) -> dict[str, Any]:
         )
         try:
             with urllib.request.urlopen(request, timeout=LLM_TIMEOUT_SECONDS) as response:
-                return json.loads(response.read().decode("utf-8"))
+                parsed = json.loads(response.read().decode("utf-8"))
+            content = parsed["choices"][0]["message"]["content"]
+            if not isinstance(content, str):
+                raise TriageError(f"Unexpected LLM content: {content!r}")
+            return content.strip()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             last_error = RuntimeError(f"LLM HTTP {exc.code}: {detail}")
             if exc.code not in {408, 409, 429, 500, 502, 503, 504}:
                 break
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            json.JSONDecodeError,
+            urllib.error.URLError,
+            TimeoutError,
+        ) as exc:
             last_error = exc
         if attempt < LLM_RETRIES:
-            time.sleep(min(2 ** attempt, 10))
-    raise RuntimeError(f"LLM request failed after {LLM_RETRIES} attempts: {last_error}")
-
-
-def extract_message(response: dict[str, Any]) -> dict[str, Any]:
-    try:
-        message = response["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"Unexpected LLM response: {json.dumps(response)[:2000]}") from exc
-    if not isinstance(message, dict):
-        raise RuntimeError(f"Unexpected LLM message: {json.dumps(message)[:2000]}")
-    return message
-
-
-def tool_definitions() -> list[dict[str, Any]]:
+            time.sleep(min(2**attempt, 10))
+    raise TriageError(f"LLM request failed after {LLM_RETRIES} attempts: {last_error}")
+ 
+ 
+# Matches "library-bug", "harness bug", "LIBRARY_BUG", "harnessbug", ...
+VERDICT_TOKEN_PATTERN = re.compile(r"\b(?:library|harness)[\s_-]*bug\b", re.IGNORECASE)
+# Matches section labels such as "Verdict:", "Final answer:", "Conclusion -".
+VERDICT_MARKER_PATTERN = re.compile(
+    r"(?:final\s+)?(?:verdict|answer|conclusion|decision)\s*[:\-–—]*\s*",
+    re.IGNORECASE,
+)
+# Negations that invalidate a verdict mention, e.g. "not a harness bug".
+VERDICT_NEGATION_PATTERN = re.compile(r"\bnot\b|n['’]t\b", re.IGNORECASE)
+# How many characters before a verdict token to search for a negation.
+NEGATION_LOOKBEHIND = 24
+ 
+ 
+def classify_verdict(token: str) -> str:
+    return "library-bug" if token.lower().startswith("library") else "harness-bug"
+ 
+ 
+def exact_verdict(response: str) -> str | None:
+    """Return the verdict when the entire reply is nothing but the token."""
+    cleaned = re.sub(r"[^a-z]", "", response.lower())
+    if cleaned == "librarybug":
+        return "library-bug"
+    if cleaned == "harnessbug":
+        return "harness-bug"
+    return None
+ 
+ 
+def normalize_verdict_line(line: str) -> str | None:
+    """Return the verdict if *line* states nothing but a verdict, allowing
+    decorations such as 'Verdict:', '**', backticks, or list markers."""
+    matches = list(VERDICT_TOKEN_PATTERN.finditer(line))
+    if len(matches) != 1:
+        return None
+    verdict = classify_verdict(matches[0].group(0))
+    remainder = line[: matches[0].start()] + line[matches[0].end():]
+    remainder = VERDICT_MARKER_PATTERN.sub(" ", remainder)
+    remainder = re.sub(r"[^a-z]", "", remainder.lower())
+    return verdict if remainder == "" else None
+ 
+ 
+def last_verdict_token(text: str) -> str | None:
+    """Return the last non-negated verdict token mentioned in *text*."""
+    for match in reversed(list(VERDICT_TOKEN_PATTERN.finditer(text))):
+        prefix = text[max(0, match.start() - NEGATION_LOOKBEHIND): match.start()]
+        if not VERDICT_NEGATION_PATTERN.search(prefix):
+            return classify_verdict(match.group(0))
+    return None
+ 
+ 
+def normalize_triage_result(response: str) -> str:
+    text = response.strip()
+ 
+    # 1. Ideal case: the whole reply is just the token.
+    verdict = exact_verdict(text)
+    if verdict:
+        return verdict
+ 
+    # 2. Explicit verdict section: use the text after the LAST marker such
+    #    as "Verdict:", "Final answer:", or "Conclusion:".
+    markers = list(VERDICT_MARKER_PATTERN.finditer(text))
+    if markers:
+        tail = text[markers[-1].end():]
+        verdict = last_verdict_token(tail) or normalize_verdict_line(tail)
+        if verdict:
+            return verdict
+ 
+    # 3. The last non-empty line contains the verdict.
+    lines = [stripped for stripped in (raw.strip() for raw in text.splitlines()) if stripped]
+    if lines:
+        verdict = last_verdict_token(lines[-1])
+        if verdict:
+            return verdict
+ 
+    # 4. Some line states only the verdict (possibly decorated); use the last.
+    for line in reversed(lines):
+        verdict = normalize_verdict_line(line)
+        if verdict:
+            return verdict
+ 
+    # 5. Last resort: the last non-negated token mention anywhere.
+    verdict = last_verdict_token(text)
+    if verdict:
+        return verdict
+ 
+    raise TriageError(
+        "Could not parse LLM triage result. Expected exactly "
+        "'library-bug' or 'harness-bug'. Response was:\n"
+        f"{response}"
+    )
+ 
+ 
+def build_prompt(
+    harness_source: str,
+    values_header_source: str | None,
+    stack_trace: str,
+) -> list[dict[str, str]]:
+    system_prompt = (
+        "You are a C/C++ fuzzing crash triage assistant. "
+        "Use only the supplied harness source, optional generated fuzz value "
+        "header, stack trace, and decision rules. "
+        "Apply the rules, then state the verdict. "
+        "OUTPUT FORMAT (mandatory): your reply must end with a final line "
+        "containing exactly one of the two tokens 'library-bug' or "
+        "'harness-bug' and nothing else on that line. Do not mention either "
+        "token anywhere else in your reply."
+    )
+    header_section = ""
+    if values_header_source is not None:
+        header_section = (
+            "\n\n## Generated Fuzz Value Header\n"
+            "```cpp\n"
+            f"{values_header_source}\n"
+            "```"
+        )
+    user_prompt = (
+        "## Decision Rules\n"
+        f"{TRIAGE_RULES}\n\n"
+        "## Harness Source\n"
+        "```cpp\n"
+        f"{harness_source}\n"
+        "```"
+        f"{header_section}\n\n"
+        "## Stack Trace\n"
+        "```text\n"
+        f"{stack_trace}\n"
+        "```\n\n"
+        "Apply the decision rules.\n\n"
+        "## Required Output Format\n"
+        "Reply with exactly one token, 'library-bug' or 'harness-bug', as the "
+        "final line of your reply. The final line must contain nothing but "
+        "that token: no punctuation, no markdown, no explanation. If you "
+        "justify your decision, keep the tokens out of the justification text."
+    )
     return [
-        {
-            "type": "function",
-            "function": {
-                "name": "crash_initial_analysis",
-                "description": "Execute the crash artifact on the fuzzer binary and gather stacktrace/source-code information.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fuzzer_id": {"type": "string"},
-                        "crash_artifact_path": {"type": "string"},
-                    },
-                    "required": ["crash_artifact_path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "crash_artifact_analysis",
-                "description": "Alias for crash_initial_analysis.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fuzzer_id": {"type": "string"},
-                        "crash_artifact_path": {"type": "string"},
-                    },
-                    "required": ["crash_artifact_path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "crash_context_inspection",
-                "description": "Run GDB in non-interactive mode to inspect crash runtime context.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fuzz_target_binary": {"type": "string"},
-                        "crash_artifact_path": {"type": "string"},
-                        "target_func": {"type": "string"},
-                    },
-                    "required": ["target_func"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read a source file with line numbers.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "integer"},
-                        "end_line": {"type": "integer"},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "open",
-                "description": "Alias for read_file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "start_line": {"type": "integer"},
-                        "end_line": {"type": "integer"},
-                    },
-                    "required": ["path"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_file",
-                "description": "Search for literal text in one file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string"},
-                        "pattern": {"type": "string"},
-                    },
-                    "required": ["path", "pattern"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_dir",
-                "description": "Search for text recursively in a directory.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "root": {"type": "string"},
-                        "pattern": {"type": "string"},
-                    },
-                    "required": ["root", "pattern"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "discover_contract_evidence",
-                "description": (
-                    "Search local manuals, specifications, API references, README files, "
-                    "examples, tests, headers, and source comments for API/input validity "
-                    "contracts. Call this before final triage after identifying the suspect "
-                    "public API and crash-relevant arguments or fields. Pass source directories "
-                    "from stack-trace frames in roots when they are outside the harness tree."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "api_names": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Suspect public API/function/type names.",
-                        },
-                        "keywords": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Crash-relevant fields, arguments, formats, or constraints.",
-                        },
-                        "roots": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional extra directories or files to search.",
-                        },
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "find_file",
-                "description": "Find files by exact basename.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string"},
-                        "root": {"type": "string"},
-                    },
-                    "required": ["name"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "generate_crash_report",
-                "description": (
-                    "Write the final normalized crash triage report. The content must "
-                    "include '**Decision Rule Applied**: Rule N: ...' in the triage "
-                    "verdict and a '## Judgement Citations' section with Claim/Source "
-                    "entries for root-cause, contract-validity, decision-rule selection, "
-                    "and classification judgements. "
-                    "Claims from model knowledge must be cited as 'LLM prior knowledge "
-                    "(not verified in local repository)'."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fuzzer_id": {"type": "string"},
-                        "crash_artifact_path": {"type": "string"},
-                        "triage": {
-                            "type": "string",
-                            "enum": ["library-bug", "harness-bug"],
-                        },
-                        "content": {"type": "string"},
-                    },
-                    "required": ["triage", "content"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "exit",
-                "description": "Finish the agent task.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"reason": {"type": "string"}},
-                },
-            },
-        },
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
     ]
-
-
-def parse_tool_arguments(raw_arguments: str | dict[str, Any] | None) -> dict[str, Any]:
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
-    if not raw_arguments:
-        return {}
-    try:
-        parsed = json.loads(raw_arguments)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def run_tool(ctx: TriageContext, name: str, arguments: dict[str, Any]) -> str:
-    if name in {"crash_initial_analysis", "crash_artifact_analysis"}:
-        print(f"[+] Tool call: {name}")
-        requested = Path(str(arguments.get("crash_artifact_path", ctx.crash_input))).expanduser()
-        try:
-            requested_resolved = requested.resolve()
-        except OSError:
-            requested_resolved = requested
-        if requested_resolved != ctx.crash_input:
-            return (
-                f"[!] Warning: this standalone run has one crash artifact: {ctx.crash_input}. "
-                "Using that artifact for analysis.\n\n"
-                + collect_casr_evidence(ctx)
-            )
-        return collect_casr_evidence(ctx)
-
-    if name == "crash_context_inspection":
-        print("[+] Tool call: crash_context_inspection")
-        target_func = str(arguments.get("target_func", "")).strip() or None
-        return run_gdb_context(ctx, target_func)
-
-    if name in {"read_file", "open"}:
-        path = str(arguments.get("path", ctx.harness))
-        end_line = arguments.get("end_line")
-        if end_line is not None:
-            end_line = int(end_line)
-        return read_file(
-            path,
-            int(arguments.get("start_line", 1) or 1),
-            end_line,
-        )
-
-    if name == "search_file":
-        return search_file(str(arguments.get("path", ctx.harness)), str(arguments.get("pattern", "")))
-
-    if name == "search_dir":
-        return search_dir(str(arguments.get("root", ctx.harness.parent)), str(arguments.get("pattern", "")))
-
-    if name == "discover_contract_evidence":
-        print("[+] Tool call: discover_contract_evidence")
-        return discover_contract_evidence(
-            ctx,
-            coerce_string_list(arguments.get("api_names")),
-            coerce_string_list(arguments.get("keywords")),
-            coerce_string_list(arguments.get("roots")),
-        )
-
-    if name == "find_file":
-        return find_file(str(arguments.get("name", "")), arguments.get("root"))
-
-    if name == "generate_crash_report":
-        print("[+] Tool call: generate_crash_report")
-        triage = str(arguments.get("triage", "unclassified"))
-        content = str(arguments.get("content", "")).strip()
-        if not content:
-            return "[!] Error: generate_crash_report requires non-empty content."
-        decision_rule_error = report_decision_rule_error(content)
-        if decision_rule_error is not None:
-            return f"[!] Error: {decision_rule_error}"
-        citation_error = report_citation_error(content)
-        if citation_error is not None:
-            return f"[!] Error: {citation_error}"
-        if triage == "library-bug":
-            contract_error = library_bug_report_contract_error(content)
-            if contract_error is not None:
-                return f"[!] Error: {contract_error}"
-        ctx.triage = triage
-        ctx.report_content = content
-        ctx.report_written = True
-        write_report(ctx.output_path, ctx.harness, ctx.crash_input, triage, content)
-        return f"[*] Crash report generated successfully: {ctx.output_path}"
-
-    if name == "exit":
-        print("[+] Tool call: exit")
-        return "Exit requested."
-
-    return f"[!] Error: unknown tool: {name}"
-
-
-def initial_user_message(ctx: TriageContext) -> str:
-    return f"""
-Crash artifact path: {ctx.crash_input}
-Fuzzer ID: 0
-Fuzzer binary: {ctx.binary}
-Harness source: {ctx.harness}
-
-This standalone wrapper compiled the harness before starting the CrashAnalyzer loop,
-because FuzzAgent normally receives an already-built fuzzer binary.
-
-Exact HarnessMinimizer compilation command:
-{format_command(ctx.compile_command)}
-
-Additional HarnessMinimizer triage policy:
-- After identifying the suspect public API, call `discover_contract_evidence`
-  with API names and crash-relevant arguments/fields before final reporting.
-- A `library-bug` report must include `## Contract and Validity Analysis`
-  and a positive `**Validity Proof**:` showing that the harness satisfies the
-  applicable API/manual/specification preconditions. If validity cannot be
-  proven, classify as `harness-bug`.
-- Every report must include `## Judgement Citations` with `**Claim**:` and
-  `**Source**:` entries for root-cause, contract-validity, and classification
-  judgements. If a claim comes from model knowledge rather than checked local
-  evidence, cite it as `LLM prior knowledge (not verified in local repository)`.
-
-Please triage this crash using the pre-harness-minimization FuzzAgent workflow.
-Call `crash_initial_analysis` first, inspect relevant source files, use
-`crash_context_inspection` for runtime evidence, and finish by calling
-`generate_crash_report`.
-""".strip()
-
-
-def normalize_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
-    normalized = {"role": "assistant"}
-    content = message.get("content")
-    if content is not None:
-        normalized["content"] = content
-    else:
-        normalized["content"] = ""
-    if message.get("tool_calls"):
-        normalized["tool_calls"] = message["tool_calls"]
-    return normalized
-
-
-def run_agent_loop(ctx: TriageContext) -> str:
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": FUZZAGENT_SYSTEM_PROMPT + RESPONSE_FORMAT_PROMPT},
-        {"role": "user", "content": initial_user_message(ctx)},
-    ]
-    tools = tool_definitions()
-    last_text_response = ""
-
-    for epoch in range(MAX_AGENT_EPOCHS):
-        print(f"[+] LLM epoch {epoch}")
-        response = post_chat_completion(chat_completion_payload(messages, tools))
-        assistant_message = extract_message(response)
-        messages.append(normalize_assistant_message(assistant_message))
-
-        content = assistant_message.get("content")
-        if isinstance(content, str) and content.strip():
-            last_text_response = content.strip()
-
-        tool_calls = assistant_message.get("tool_calls") or []
-        if not tool_calls:
-            if last_text_response:
-                triage = triage_slug(last_text_response)
-                decision_rule_error = report_decision_rule_error(last_text_response)
-                if decision_rule_error is not None:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your report cannot be accepted: "
-                                f"{decision_rule_error} Revise the report with "
-                                "the exact Phase 3 decision rule used."
-                            ),
-                        }
-                    )
-                    continue
-                citation_error = report_citation_error(last_text_response)
-                if citation_error is not None:
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "Your report cannot be accepted: "
-                                f"{citation_error} Revise the report with explicit "
-                                "claim-source citations."
-                            ),
-                        }
-                    )
-                    continue
-                if triage == "library-bug":
-                    contract_error = library_bug_report_contract_error(last_text_response)
-                    if contract_error is not None:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "Your report cannot be accepted as library-bug: "
-                                    f"{contract_error} Revise the report after contract "
-                                    "discovery, or classify as harness-bug."
-                                ),
-                            }
-                        )
-                        continue
-                ctx.report_content = last_text_response
-                ctx.triage = triage
-                ctx.report_written = True
-                write_report(ctx.output_path, ctx.harness, ctx.crash_input, ctx.triage, last_text_response)
-                return last_text_response
-            raise RuntimeError("The LLM returned neither report text nor tool calls.")
-
-        for tool_call in tool_calls:
-            function = tool_call.get("function", {})
-            tool_name = function.get("name", "")
-            arguments = parse_tool_arguments(function.get("arguments"))
-            observation = run_tool(ctx, tool_name, arguments)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.get("id"),
-                    "name": tool_name,
-                    "content": limit_text(observation),
-                }
-            )
-
-        if ctx.report_written:
-            return ctx.report_content
-
-        messages.append({"role": "user", "content": NEXT_ACTION_PLANNING_PROMPT})
-
-    raise RuntimeError(f"CrashAnalyzer loop exceeded {MAX_AGENT_EPOCHS} epochs.")
-
-
+ 
+ 
+def majority_vote(votes: list[str]) -> str:
+    library_count = votes.count("library-bug")
+    harness_count = votes.count("harness-bug")
+    return "library-bug" if library_count > harness_count else "harness-bug"
+ 
+ 
+def print_stack_trace(stack_trace: str) -> None:
+    """Echo the collected stack trace to the screen so the crash output that
+    reaches the LLM can be verified manually."""
+    print("[+] Stack trace sent to the LLM (verification echo):")
+    print(f"[+] ({len(stack_trace)} characters)")
+    print("--------------- stack trace (start) ---------------")
+    print(stack_trace.rstrip())
+    print("---------------- stack trace (end) ----------------")
+ 
+ 
+def send_stack_trace_to_llm(
+    harness_source: str,
+    values_header_source: str | None,
+    stack_trace: str,
+) -> str:
+    """Send the stack trace to the LLM as part of the triage prompt.
+ 
+    The collected stack trace is first echoed to the screen (unless disabled
+    via PRINT_STACK_TRACE) so the crash output can be verified before it
+    reaches the LLM. The prompt is then sent TRIAGE_REPETITIONS times and the
+    majority verdict is returned.
+    """
+    if PRINT_STACK_TRACE:
+        print_stack_trace(stack_trace)
+ 
+    prompt = build_prompt(harness_source, values_header_source, stack_trace)
+    votes: list[str] = []
+    for index in range(1, TRIAGE_REPETITIONS + 1):
+        response = post_chat_completion(prompt)
+        vote = normalize_triage_result(response)
+        votes.append(vote)
+        print(f"[+] Triage vote {index}: {vote}")
+    return majority_vote(votes)
+ 
+ 
+def append_csv_row(csv_path: Path, benchmark_name: str, tool: str, result: str) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not csv_path.exists() or csv_path.stat().st_size == 0
+    with csv_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        if write_header:
+            writer.writerow(["dir", "tool", "triage result"])
+        writer.writerow([benchmark_name, tool, result])
+ 
+ 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Compile a fuzz harness with HarnessMinimizer's sanitizer command, "
-            "then run a pre-minimization FuzzAgent-style crash triage loop. The "
-            "report is written beside the harness as "
-            "<harness-stem>_crash_triage_report.md."
+            "Triage a benchmark crash with one direct LLM prompt, repeated three "
+            "times, and append the majority result to a CSV file."
+        )
+    )
+    parser.add_argument(
+        "--dir",
+        required=True,
+        help=(
+            "Benchmark directory name under benchmark/library-bug, or an explicit "
+            "path to a benchmark directory."
         ),
     )
-    parser.add_argument("harness", help="C/C++ fuzz harness source")
-    parser.add_argument("--crash-input", required=True, help="Crash artifact to reproduce")
     parser.add_argument("--compile-flags", default=None, help="Harness compilation flags")
     parser.add_argument("--link-flags", default=None, help="Target-library link flags")
+    parser.add_argument(
+        "--tool",
+        default=None,
+        help=(
+            "Reduction tool name. Omit this, or use 'none', to triage the "
+            "original harness.cpp. Otherwise, triage the latest split-symbolize "
+            "reduced.cpp from harnessreducer-perf-comparison-<tool>-*."
+        ),
+    )
+    parser.add_argument(
+        "--csv",
+        default=str(DEFAULT_CSV_PATH),
+        help=f"CSV result path (default: {DEFAULT_CSV_PATH})",
+    )
     parser.add_argument(
         "--timeout",
         type=int,
         default=60,
-        help="Timeout for each harness/CASR/GDB execution in seconds (default: 60)",
+        help="Timeout in seconds for the local crash run used to collect stack trace.",
     )
     return parser
-
-
+ 
+ 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
-
-    harness = Path(args.harness).expanduser().resolve()
-    crash_input = Path(args.crash_input).expanduser().resolve()
-    if not harness.is_file():
-        raise SystemExit(f"Harness does not exist: {harness}")
-    if not crash_input.is_file():
-        raise SystemExit(f"Crash input does not exist: {crash_input}")
-
-    output_path = harness.parent / f"{harness.stem}_crash_triage_report.md"
-
+ 
     try:
-        llm_configuration()
-        with tempfile.TemporaryDirectory(prefix="crash_triage_") as temporary_dir:
-            binary = Path(temporary_dir) / "fuzzer"
+        benchmark_dir = resolve_benchmark_dir(args.dir)
+        crash_input = benchmark_dir / "crash-input"
+        if not crash_input.is_file():
+            raise TriageError(f"Crash input does not exist: {crash_input}")
+        compile_flags = expand_benchmark_flags(args.compile_flags, benchmark_dir)
+        link_flags = expand_benchmark_flags(args.link_flags, benchmark_dir)
+ 
+        if not is_original_tool(args.tool):
+            harness = select_latest_reduced_harness(benchmark_dir, args.tool)
+            csv_tool = args.tool
+            values_header = find_generated_values_header(harness)
+        else:
+            harness = benchmark_dir / "harness.cpp"
+            csv_tool = "none"
+            values_header = None
+ 
+        if not harness.is_file():
+            raise TriageError(f"Harness source does not exist: {harness}")
+ 
+        print(f"[+] Benchmark: {benchmark_dir.name}")
+        print(f"[+] Tool: {csv_tool}")
+        print(f"[+] Harness sent to LLM: {harness}")
+        if values_header is not None:
+            print(f"[+] Generated fuzz value header sent to LLM: {values_header}")
+ 
+        with tempfile.TemporaryDirectory(prefix="crash_triage_") as tmp:
+            binary = Path(tmp) / "fuzzer"
             compile_command = build_compile_command(
                 harness,
                 binary,
-                args.compile_flags,
-                args.link_flags,
+                compile_flags,
+                link_flags,
+                values_header,
             )
-            print("[+] Compiling harness")
-            print("    " + format_command(compile_command))
+            print("[+] Compiling harness to collect stack trace")
             compile_harness(compile_command)
-
-            print("[+] Checking crash reproduction with symbolize=1")
-            reproduction = execute_harness(
+ 
+            print("[+] Running crash input to collect stack trace")
+            stack_trace = run_harness_for_stack_trace(
                 binary,
                 crash_input,
-                args.link_flags,
-                timeout_seconds=args.timeout,
+                link_flags,
+                args.timeout,
             )
-            print(f"    exit status: {reproduction.returncode}")
-            if reproduction.returncode == 0:
-                raise RuntimeError(
-                    "The crash input did not reproduce a crash; the symbolized "
-                    "execution returned status 0. No LLM request was sent."
-                )
-
-            ctx = TriageContext(
-                harness=harness,
-                crash_input=crash_input,
-                binary=binary,
-                compile_command=compile_command,
-                compile_flags=args.compile_flags,
-                link_flags=args.link_flags,
-                timeout_seconds=args.timeout,
-                output_path=output_path,
-                work_dir=Path(temporary_dir),
-            )
-            report_content = run_agent_loop(ctx)
-
-        triage = ctx.triage if ctx.report_written else triage_slug(report_content)
-        if not ctx.report_written:
-            write_report(output_path, harness, crash_input, triage, report_content)
-        print(f"[+] Triage: {triage}")
-        print(f"[+] Crash report: {output_path}")
-        return 0 if triage != "unclassified" else 1
+ 
+        harness_source = read_text(harness)
+        values_header_source = read_text(values_header) if values_header is not None else None
+        result = send_stack_trace_to_llm(harness_source, values_header_source, stack_trace)
+ 
+        csv_path = Path(args.csv).expanduser().resolve()
+        append_csv_row(csv_path, benchmark_dir.name, csv_tool, result)
+        print(f"[+] Majority triage result: {result}")
+        print(f"[+] Appended CSV row to: {csv_path}")
+        return 0
     except Exception as exc:
         print(f"[-] Crash triage failed: {exc}", file=sys.stderr)
         return 1
-
-
+ 
+ 
 if __name__ == "__main__":
     raise SystemExit(main())

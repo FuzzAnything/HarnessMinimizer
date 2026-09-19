@@ -63,6 +63,25 @@ _SCALAR_METHODS = _FLOAT_METHODS | {
     "PickValueInArray",
 }
 
+_PUBLIC_FDP_MAX_ARGS = {
+    "ConsumeBytes": 1,
+    "ConsumeBytesWithTerminator": 2,
+    "ConsumeRemainingBytes": 0,
+    "ConsumeBytesAsString": 1,
+    "ConsumeRandomLengthString": 1,
+    "ConsumeRemainingBytesAsString": 0,
+    "ConsumeIntegral": 0,
+    "ConsumeIntegralInRange": 2,
+    "ConsumeFloatingPoint": 0,
+    "ConsumeFloatingPointInRange": 2,
+    "ConsumeProbability": 0,
+    "ConsumeBool": 0,
+    "ConsumeEnum": 0,
+    "PickValueInArray": 1,
+    "ConsumeData": 2,
+    "remaining_bytes": 0,
+}
+
 
 @dataclass
 class CallSite:
@@ -1294,9 +1313,10 @@ def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
     """Remove numeric callsite IDs from a source instrumented by ``inject_ids``.
 
     Injected IDs are sequential and may exceed ``start_id + 99`` when a
-    harness has more than 100 supported FDP callsites. This function is used
-    only on pipeline-instrumented sources, so every final integer argument at
-    or above ``start_id`` is treated as an injected ID.
+    harness has more than 100 supported FDP callsites. Reducers can also
+    mutate an injected ID into a small integer. In that case, only strip the
+    final integer when the call has more arguments than the public FDP API
+    accepts.
     """
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
@@ -1309,6 +1329,10 @@ def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
         if not _is_supported_fdp_call(node, source_bytes):
             continue
 
+        fn = node.child_by_field_name("function")
+        field = fn.child_by_field_name("field") if fn is not None else None
+        method = _extract_method_name(field, source_bytes) if field is not None else ""
+
         args = node.child_by_field_name("arguments")
         if args is None or args.type != "argument_list":
             continue
@@ -1319,7 +1343,14 @@ def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
 
         last = arg_nodes[-1]
         last_value = _parse_int_literal(_node_text(source_bytes, last))
-        if last_value is None or last_value < start_id:
+        public_max_args = _PUBLIC_FDP_MAX_ARGS.get(method)
+        has_original_id = last_value is not None and last_value >= start_id
+        has_reduced_id = (
+            last_value is not None
+            and public_max_args is not None
+            and len(arg_nodes) > public_max_args
+        )
+        if not has_original_id and not has_reduced_id:
             continue
 
         arg_start = args.start_byte + 1

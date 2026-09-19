@@ -58,3 +58,60 @@ void f(FuzzedDataProvider* fdp) {
     assert removed == 1
     assert "// café" in cleaned
     assert "ConsumeBool()" in cleaned
+
+
+def test_strip_injected_ids_removes_reducer_mutated_range_id() -> None:
+    source = """
+void f(FuzzedDataProvider* fdp) {
+  auto value = fdp->ConsumeIntegralInRange<int>(1, 0, 0);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 1
+    assert "ConsumeIntegralInRange<int>(1, 0)" in cleaned
+    assert "ConsumeIntegralInRange<int>(1, 0, 0)" not in cleaned
+
+
+def test_strip_injected_ids_removes_reducer_mutated_zero_arg_id() -> None:
+    source = """
+void f(FuzzedDataProvider* fdp) {
+  auto value = fdp->ConsumeBool(1);
+  auto remaining = fdp->remaining_bytes(0);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 2
+    assert "ConsumeBool()" in cleaned
+    assert "remaining_bytes()" in cleaned
+
+
+def test_strip_injected_ids_removes_reducer_mutated_id_after_optional_argument() -> None:
+    source = """
+void f(FuzzedDataProvider* fdp) {
+  auto bytes = fdp->ConsumeBytesWithTerminator<uint8_t>(3, 99, 0);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 1
+    assert "ConsumeBytesWithTerminator<uint8_t>(3, 99)" in cleaned
+
+
+def test_strip_injected_ids_preserves_legal_optional_numeric_arguments() -> None:
+    source = """
+void f(FuzzedDataProvider* fdp, uint8_t* buffer, size_t size) {
+  auto bytes = fdp->ConsumeBytesWithTerminator<uint8_t>(3, 99);
+  auto token = fdp->ConsumeRandomLengthString(10);
+  auto copied = fdp->ConsumeData(buffer, size);
+}
+"""
+
+    cleaned, removed = strip_injected_ids(source)
+
+    assert removed == 0
+    assert cleaned == source
