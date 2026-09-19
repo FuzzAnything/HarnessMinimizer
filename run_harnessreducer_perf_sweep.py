@@ -47,12 +47,12 @@ VARIANTS = (
         "label": "--pch --amortize-link, symbolize off",
         "extra_args": ("--pch", "--amortize-link"),
     },
-    # {
-    #     "key": "split_symbolize",
-    #     "directory": "split-symbolize",
-    #     "label": "--split, no amortize-link, --symbolize",
-    #     "extra_args": ("--split", "--symbolize"),
-    # },
+    {
+        "key": "split_symbolize",
+        "directory": "split-symbolize",
+        "label": "--split, no amortize-link, --symbolize",
+        "extra_args": ("--split", "--symbolize"),
+    },
 )
 
 
@@ -89,7 +89,7 @@ def benchmark_dir(value: str) -> Path:
 
 
 def default_python() -> str:
-    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    venv_python = PROJECT_ROOT / ".venv-host" / "bin" / "python"
     if venv_python.is_file():
         return str(venv_python)
     return sys.executable
