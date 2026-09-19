@@ -34,6 +34,8 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner._IS_USER_WORK_DIR = False
         reducer_runner.set_normal_reference_stack_depth(None)
         reducer_runner.set_symbolized_reference_stack_depth(None)
+        reducer_runner.set_normal_reference_stack_depth_strict(False)
+        reducer_runner.set_symbolized_reference_stack_depth_strict(False)
         reducer_runner.set_dynamic_reference_crash_site(None)
         reducer_runner.set_symbolized_reference_crash_location_pattern(None)
         reducer_runner.configure_debug_logging(False)
@@ -69,6 +71,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
         reducer_runner.set_normal_reference_stack_depth(12)
+        reducer_runner.set_normal_reference_stack_depth_strict(True)
 
         out = reducer_runner.run_treereducer(
             harness_path="/tmp/in.cpp",
@@ -88,6 +91,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--split", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("12", cmd)
+        self.assertIn("--strict-stack-depth", cmd)
         self.assertNotIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.reducer_runner.run_supervised")
@@ -97,6 +101,7 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.configure_work_dir(tmpdir)
             Path(tmpdir, "reduced_harness.cpp").write_text("", encoding="utf-8")
             reducer_runner.set_symbolized_reference_stack_depth(6)
+            reducer_runner.set_symbolized_reference_stack_depth_strict(True)
             reducer_runner.set_symbolized_reference_crash_location_pattern(
                 r"/src/lib\.c:10:3"
             )
@@ -123,6 +128,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("SymbolizedPattern", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("6", cmd)
+        self.assertIn("--strict-stack-depth", cmd)
         self.assertIn("--crash-location-pattern", cmd)
         self.assertIn(r"/src/lib\.c:10:3", cmd)
         self.assertNotIn("--crash-location-file", cmd)
@@ -149,6 +155,7 @@ class TestReducerRunner(unittest.TestCase):
             "#0 0x111111 in target\n"
             "#1 0x222222 in LLVMFuzzerTestOneInput\n"
         )
+        reducer_runner.set_normal_reference_stack_depth_strict(True)
 
         reducer_runner.run_treereducer(
             harness_path="/tmp/in.cpp",
@@ -166,6 +173,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("/tmp/harness-runner.sock", cmd)
         self.assertIn("--stack-depth", cmd)
         self.assertIn("2", cmd)
+        self.assertIn("--strict-stack-depth", cmd)
         mock_reference.assert_called_once()
 
     @patch("harnessreducer.reducer_runner.os.path.exists")

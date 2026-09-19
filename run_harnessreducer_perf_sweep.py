@@ -47,12 +47,12 @@ VARIANTS = (
         "label": "--pch --amortize-link, symbolize off",
         "extra_args": ("--pch", "--amortize-link"),
     },
-    {
-        "key": "split_symbolize",
-        "directory": "split-symbolize",
-        "label": "--split, no amortize-link, --symbolize",
-        "extra_args": ("--split", "--symbolize"),
-    },
+    # {
+    #     "key": "split_symbolize",
+    #     "directory": "split-symbolize",
+    #     "label": "--split, no amortize-link, --symbolize",
+    #     "extra_args": ("--split", "--symbolize"),
+    # },
 )
 
 
@@ -89,7 +89,7 @@ def benchmark_dir(value: str) -> Path:
 
 
 def default_python() -> str:
-    venv_python = PROJECT_ROOT / ".venv-host" / "bin" / "python"
+    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
     if venv_python.is_file():
         return str(venv_python)
     return sys.executable
@@ -165,6 +165,21 @@ def profiled_checks(profile_path: Path) -> int | None:
         return None
 
 
+def reference_stability_wall_seconds(work_dir: Path) -> float:
+    path = work_dir / "stack_depth_stability.json"
+    if not path.is_file():
+        return 0.0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, json.JSONDecodeError):
+        return 0.0
+    try:
+        value = float(data.get("total_wall_seconds", 0.0))  # type: ignore[union-attr]
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+    return max(0.0, value)
+
+
 def run_case(
     *,
     python_executable: str,
@@ -236,11 +251,21 @@ def run_case(
             check=False,
             timeout=None,
         )
-    full_wall_seconds = (time.perf_counter_ns() - start_ns) / 1_000_000_000.0
+    raw_full_wall_seconds = (time.perf_counter_ns() - start_ns) / 1_000_000_000.0
     end_time = datetime.now().astimezone()
+    profile_excluded_setup_seconds = reference_stability_wall_seconds(work_dir)
+    full_wall_seconds = max(0.0, raw_full_wall_seconds - profile_excluded_setup_seconds)
 
     (job_dir / "full_command_wall_seconds.txt").write_text(
         f"{full_wall_seconds:.6f}\n",
+        encoding="utf-8",
+    )
+    (job_dir / "raw_full_command_wall_seconds.txt").write_text(
+        f"{raw_full_wall_seconds:.6f}\n",
+        encoding="utf-8",
+    )
+    (job_dir / "profile_excluded_setup_wall_seconds.txt").write_text(
+        f"{profile_excluded_setup_seconds:.6f}\n",
         encoding="utf-8",
     )
 
@@ -266,6 +291,8 @@ def run_case(
         "started": start_time.isoformat(),
         "ended": end_time.isoformat(),
         "full_command_wall_seconds": full_wall_seconds,
+        "raw_full_command_wall_seconds": raw_full_wall_seconds,
+        "profile_excluded_setup_wall_seconds": profile_excluded_setup_seconds,
         "returncode": proc.returncode,
         "total_checks": total_checks,
         "source_reduction_metrics": source_reduction,

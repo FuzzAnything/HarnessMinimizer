@@ -1019,6 +1019,8 @@ def _stack_depth_is_advisory(
     *,
     use_symbolize: bool,
 ) -> bool:
+    if getattr(args, "strict_stack_depth", False):
+        return False
     if use_symbolize:
         return True
     return bool(args.dynamic_crash_site_library and args.dynamic_crash_site_offset)
@@ -1151,6 +1153,7 @@ def main() -> int:
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
+    parser.add_argument("--strict-stack-depth", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
     parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--statistics-file", type=str, default=None, help="Path to statistics.txt for tracking crash_tester return-code counts")

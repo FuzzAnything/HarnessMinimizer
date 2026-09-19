@@ -218,7 +218,9 @@ class TestReferenceEvidenceRetry(unittest.TestCase):
 
     def capture(self, outputs, *, link_flags="/tmp/libtarget.so", required=True):
         procs = [subprocess.CompletedProcess([], status, output, "") for status, output in outputs]
-        with patch.object(runner, "run_command", side_effect=procs) as execution:
+        with patch.object(runner, "run_command", side_effect=procs) as execution, patch.object(
+            runner, "_probe_reference_stack_depth_stability", return_value=False,
+        ):
             pattern = runner.extract_crash_pattern_from_output(
                 "seed.bin", harness_path="/tmp/harness.cpp", link_flags=link_flags,
                 record_symbolized_crash_location=required,

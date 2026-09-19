@@ -64,10 +64,12 @@ CALIBRATED_EXEC_TIMEOUT_MAX_MS = 60_000
 CALIBRATION_PROBE_RUNS = 5
 CALIBRATION_WARMUP_RUNS = 1
 CALIBRATED_EXEC_TIMEOUT_MULTIPLIER = 8
+STACK_DEPTH_STABILITY_RUNS = 20
 EXEC_TIME_MARKER_PREFIX = "HARNESSREDUCER_EXEC_TIME_MS="
 POC_RUNTIME_ARG_MARKER_PREFIX = "HARNESSREDUCER_POC_RUNTIME_ARG="
 
 STACK_TRACE_FILE_NAME = "stack_trace.pattern"
+STACK_DEPTH_STABILITY_FILE_NAME = "stack_depth_stability.json"
 CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
 CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
@@ -82,6 +84,8 @@ CRASH_PATTERN_SYMBOLIZE_0: str | None = None
 CRASH_PATTERN_SYMBOLIZE_1: str | None = None
 NORMAL_REFERENCE_STACK_DEPTH: int | None = None
 SYMBOLIZED_REFERENCE_STACK_DEPTH: int | None = None
+NORMAL_REFERENCE_STACK_DEPTH_STRICT = False
+SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT = False
 DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
 CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
@@ -2166,15 +2170,14 @@ def check_tree_reducer() -> None:
     )
     print("[+] tree-reducer is available.")
 
-def check_harness_compilation(
+
+def reference_harness_compile_command(
     harness_path: str,
     compile_flags: str | None,
     link_flags: str | None,
-) -> None:
-    print("[+] Checking harness compilation...")
-    work_dir = get_work_dir()
-    output_bin = os.path.join(work_dir, "poc.out")
-    compile_cmd = [
+    output_bin: str,
+) -> list[str]:
+    return [
         "clang++",
         "-fsanitize=address,fuzzer,undefined",
         *PHASE3_DIRECT_OPT_FLAGS,
@@ -2185,6 +2188,22 @@ def check_harness_compilation(
         output_bin,
         *_split_flags(link_flags),
     ]
+
+
+def check_harness_compilation(
+    harness_path: str,
+    compile_flags: str | None,
+    link_flags: str | None,
+) -> None:
+    print("[+] Checking harness compilation...")
+    work_dir = get_work_dir()
+    output_bin = os.path.join(work_dir, "poc.out")
+    compile_cmd = reference_harness_compile_command(
+        harness_path,
+        compile_flags,
+        link_flags,
+        output_bin,
+    )
 
     run_command(compile_cmd, "Failed to compile the original harness. Please fix compilation errors before reduction.")
     print("[+] Harness compiles successfully.")
@@ -2485,6 +2504,15 @@ def get_normal_reference_stack_depth() -> int | None:
     return NORMAL_REFERENCE_STACK_DEPTH
 
 
+def set_normal_reference_stack_depth_strict(strict: bool) -> None:
+    global NORMAL_REFERENCE_STACK_DEPTH_STRICT
+    NORMAL_REFERENCE_STACK_DEPTH_STRICT = bool(strict)
+
+
+def get_normal_reference_stack_depth_strict() -> bool:
+    return NORMAL_REFERENCE_STACK_DEPTH_STRICT
+
+
 def set_symbolized_reference_stack_depth(depth: int | None) -> None:
     global SYMBOLIZED_REFERENCE_STACK_DEPTH
     SYMBOLIZED_REFERENCE_STACK_DEPTH = depth
@@ -2492,6 +2520,15 @@ def set_symbolized_reference_stack_depth(depth: int | None) -> None:
 
 def get_symbolized_reference_stack_depth() -> int | None:
     return SYMBOLIZED_REFERENCE_STACK_DEPTH
+
+
+def set_symbolized_reference_stack_depth_strict(strict: bool) -> None:
+    global SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT
+    SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT = bool(strict)
+
+
+def get_symbolized_reference_stack_depth_strict() -> bool:
+    return SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT
 
 
 def set_dynamic_reference_crash_site(site: DynamicCrashSite | None) -> None:
@@ -2514,6 +2551,10 @@ def get_symbolized_reference_crash_location_pattern() -> str | None:
 
 def get_stack_trace_file() -> str:
     return os.path.join(get_work_dir(), STACK_TRACE_FILE_NAME)
+
+
+def get_stack_depth_stability_file() -> str:
+    return os.path.join(get_work_dir(), STACK_DEPTH_STABILITY_FILE_NAME)
 
 
 def get_crash_pattern_file(*, symbolized: bool) -> str:
@@ -2563,10 +2604,13 @@ def reset_stack_trace_state() -> None:
     set_reference_crash_patterns()
     set_normal_reference_stack_depth(None)
     set_symbolized_reference_stack_depth(None)
+    set_normal_reference_stack_depth_strict(False)
+    set_symbolized_reference_stack_depth_strict(False)
     set_dynamic_reference_crash_site(None)
     set_symbolized_reference_crash_location_pattern(None)
     for path in (
         get_stack_trace_file(),
+        get_stack_depth_stability_file(),
         get_crash_pattern_file(symbolized=False),
         get_crash_pattern_file(symbolized=True),
         get_dynamic_crash_site_file(),
@@ -2875,6 +2919,175 @@ def _run_harness_for_crash_reference(
     )
 
 
+def _update_stack_depth_stability_record(
+    *,
+    symbolize: bool,
+    depths: list[int],
+    stable: bool,
+    expected_depth: int | None,
+    wall_ns: int,
+    failed_run: int | None = None,
+    failed_stage: str | None = None,
+    returncode: int | None = None,
+) -> None:
+    path = Path(get_stack_depth_stability_file())
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        record = {"schema_version": 1, "runs_per_mode": STACK_DEPTH_STABILITY_RUNS, "modes": {}}
+    if not isinstance(record, dict):
+        record = {"schema_version": 1, "runs_per_mode": STACK_DEPTH_STABILITY_RUNS, "modes": {}}
+    modes = record.setdefault("modes", {})
+    if not isinstance(modes, dict):
+        modes = {}
+        record["modes"] = modes
+    modes[f"symbolize_{int(symbolize)}"] = {
+        "depths": depths,
+        "stable": stable,
+        "expected_depth": expected_depth,
+        "wall_ns": wall_ns,
+        "failed_run": failed_run,
+        "failed_stage": failed_stage,
+        "returncode": returncode,
+    }
+    total_wall_ns = 0
+    for mode in modes.values():
+        if isinstance(mode, dict):
+            try:
+                total_wall_ns += int(mode.get("wall_ns", 0))
+            except (TypeError, ValueError):
+                pass
+    record["total_wall_ns"] = total_wall_ns
+    record["total_wall_seconds"] = total_wall_ns / 1_000_000_000.0
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _probe_reference_stack_depth_stability(
+    harness_path: str | None,
+    crash_input: str | None,
+    *,
+    symbolize: bool,
+    compile_flags: str | None,
+    link_flags: str | None,
+    expected_depth: int | None,
+) -> bool:
+    label = f"symbolize={int(symbolize)}"
+    if not harness_path:
+        _update_stack_depth_stability_record(
+            symbolize=symbolize,
+            depths=[],
+            stable=False,
+            expected_depth=expected_depth,
+            wall_ns=0,
+        )
+        print(f"[*] Stack-depth strictness disabled for {label}: no harness path was provided.")
+        return False
+    if expected_depth is None:
+        _update_stack_depth_stability_record(
+            symbolize=symbolize,
+            depths=[],
+            stable=False,
+            expected_depth=None,
+            wall_ns=0,
+        )
+        print(f"[*] Stack-depth strictness disabled for {label}: no reference depth was recorded.")
+        return False
+
+    depths: list[int] = []
+    started_ns = time.perf_counter_ns()
+    probe_dir = Path(get_work_dir()) / "stack_depth_stability_probes"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    for run_index in range(1, STACK_DEPTH_STABILITY_RUNS + 1):
+        output_bin = probe_dir / f"symbolize{int(symbolize)}_{run_index}.out"
+        compile_proc = run_command(
+            reference_harness_compile_command(
+                harness_path,
+                compile_flags,
+                link_flags,
+                str(output_bin),
+            ),
+            "Failed to compile harness for stack-depth stability probing",
+            ignore_errors=True,
+        )
+        if compile_proc.returncode != 0:
+            wall_ns = time.perf_counter_ns() - started_ns
+            _update_stack_depth_stability_record(
+                symbolize=symbolize,
+                depths=depths,
+                stable=False,
+                expected_depth=expected_depth,
+                wall_ns=wall_ns,
+                failed_run=run_index,
+                failed_stage="compile",
+                returncode=compile_proc.returncode,
+            )
+            print(
+                f"[!] Stack-depth strictness disabled for {label}: "
+                f"stability compile {run_index}/{STACK_DEPTH_STABILITY_RUNS} "
+                f"failed (exit={compile_proc.returncode})."
+            )
+            try:
+                output_bin.unlink()
+            except FileNotFoundError:
+                pass
+            return False
+
+        proc = _run_harness_for_crash_reference(
+            str(output_bin),
+            crash_input,
+            symbolize=symbolize,
+            link_flags=link_flags,
+        )
+        try:
+            output_bin.unlink()
+        except FileNotFoundError:
+            pass
+        output = proc.stdout + "\n" + proc.stderr
+        if proc.returncode != 77:
+            wall_ns = time.perf_counter_ns() - started_ns
+            _update_stack_depth_stability_record(
+                symbolize=symbolize,
+                depths=depths,
+                stable=False,
+                expected_depth=expected_depth,
+                wall_ns=wall_ns,
+                failed_run=run_index,
+                failed_stage="execute",
+                returncode=proc.returncode,
+            )
+            print(
+                f"[!] Stack-depth strictness disabled for {label}: "
+                f"stability execution {run_index}/{STACK_DEPTH_STABILITY_RUNS} "
+                f"did not reproduce the reference crash (exit={proc.returncode})."
+            )
+            return False
+        depths.append(count_first_stack_trace_frames(output))
+
+    wall_ns = time.perf_counter_ns() - started_ns
+    stable = bool(depths) and all(depth == expected_depth for depth in depths)
+    _update_stack_depth_stability_record(
+        symbolize=symbolize,
+        depths=depths,
+        stable=stable,
+        expected_depth=expected_depth,
+        wall_ns=wall_ns,
+    )
+    if stable:
+        print(
+            f"[+] Stack-depth strictness enabled for {label}: "
+            f"{STACK_DEPTH_STABILITY_RUNS}/{STACK_DEPTH_STABILITY_RUNS} compile+execute samples "
+            f"had depth {expected_depth}."
+        )
+    else:
+        unique_depths = ", ".join(str(depth) for depth in sorted(set(depths)))
+        print(
+            f"[!] Stack-depth strictness disabled for {label}: "
+            f"observed depths [{unique_depths}] across "
+            f"{STACK_DEPTH_STABILITY_RUNS} compile+execute samples; reference depth is {expected_depth}."
+        )
+    return stable
+
+
 def _capture_crash_reference_with_evidence(
     output_bin: str,
     crash_input: str | None,
@@ -3094,6 +3307,7 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
 def extract_crash_pattern_from_output(
     crash_input: str | None,
     harness_path: str | None = None,
+    compile_flags: str | None = None,
     link_flags: str | None = None,
     record_symbolized_crash_location: bool = False,
 ) -> str | None:
@@ -3115,6 +3329,8 @@ def extract_crash_pattern_from_output(
         set_reference_crash_patterns()
         set_normal_reference_stack_depth(None)
         set_symbolized_reference_stack_depth(None)
+        set_normal_reference_stack_depth_strict(False)
+        set_symbolized_reference_stack_depth_strict(False)
         set_dynamic_reference_crash_site(None)
         set_symbolized_reference_crash_location_pattern(None)
         _persist_reference_crash_pattern(None, symbolized=False)
@@ -3131,6 +3347,16 @@ def extract_crash_pattern_from_output(
         print("[!] No fast-path stack-trace frames found for reference depth extraction.")
 
     _record_dynamic_reference_crash_site(output, link_flags)
+    set_normal_reference_stack_depth_strict(
+        _probe_reference_stack_depth_stability(
+            harness_path,
+            crash_input,
+            symbolize=False,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            expected_depth=get_normal_reference_stack_depth(),
+        )
+    )
 
     crash_pattern = _extract_crash_signature_from_output(output)
     if not crash_pattern:
@@ -3150,6 +3376,7 @@ def extract_crash_pattern_from_output(
     if symbolized_proc.returncode != 77:
         set_reference_crash_patterns(symbolize_0=crash_pattern)
         set_symbolized_reference_stack_depth(None)
+        set_symbolized_reference_stack_depth_strict(False)
         set_symbolized_reference_crash_location_pattern(None)
         _persist_reference_crash_pattern(None, symbolized=True)
         _persist_symbolized_reference_crash_location(None)
@@ -3192,6 +3419,16 @@ def extract_crash_pattern_from_output(
         print(f"[+] Recorded symbolized stack trace depth: {symbolized_reference_stack_depth}")
     else:
         print("[!] No symbolized stack-trace frames found for reference depth extraction.")
+    set_symbolized_reference_stack_depth_strict(
+        _probe_reference_stack_depth_stability(
+            harness_path,
+            crash_input,
+            symbolize=True,
+            compile_flags=compile_flags,
+            link_flags=link_flags,
+            expected_depth=get_symbolized_reference_stack_depth(),
+        )
+    )
 
     # Extract and save the first stack trace (normalized) for deeper symbolized validation.
     raw_stack_trace = extract_stack_trace(symbolized_output, harness_path=harness_path)
@@ -3548,6 +3785,13 @@ def run_treereducer(
             reference_depth = count_first_stack_trace_frames(reference_output)
             if reference_depth:
                 cmd.extend(["--stack-depth", str(reference_depth)])
+                strict_depth = (
+                    get_symbolized_reference_stack_depth_strict()
+                    if symbolize
+                    else get_normal_reference_stack_depth_strict()
+                )
+                if strict_depth:
+                    cmd.append("--strict-stack-depth")
             elif symbolize:
                 raise RuntimeError(
                     "Could not extract a symbolized amortized-link reference stack depth."
@@ -3687,7 +3931,15 @@ def stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:
     )
     if depth is None:
         return []
-    return ["--stack-depth", str(depth)]
+    args = ["--stack-depth", str(depth)]
+    strict = (
+        get_symbolized_reference_stack_depth_strict()
+        if symbolized
+        else get_normal_reference_stack_depth_strict()
+    )
+    if strict:
+        args.append("--strict-stack-depth")
+    return args
 
 
 def required_stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:

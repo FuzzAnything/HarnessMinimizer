@@ -1287,6 +1287,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
             config.crash_input,
             harness_path=harness_path,
+            compile_flags=compile_flags,
             link_flags=config.link_flags,
             **crash_pattern_kwargs,
         )

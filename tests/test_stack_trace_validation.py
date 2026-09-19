@@ -4,6 +4,7 @@ These tests exercise the pure-logic parts of the stack trace validation feature
 without running the full reduction pipeline or compiling any code.
 """
 import os
+import json
 import re
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 from harnessreducer.reducer_runner import (
     _extract_crash_signature_from_output,
+    _probe_reference_stack_depth_stability,
     DynamicCrashSite,
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
@@ -40,12 +42,15 @@ from harnessreducer.reducer_runner import (
     infer_target_dynamic_library_hints,
     normalize_crash_signature,
     get_stack_trace_file,
+    get_stack_depth_stability_file,
     reset_poc_runtime_args,
     reset_stack_trace_state,
     set_dynamic_reference_crash_site,
     set_symbolized_reference_crash_location_pattern,
     set_normal_reference_stack_depth,
+    set_normal_reference_stack_depth_strict,
     set_symbolized_reference_stack_depth,
+    set_symbolized_reference_stack_depth_strict,
     stack_depth_tester_args,
     symbolized_crash_location_tester_args,
     validate_crash_pattern,
@@ -688,8 +693,9 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
         finally:
             os.unlink(trace_file)
 
+    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
     @patch("harnessreducer.reducer_runner.run_command")
-    def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run):
+    def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             mock_run.side_effect = [
@@ -727,8 +733,9 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 ],
             )
 
+    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
     @patch("harnessreducer.reducer_runner.run_command")
-    def test_extract_crash_pattern_records_distinct_symbolized_pattern(self, mock_run):
+    def test_extract_crash_pattern_records_distinct_symbolized_pattern(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             fast_output = "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
@@ -758,8 +765,9 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
             self.assertIsNotNone(re.search(symbolized_pattern, symbolized_output.replace("value -1", "value -390")))
             self.assertIsNone(re.search(symbolized_pattern, symbolized_output.replace(":1142:", ":1143:")))
 
+    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
     @patch("harnessreducer.reducer_runner.run_command")
-    def test_extract_crash_pattern_records_symbolized_crash_location_when_requested(self, mock_run):
+    def test_extract_crash_pattern_records_symbolized_crash_location_when_requested(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             mock_run.side_effect = [
@@ -788,8 +796,9 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 ["--crash-location-pattern", expected_pattern],
             )
 
+    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
     @patch("harnessreducer.reducer_runner.run_command")
-    def test_extract_crash_pattern_does_not_record_crash_location_by_default(self, mock_run):
+    def test_extract_crash_pattern_does_not_record_crash_location_by_default(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             Path(get_symbolized_crash_location_file()).write_text(
@@ -810,8 +819,9 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
             self.assertIsNone(get_symbolized_reference_crash_location_pattern())
             self.assertFalse(os.path.exists(get_symbolized_crash_location_file()))
 
+    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
     @patch("harnessreducer.reducer_runner.run_command")
-    def test_extract_crash_pattern_stops_on_harness_crash(self, mock_run):
+    def test_extract_crash_pattern_stops_on_harness_crash(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             fast_output = "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /tmp/harness.cpp:82:36\n"
@@ -838,6 +848,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
             Path(get_stack_trace_file()).write_text("pattern", encoding="utf-8")
+            Path(get_stack_depth_stability_file()).write_text("{}", encoding="utf-8")
             Path(get_crash_pattern_file(symbolized=False)).write_text(
                 "fast-pattern", encoding="utf-8"
             )
@@ -856,10 +867,15 @@ class TestStackTraceStateManagement(unittest.TestCase):
                 )
             )
             set_symbolized_reference_crash_location_pattern("location-pattern")
+            set_normal_reference_stack_depth(3)
+            set_normal_reference_stack_depth_strict(True)
+            set_symbolized_reference_stack_depth(6)
+            set_symbolized_reference_stack_depth_strict(True)
 
             reset_stack_trace_state()
 
             self.assertFalse(os.path.exists(get_stack_trace_file()))
+            self.assertFalse(os.path.exists(get_stack_depth_stability_file()))
             self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=False)))
             self.assertFalse(os.path.exists(get_crash_pattern_file(symbolized=True)))
             self.assertFalse(os.path.exists(get_dynamic_crash_site_file()))
@@ -868,6 +884,8 @@ class TestStackTraceStateManagement(unittest.TestCase):
             self.assertIsNone(get_reference_crash_pattern_symbolize_1())
             self.assertIsNone(get_dynamic_reference_crash_site())
             self.assertIsNone(get_symbolized_reference_crash_location_pattern())
+            self.assertEqual(stack_depth_tester_args(symbolized=False), [])
+            self.assertEqual(stack_depth_tester_args(symbolized=True), [])
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
@@ -894,11 +912,35 @@ class TestStackTraceStateManagement(unittest.TestCase):
 
 
 class TestValidateStackTraceInvocation(unittest.TestCase):
+    def test_stack_depth_args_include_strict_flag_only_after_stability_probe(self):
+        reset_stack_trace_state()
+        set_normal_reference_stack_depth(3)
+        set_symbolized_reference_stack_depth(6)
+        self.assertEqual(stack_depth_tester_args(symbolized=False), ["--stack-depth", "3"])
+        self.assertEqual(stack_depth_tester_args(symbolized=True), ["--stack-depth", "6"])
+
+        set_normal_reference_stack_depth_strict(True)
+        set_symbolized_reference_stack_depth_strict(True)
+
+        self.assertEqual(
+            stack_depth_tester_args(symbolized=False),
+            ["--stack-depth", "3", "--strict-stack-depth"],
+        )
+        self.assertEqual(
+            stack_depth_tester_args(symbolized=True),
+            ["--stack-depth", "6", "--strict-stack-depth"],
+        )
+
+        reset_stack_trace_state()
+        self.assertEqual(stack_depth_tester_args(symbolized=False), [])
+        self.assertEqual(stack_depth_tester_args(symbolized=True), [])
+
     def test_fast_stack_depth_is_strict_without_dynamic_crash_site_anchor(self):
         args = type(
             "Args",
             (),
             {
+                "strict_stack_depth": False,
                 "dynamic_crash_site_library": None,
                 "dynamic_crash_site_offset": None,
             },
@@ -910,6 +952,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             "Args",
             (),
             {
+                "strict_stack_depth": False,
                 "dynamic_crash_site_library": "/tmp/build/lib/libtarget.so",
                 "dynamic_crash_site_offset": "0xbeaf0",
             },
@@ -921,11 +964,117 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             "Args",
             (),
             {
+                "strict_stack_depth": False,
                 "dynamic_crash_site_library": None,
                 "dynamic_crash_site_offset": None,
             },
         )()
         self.assertTrue(ct_stack_depth_is_advisory(args, use_symbolize=True))
+
+    def test_strict_stack_depth_overrides_advisory_crash_site_modes(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "strict_stack_depth": True,
+                "dynamic_crash_site_library": "/tmp/build/lib/libtarget.so",
+                "dynamic_crash_site_offset": "0xbeaf0",
+            },
+        )()
+        self.assertFalse(ct_stack_depth_is_advisory(args, use_symbolize=False))
+        self.assertFalse(ct_stack_depth_is_advisory(args, use_symbolize=True))
+
+    @patch("harnessreducer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_stack_depth_stability_probe_records_stable_result(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            mock_run.return_value = SimpleNamespace(
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+            execute = SimpleNamespace(
+                returncode=77,
+                stdout=(
+                    "    #0 0xaaa in target /src/lib.c:10:3\n"
+                    "    #1 0xbbb in LLVMFuzzerTestOneInput /tmp/harness.cpp:9:1\n"
+                    "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+                ),
+                stderr="",
+            )
+            mock_run.side_effect = [
+                item
+                for _ in range(3)
+                for item in (SimpleNamespace(returncode=0, stdout="", stderr=""), execute)
+            ]
+
+            stable = _probe_reference_stack_depth_stability(
+                "/tmp/harness.cpp",
+                "seed.bin",
+                symbolize=True,
+                compile_flags="-I/include",
+                link_flags="-ltarget",
+                expected_depth=2,
+            )
+
+            self.assertTrue(stable)
+            self.assertEqual(mock_run.call_count, 6)
+            record = json.loads(Path(get_stack_depth_stability_file()).read_text(encoding="utf-8"))
+            mode = record["modes"]["symbolize_1"]
+            self.assertTrue(mode["stable"])
+            self.assertEqual(mode["depths"], [2, 2, 2])
+
+    @patch("harnessreducer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
+    @patch("harnessreducer.reducer_runner.run_command")
+    def test_stack_depth_stability_probe_rejects_varying_depths(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            configure_work_dir(tmpdir)
+            mock_run.side_effect = [
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+                SimpleNamespace(
+                    returncode=77,
+                    stdout=(
+                        "    #0 0xaaa in target /src/lib.c:10:3\n"
+                        "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+                    ),
+                    stderr="",
+                ),
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+                SimpleNamespace(
+                    returncode=77,
+                    stdout=(
+                        "    #0 0xaaa in target /src/lib.c:10:3\n"
+                        "    #1 0xbbb in helper /src/helper.c:11:3\n"
+                        "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+                    ),
+                    stderr="",
+                ),
+                SimpleNamespace(returncode=0, stdout="", stderr=""),
+                SimpleNamespace(
+                    returncode=77,
+                    stdout=(
+                        "    #0 0xaaa in target /src/lib.c:10:3\n"
+                        "SUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+                    ),
+                    stderr="",
+                ),
+            ]
+
+            stable = _probe_reference_stack_depth_stability(
+                "/tmp/harness.cpp",
+                "seed.bin",
+                symbolize=False,
+                compile_flags="-I/include",
+                link_flags="-ltarget",
+                expected_depth=1,
+            )
+
+            self.assertFalse(stable)
+            record = json.loads(Path(get_stack_depth_stability_file()).read_text(encoding="utf-8"))
+            mode = record["modes"]["symbolize_0"]
+            self.assertFalse(mode["stable"])
+            self.assertEqual(mode["depths"], [1, 2, 1])
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_crash_pattern_records_verified_poc_runtime_args(self, mock_run):
