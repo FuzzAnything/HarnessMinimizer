@@ -417,21 +417,24 @@ def build_compile_command(
     ]
 
 
-def compile_harness(command: Sequence[str]) -> None:
+def compile_harness(command: Sequence[str], cwd: Path | None = None) -> None:
     process = subprocess.run(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         errors="replace",
+        cwd=str(cwd) if cwd is not None else None,
         check=False,
     )
     if process.returncode == 0:
         return
     output = process.stderr.strip() or process.stdout.strip() or "(no output)"
+    cwd_text = f"\nWorking directory:\n{cwd}\n" if cwd is not None else ""
     raise TriageError(
         "Harness compilation failed.\n\n"
-        f"Command:\n{format_command(command)}\n\n"
+        f"Command:\n{format_command(command)}\n"
+        f"{cwd_text}\n"
         f"Compiler output:\n{output}"
     )
 
@@ -453,6 +456,7 @@ def run_harness_for_stack_trace(
     crash_input: Path,
     link_flags: str | None,
     timeout_seconds: int,
+    cwd: Path | None = None,
 ) -> str:
     command = [str(binary), str(crash_input)]
     try:
@@ -464,10 +468,13 @@ def run_harness_for_stack_trace(
             errors="replace",
             env=sanitizer_environment(link_flags),
             timeout=timeout_seconds,
+            cwd=str(cwd) if cwd is not None else None,
             check=False,
         )
+        cwd_text = f"Working directory: {cwd}\n" if cwd is not None else ""
         return (
             f"Command: {format_command(command)}\n"
+            f"{cwd_text}"
             f"Exit status: {process.returncode}\n\n"
             "--- stdout ---\n"
             f"{process.stdout or '(empty)'}\n\n"
@@ -485,8 +492,10 @@ def run_harness_for_stack_trace(
             if isinstance(exc.stderr, bytes)
             else (exc.stderr or "")
         )
+        cwd_text = f"Working directory: {cwd}\n" if cwd is not None else ""
         return (
             f"Command: {format_command(command)}\n"
+            f"{cwd_text}"
             f"Exit status: timeout after {timeout_seconds} seconds\n\n"
             "--- stdout ---\n"
             f"{stdout or '(empty)'}\n\n"
@@ -892,7 +901,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             print("[+] Compiling harness to collect stack trace")
-            compile_harness(compile_command)
+            compile_harness(compile_command, cwd=benchmark_dir)
 
             print("[+] Running crash input to collect stack trace")
             stack_trace = run_harness_for_stack_trace(
@@ -900,6 +909,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 crash_input,
                 link_flags,
                 args.timeout,
+                cwd=benchmark_dir,
             )
 
         harness_source = read_text(harness)
