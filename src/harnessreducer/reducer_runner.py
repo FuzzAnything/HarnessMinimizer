@@ -39,7 +39,6 @@ PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_WARNING_FLAGS = [
     "-Werror=uninitialized",
-    "-Werror=unused-value",
     "-Werror=return-type",
 ]
 POST_REDUCTION_VALIDATION_ATTEMPTS = 5

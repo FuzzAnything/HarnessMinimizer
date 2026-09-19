@@ -25,7 +25,7 @@ def test_real_engine_protected_declarations(tmp_path, tool, mode, jobs):
     )
     preparation = prepare_initializer_protection(original, tmp_path / "protection")
     source = preparation.source
-    flags = ["-std=c++17", "-O0", "-Werror=uninitialized", "-Werror=unused-value", "-Werror=return-type"]
+    flags = ["-std=c++17", "-O0", "-Werror=uninitialized", "-Werror=return-type"]
     prefix = ""
     if mode == "pch":
         header_text, prefix, body = _split_source_for_pch(source.read_text(), source.parent)

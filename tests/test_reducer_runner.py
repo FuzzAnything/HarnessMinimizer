@@ -362,7 +362,6 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.PHASE3_WARNING_FLAGS,
             [
                 "-Werror=uninitialized",
-                "-Werror=unused-value",
                 "-Werror=return-type",
             ],
         )
