@@ -7,6 +7,7 @@ from openai import OpenAI
 load_dotenv("/root/FuzzAgent/sub_modules/HarnessReducer/.env")
 from pathlib import Path
 from harnessreducer.reducer_runner import (
+    auto_var_init_tester_args,
     get_crash_tester_path,
     pch_tester_args,
     prepare_phase3_pch_harness,
@@ -112,6 +113,7 @@ def apply_llm_reduction(
     fdp_trace_file: str | None,
     phase3_mode: str = "direct",
     symbolize: bool = False,
+    auto_var_init_pattern_fallback: bool = False,
 ) -> str:
     source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     print("Applying LLM semantic reduction...")
@@ -144,38 +146,66 @@ def apply_llm_reduction(
         ):
             print("[+] LLM reduction succeeded and preserved the crash.")
             return llm_reduced_path
+        if auto_var_init_pattern_fallback and validate_symbolized_crash_pattern_depth_location(
+            llm_reduced_path,
+            crash_pattern,
+            crash_input,
+            compile_flags,
+            link_flags,
+            fdp_trace_file=fdp_trace_file,
+            phase3_mode=phase3_mode,
+            auto_var_init_pattern=True,
+        ):
+            print(
+                "[+] LLM reduction succeeded with "
+                "-ftrivial-auto-var-init=pattern."
+            )
+            return llm_reduced_path
         print("[-] LLM reduction failed to preserve the crash. Falling back to earlier reduced version.")
         print(f"LLM reduced version for reference: \n{transformed}")
         return reduced_harness_path
 
-    pch_artifacts = None
-    validation_source = llm_reduced_path
-    if phase3_mode == "pch":
-        pch_artifacts = prepare_phase3_pch_harness(
-            llm_reduced_path,
-            compile_flags,
-            use_replay=False,
-        )
-        validation_source = pch_artifacts.body_source
-    
-    cmd = [
-        get_crash_tester_path(),
-        validation_source,
-        crash_pattern,
-        "--crash-input", crash_input or "",
-        f"--compile-flags={compile_flags or ''}",
-        f"--link-flags={link_flags or ''}",
-    ]
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
-    
-    proc = run_command(cmd, "LLM reduction validation failed.", ignore_errors=True)
+    def _run_validation(*, auto_var_init_pattern: bool):
+        pch_artifacts = None
+        validation_source = llm_reduced_path
+        if phase3_mode == "pch":
+            pch_artifacts = prepare_phase3_pch_harness(
+                llm_reduced_path,
+                compile_flags,
+                use_replay=False,
+                auto_var_init_pattern=auto_var_init_pattern,
+            )
+            validation_source = pch_artifacts.body_source
+
+        cmd = [
+            get_crash_tester_path(),
+            validation_source,
+            crash_pattern,
+            "--crash-input", crash_input or "",
+            f"--compile-flags={compile_flags or ''}",
+            f"--link-flags={link_flags or ''}",
+        ]
+        cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
+        cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+        return run_command(cmd, "LLM reduction validation failed.", ignore_errors=True)
+
+    proc = _run_validation(auto_var_init_pattern=False)
     if proc.returncode == 77:
         print("[+] LLM reduction succeeded and preserved the crash.")
         return llm_reduced_path
-    else:
-        print("[-] LLM reduction failed to preserve the crash. Falling back to earlier reduced version.")
-        print(f"LLM reduced version for reference: \n{transformed}")
-        return reduced_harness_path
+    if auto_var_init_pattern_fallback:
+        print(
+            "[!] LLM validation failed without auto-var-init; retrying with "
+            "-ftrivial-auto-var-init=pattern."
+        )
+        proc = _run_validation(auto_var_init_pattern=True)
+        if proc.returncode == 77:
+            print("[+] LLM reduction succeeded with -ftrivial-auto-var-init=pattern.")
+            return llm_reduced_path
+
+    print("[-] LLM reduction failed to preserve the crash. Falling back to earlier reduced version.")
+    print(f"LLM reduced version for reference: \n{transformed}")
+    return reduced_harness_path
 
 if __name__ == "__main__":
     # For quick testing of the LLM reducer in isolation

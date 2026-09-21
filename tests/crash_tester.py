@@ -31,6 +31,7 @@ from harnessreducer.crash_evidence import (
 
 from harnessreducer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
+    AUTO_VAR_INIT_PATTERN_FLAG,
     PHASE3_DIRECT_OPT_FLAGS,
     PHASE3_PCH_OPT_FLAGS,
     PHASE3_SPLIT_OPT_FLAGS,
@@ -126,6 +127,7 @@ def _append_profile_record(args: argparse.Namespace, result_code: int) -> None:
         ),
         "amortized_link": bool(args.amortized_runner_socket),
         "symbolize": bool(args.symbolize),
+        "auto_var_init_pattern": bool(getattr(args, "auto_var_init_pattern", False)),
         "durations_ns": {
             "python_import_ns": max(0, main_started_ns - _PROCESS_ENTRY_MONOTONIC_NS),
             "argument_setup_ns": max(0, build_started_ns - main_started_ns),
@@ -451,6 +453,10 @@ def amortized_initial_plugin_link_flags(args: argparse.Namespace) -> str | None:
     return None
 
 
+def auto_var_init_flags(args: argparse.Namespace) -> list[str]:
+    return [AUTO_VAR_INIT_PATTERN_FLAG] if getattr(args, "auto_var_init_pattern", False) else []
+
+
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     _reset_compile_failure_state(args)
     compile_cmd = [
@@ -459,6 +465,7 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_DIRECT_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *auto_var_init_flags(args),
         *split_flags(args.compile_flags),
         args.source,
         "-o",
@@ -496,6 +503,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_SPLIT_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *auto_var_init_flags(args),
         "-c",
         *split_flags(args.compile_flags),
         args.source,
@@ -584,6 +592,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *auto_var_init_flags(args),
         *(["-fPIC"] if getattr(args, "pch_amortized_link", False) else []),
         "-c",
         *split_flags(args.compile_flags),
@@ -667,6 +676,7 @@ def compile_amortized_plugin(
             *PHASE3_PLUGIN_SANITIZER_FLAGS,
             *opt_flags,
             *PHASE3_WARNING_FLAGS,
+            *auto_var_init_flags(args),
             "-fPIC",
             "-c",
             *split_flags(args.compile_flags),
@@ -1164,6 +1174,7 @@ def main() -> int:
     parser.add_argument("--debug-log", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--debug-stage", type=str, default="unspecified", help=argparse.SUPPRESS)
     parser.add_argument("--profile-file", type=str, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--auto-var-init-pattern", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--retry-oom-without-rss-limit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--evidence-attempts",

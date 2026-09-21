@@ -37,6 +37,7 @@ PHASE3_PLUGIN_SANITIZER_FLAGS = ["-fsanitize=address,undefined"]
 PHASE3_DIRECT_OPT_FLAGS = ["-gline-tables-only", "-O0"]
 PHASE3_SPLIT_OPT_FLAGS = ["-O0", "-gline-tables-only"]
 PHASE3_PCH_OPT_FLAGS = ["-O0", "-gline-tables-only"]
+AUTO_VAR_INIT_PATTERN_FLAG = "-ftrivial-auto-var-init=pattern"
 PHASE3_WARNING_FLAGS = [
     "-Werror=uninitialized",
     "-Werror=return-type",
@@ -1633,6 +1634,7 @@ def run_amortized_reference_candidate(
     *,
     symbolize: bool,
     require_crash_pattern: bool = True,
+    auto_var_init_pattern: bool = False,
 ) -> str:
     cmd = [
         get_crash_tester_path(),
@@ -1658,6 +1660,7 @@ def run_amortized_reference_candidate(
         cmd.extend(dynamic_crash_site_tester_args())
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     proc = run_command(
@@ -1693,6 +1696,7 @@ def _build_pch_compile_command(
     compile_flags: str | None,
     use_replay: bool,
     amortize_link: bool = False,
+    auto_var_init_pattern: bool = False,
 ) -> list[str]:
     sanitizer_flags = (
         PHASE3_PLUGIN_SANITIZER_FLAGS if amortize_link else PHASE3_SANITIZER_FLAGS
@@ -1707,6 +1711,7 @@ def _build_pch_compile_command(
         *sanitizer_flags,
         *PHASE3_PCH_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
+        *([AUTO_VAR_INIT_PATTERN_FLAG] if auto_var_init_pattern else []),
         *(["-fPIC"] if amortize_link else []),
         "-x",
         "c++-header",
@@ -1890,6 +1895,7 @@ def prepare_phase3_pch_harness(
     compile_flags: str | None,
     use_replay: bool,
     amortize_link: bool = False,
+    auto_var_init_pattern: bool = False,
 ) -> PchArtifacts:
     """Create harness_prefix.h/.pch and an include-stripped harness body.
 
@@ -1917,6 +1923,7 @@ def prepare_phase3_pch_harness(
         compile_flags,
         use_replay=use_replay,
         amortize_link=amortize_link,
+        auto_var_init_pattern=auto_var_init_pattern,
     )
     print(f"[+] Precompiling Phase 3 header: {prefix_header} -> {pch_file}")
     run_command(compile_cmd, "Failed to precompile Phase 3 PCH header")
@@ -2031,6 +2038,10 @@ def evidence_attempt_tester_args(attempts: int | None) -> list[str]:
     if attempts is None:
         return []
     return ["--evidence-attempts", str(max(1, attempts))]
+
+
+def auto_var_init_tester_args(enabled: bool) -> list[str]:
+    return ["--auto-var-init-pattern"] if enabled else []
 
 
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
@@ -3640,6 +3651,7 @@ def run_treereducer(
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
     tool: str = "treereduce",
+    auto_var_init_pattern: bool = False,
 ) -> str:
     from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
 
@@ -3718,6 +3730,16 @@ def run_treereducer(
     set_current_exec_timeout_ms(exec_timeout_ms)
     print(f"[+] Using fixed execution timeout: {exec_timeout_ms} ms")
 
+    if phase3_mode == PHASE3_PCH and auto_var_init_pattern:
+        pch_artifacts = prepare_phase3_pch_harness(
+            harness_path,
+            compile_flags,
+            use_replay=fdp_trace_file is not None,
+            amortize_link=amortize_link,
+            auto_var_init_pattern=True,
+        )
+        reducer_source = pch_artifacts.body_source
+
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
         get_crash_tester_path(),
@@ -3733,6 +3755,7 @@ def run_treereducer(
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(debug_tester_args("reduction_candidate"))
     if statistics:
         cmd.extend(["--statistics-file", initialize_statistics_file()])
@@ -3781,6 +3804,7 @@ def run_treereducer(
                 pch_artifacts,
                 plugin_link_flags,
                 symbolize=symbolize,
+                auto_var_init_pattern=auto_var_init_pattern,
             )
             reference_depth = count_first_stack_trace_frames(reference_output)
             if reference_depth:
@@ -3840,6 +3864,7 @@ def run_treereducer(
                 "amortize_link": amortize_link,
                 "symbolize": symbolize,
                 "stable": stable,
+                "auto_var_init_pattern": auto_var_init_pattern,
                 "source": str(Path(reducer_source).resolve()),
                 "source_bytes": Path(reducer_source).stat().st_size,
             },
@@ -4011,6 +4036,7 @@ def validate_crash_pattern(
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
     evidence_attempts: int | None = None,
+    auto_var_init_pattern: bool = False,
 ) -> bool:
     """Run a fast symbolize=0 crash-pattern/depth validation."""
     validate_phase3_mode(phase3_mode)
@@ -4021,6 +4047,7 @@ def validate_crash_pattern(
             harness_path,
             compile_flags,
             use_replay=fdp_trace_file is not None,
+            auto_var_init_pattern=auto_var_init_pattern,
         )
         tester_source = pch_artifacts.body_source
 
@@ -4038,6 +4065,7 @@ def validate_crash_pattern(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -4084,6 +4112,7 @@ def validate_stack_trace(
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
     evidence_attempts: int | None = None,
+    auto_var_init_pattern: bool = False,
 ) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
@@ -4113,6 +4142,7 @@ def validate_stack_trace(
             harness_path,
             compile_flags,
             use_replay=fdp_trace_file is not None,
+            auto_var_init_pattern=auto_var_init_pattern,
         )
         tester_source = pch_artifacts.body_source
 
@@ -4138,6 +4168,7 @@ def validate_stack_trace(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -4162,6 +4193,7 @@ def validate_symbolized_crash_pattern_depth_location(
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
     evidence_attempts: int | None = None,
+    auto_var_init_pattern: bool = False,
 ) -> bool:
     """Run a symbolize=1 crash-pattern/depth/location validation."""
     if not crash_pattern:
@@ -4174,6 +4206,7 @@ def validate_symbolized_crash_pattern_depth_location(
             harness_path,
             compile_flags,
             use_replay=fdp_trace_file is not None,
+            auto_var_init_pattern=auto_var_init_pattern,
         )
         tester_source = pch_artifacts.body_source
 
@@ -4192,6 +4225,7 @@ def validate_symbolized_crash_pattern_depth_location(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
@@ -4238,6 +4272,7 @@ def validate_crash_pattern_and_stack_trace(
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
     evidence_attempts: int | None = None,
+    auto_var_init_pattern: bool = False,
 ) -> bool:
     """Validate crash identity with symbolize=0, then stack identity with symbolize=1."""
     if not validate_crash_pattern(
@@ -4252,6 +4287,7 @@ def validate_crash_pattern_and_stack_trace(
         debug_stage=(f"{debug_stage}_symbolize_0" if debug_stage else None),
         retry_oom_without_rss_limit=retry_oom_without_rss_limit,
         evidence_attempts=evidence_attempts,
+        auto_var_init_pattern=auto_var_init_pattern,
     ):
         return False
 
@@ -4273,6 +4309,7 @@ def validate_crash_pattern_and_stack_trace(
         debug_stage=(f"{debug_stage}_symbolize_1" if debug_stage else None),
         retry_oom_without_rss_limit=retry_oom_without_rss_limit,
         evidence_attempts=evidence_attempts,
+        auto_var_init_pattern=auto_var_init_pattern,
     )
 
 

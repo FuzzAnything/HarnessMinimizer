@@ -158,6 +158,7 @@ def main() -> int:
     parser.add_argument("--stack-trace-file", type=str, required=True, help="Path to the stored pre-harness stack-trace pattern")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the symbolized crash regex")
     parser.add_argument("--exec-timeout-ms", type=int, default=None, help="Execution-only timeout in milliseconds")
+    parser.add_argument("--auto-var-init-pattern", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
     parser.add_argument("--dynamic-crash-site-offset", type=str, default=None, help="Expected target shared-library offset in the first stack trace")
     parser.add_argument("--last-interesting-file", type=str, default=None, help="Stable snapshot path for the latest candidate that returns 77")

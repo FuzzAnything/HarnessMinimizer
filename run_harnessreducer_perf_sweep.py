@@ -194,6 +194,7 @@ def run_case(
     job_dir: Path,
     stable: bool,
     tool: str = "treereduce",
+    auto_var_init_pattern: bool = False,
 ) -> dict[str, object]:
     work_dir = job_dir / "work"
     output_path = job_dir / "reduced.cpp"
@@ -218,6 +219,7 @@ def run_case(
         crash_input,
         *extra_args,
         "--protect-initializers",
+        *(["--auto-var-init-pattern"] if auto_var_init_pattern else []),
         "--profile",
         "--jobs",
         str(job),
@@ -336,6 +338,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Accepted for compatibility; initializer recovery is always enabled in performance sweeps.",
     )
     parser.add_argument(
+        "--auto-var-init-pattern",
+        action="store_true",
+        help=(
+            "Compile reducer candidates with -ftrivial-auto-var-init=pattern "
+            "and retry final validation with the same flag after a normal validation failure."
+        ),
+    )
+    parser.add_argument(
         "--harness",
         default="harness.cpp",
         help="Harness path relative to the benchmark directory. Default: harness.cpp.",
@@ -402,6 +412,7 @@ def main() -> int:
         "schema_version": 2,
         "tool": args.tool,
         "protect_initializers": True,
+        "auto_var_init_pattern": bool(args.auto_var_init_pattern),
         "status": "running",
         "created": datetime.now().astimezone().isoformat(),
         "benchmark_dir": str(bench_dir),
@@ -433,6 +444,7 @@ def main() -> int:
 
     print(f"Benchmark: {bench_dir}")
     print(f"Tool:      {args.tool}")
+    print(f"Pattern auto-init: {'yes' if args.auto_var_init_pattern else 'no'}")
     print(f"Results:   {output_root}")
     print(f"Python:    {args.python}")
     print(f"Jobs:      {','.join(str(job) for job in args.jobs)}")
@@ -456,6 +468,7 @@ def main() -> int:
                 job_dir=job_dir,
                 stable=stable,
                 tool=args.tool,
+                auto_var_init_pattern=args.auto_var_init_pattern,
             )
             manifest["runs"].append(run_info)  # type: ignore[index]
             manifest_path.write_text(

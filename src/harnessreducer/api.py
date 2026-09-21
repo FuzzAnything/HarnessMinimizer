@@ -129,6 +129,7 @@ class ReductionConfig:
     profile: bool = False
     tool: str = "treereduce"
     protect_initializers: bool = False
+    auto_var_init_pattern: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,18 +226,26 @@ def _append_validation_summary(
     harness_path: str,
     fdp_trace_file: str | None,
     crash_preserved: bool,
+    auto_var_init_pattern: bool = False,
 ) -> None:
     trace_text = fdp_trace_file if fdp_trace_file is not None else "<none>"
     result_text = "passed" if crash_preserved else "failed"
+    auto_init_text = "pattern" if auto_var_init_pattern else "disabled"
     with Path(validation_log_path).open("a", encoding="utf-8") as handle:
         handle.write(
             "\n===== HarnessReducer post-reduction validation =====\n"
             f"stage: {validation_label}\n"
             f"harness: {harness_path}\n"
             f"fdp_trace_file: {trace_text}\n"
+            f"auto_var_init: {auto_init_text}\n"
             f"result: {result_text}\n"
             "===== end HarnessReducer post-reduction validation =====\n"
         )
+
+
+def _auto_var_init_retry_log_path(validation_log_path: str) -> str:
+    path = Path(validation_log_path)
+    return str(path.with_name(f"{path.stem}.auto-var-init-pattern{path.suffix}"))
 
 
 def _validate_post_reduction_harness(
@@ -253,47 +262,88 @@ def _validate_post_reduction_harness(
     validation_log_path: str,
     debug_stage: str,
     validation_label: str,
+    auto_var_init_pattern_fallback: bool = False,
 ) -> bool:
-    if symbolize:
-        if crash_pattern_symbolize_1 is None:
-            raise ValueError(
-                "--symbolize inline validation requires a symbolize=1 crash pattern."
+    def _run_validation(*, auto_var_init_pattern: bool, log_path: str) -> bool:
+        effective_label = (
+            f"{validation_label} auto-var-init-pattern retry"
+            if auto_var_init_pattern else validation_label
+        )
+        effective_debug_stage = (
+            f"{debug_stage}_auto_var_init_pattern"
+            if auto_var_init_pattern else debug_stage
+        )
+        if symbolize:
+            if crash_pattern_symbolize_1 is None:
+                raise ValueError(
+                    "--symbolize inline validation requires a symbolize=1 crash pattern."
+                )
+            preserved = validate_symbolized_crash_pattern_depth_location(
+                harness_path,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=phase3_mode,
+                validation_log_path=log_path,
+                debug_stage=effective_debug_stage,
+                retry_oom_without_rss_limit=True,
+                evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
+                auto_var_init_pattern=auto_var_init_pattern,
             )
-        crash_preserved = validate_symbolized_crash_pattern_depth_location(
-            harness_path,
-            crash_pattern_symbolize_1,
-            crash_input,
-            compile_flags,
-            link_flags,
+        else:
+            preserved = validate_crash_pattern_and_stack_trace(
+                harness_path,
+                crash_pattern_symbolize_0,
+                crash_pattern_symbolize_1,
+                crash_input,
+                compile_flags,
+                link_flags,
+                fdp_trace_file=fdp_trace_file,
+                phase3_mode=phase3_mode,
+                validation_log_path=log_path,
+                debug_stage=effective_debug_stage,
+                retry_oom_without_rss_limit=True,
+                evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
+                auto_var_init_pattern=auto_var_init_pattern,
+            )
+        _append_validation_summary(
+            log_path,
+            validation_label=effective_label,
+            harness_path=harness_path,
             fdp_trace_file=fdp_trace_file,
-            phase3_mode=phase3_mode,
-            validation_log_path=validation_log_path,
-            debug_stage=debug_stage,
-            retry_oom_without_rss_limit=True,
-            evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
+            crash_preserved=preserved,
+            auto_var_init_pattern=auto_var_init_pattern,
+        )
+        return preserved
+
+    crash_preserved = _run_validation(
+        auto_var_init_pattern=False,
+        log_path=validation_log_path,
+    )
+    if crash_preserved or not auto_var_init_pattern_fallback:
+        return crash_preserved
+
+    retry_log_path = _auto_var_init_retry_log_path(validation_log_path)
+    print(
+        "[!] Post-reduction validation failed without auto-var-init; retrying "
+        f"with -ftrivial-auto-var-init=pattern. Retry log: {retry_log_path}"
+    )
+    crash_preserved = _run_validation(
+        auto_var_init_pattern=True,
+        log_path=retry_log_path,
+    )
+    if crash_preserved:
+        print(
+            "[+] Post-reduction validation preserved crash behavior with "
+            "-ftrivial-auto-var-init=pattern."
         )
     else:
-        crash_preserved = validate_crash_pattern_and_stack_trace(
-            harness_path,
-            crash_pattern_symbolize_0,
-            crash_pattern_symbolize_1,
-            crash_input,
-            compile_flags,
-            link_flags,
-            fdp_trace_file=fdp_trace_file,
-            phase3_mode=phase3_mode,
-            validation_log_path=validation_log_path,
-            debug_stage=debug_stage,
-            retry_oom_without_rss_limit=True,
-            evidence_attempts=POST_REDUCTION_VALIDATION_ATTEMPTS,
+        print(
+            "[-] Post-reduction validation also failed with "
+            f"-ftrivial-auto-var-init=pattern. Retry log: {retry_log_path}"
         )
-    _append_validation_summary(
-        validation_log_path,
-        validation_label=validation_label,
-        harness_path=harness_path,
-        fdp_trace_file=fdp_trace_file,
-        crash_preserved=crash_preserved,
-    )
     return crash_preserved
 
 
@@ -309,6 +359,7 @@ def _finalize_and_validate_fallback_harness(
     phase3_mode: str,
     symbolize: bool,
     fallback_label: str,
+    auto_var_init_pattern_fallback: bool = False,
 ) -> PostReductionOutcome:
     fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id)
     validation_log_path = f"{fallback_path}.fallback.validation.log"
@@ -329,6 +380,7 @@ def _finalize_and_validate_fallback_harness(
         validation_log_path=validation_log_path,
         debug_stage="post_reduction_fallback",
         validation_label=f"{fallback_label} fallback final-output",
+        auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
     )
     if crash_preserved:
         print("[+] Cleaned fallback harness preserved crash behavior.")
@@ -773,6 +825,7 @@ def _inline_direct_input_in_reduced_harness(
     snapshot: bool,
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
+    auto_var_init_pattern_fallback: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
@@ -855,6 +908,7 @@ def _inline_direct_input_in_reduced_harness(
             validation_log_path=validation_log_path,
             debug_stage="post_reduction_direct_input_inline",
             validation_label="direct-input final-output",
+            auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
         )
         if crash_preserved:
             print("[+] Post-reduction validation preserved crash behavior.")
@@ -916,6 +970,7 @@ def _inline_direct_input_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
+                auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
             )
 
     print(
@@ -932,6 +987,7 @@ def _inline_direct_input_in_reduced_harness(
         phase3_mode=phase3_mode,
         symbolize=symbolize,
         fallback_label="reduced",
+        auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
     )
 
 
@@ -947,6 +1003,7 @@ def inline_literals_in_reduced_harness(
     snapshot: bool = False,
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
+    auto_var_init_pattern_fallback: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -963,6 +1020,7 @@ def inline_literals_in_reduced_harness(
             snapshot,
             fast_crash_pattern,
             symbolize,
+            auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -1018,6 +1076,7 @@ def inline_literals_in_reduced_harness(
                 validation_log_path=replay_validation_log_path,
                 debug_stage="post_reduction_fdp_replay",
                 validation_label="fdp-replay",
+                auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
             )
             if not replay_preserved:
                 print(
@@ -1062,6 +1121,7 @@ def inline_literals_in_reduced_harness(
             validation_log_path=validation_log_path,
             debug_stage="post_reduction_final_output",
             validation_label="final-output",
+            auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
         )
         if crash_preserved:
             print("[+] Final output preserved crash behavior.")
@@ -1109,6 +1169,7 @@ def inline_literals_in_reduced_harness(
                 phase3_mode=phase3_mode,
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
+                auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
             )
 
     print(
@@ -1125,6 +1186,7 @@ def inline_literals_in_reduced_harness(
         phase3_mode=phase3_mode,
         symbolize=symbolize,
         fallback_label="reduced",
+        auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
     )
 
 
@@ -1152,6 +1214,7 @@ def _reduction_attempt(
             require_crash_pattern=recorded_symbolized_pattern is not None,
             jobs=config.jobs,
             tool=config.tool,
+            auto_var_init_pattern=config.auto_var_init_pattern,
         )
         emit_check_statistics_summary()
     else:
@@ -1171,6 +1234,7 @@ def _reduction_attempt(
             jobs=config.jobs,
             profile=config.profile,
             tool=config.tool,
+            auto_var_init_pattern=config.auto_var_init_pattern,
         )
     if protection is not None:
         protection.restore_file(reduced_harness)
@@ -1231,6 +1295,7 @@ def _reduction_attempt(
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
+        auto_var_init_pattern_fallback=config.auto_var_init_pattern,
     )
 
 
@@ -1437,6 +1502,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             fdp_trace_file,
             phase3_mode=validation_phase3_mode,
             symbolize=config.symbolize,
+            auto_var_init_pattern_fallback=config.auto_var_init_pattern,
         )
     else:
         final_harness = post_inline_harness
@@ -1470,6 +1536,7 @@ def process(
     profile: bool = False,
     tool: str = "treereduce",
     protect_initializers: bool = False,
+    auto_var_init_pattern: bool = False,
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -1490,6 +1557,7 @@ def process(
         profile=profile,
         tool=tool,
         protect_initializers=protect_initializers,
+        auto_var_init_pattern=auto_var_init_pattern,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

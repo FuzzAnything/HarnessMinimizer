@@ -24,6 +24,7 @@ from harnessreducer.reducer_runner import (
     STACK_FRAME_COUNT_PATTERN,
     StaticArchiveRootConfig,
     append_exec_timeout_tester_args,
+    auto_var_init_tester_args,
     calibrate_exec_timeout_ms,
     dynamic_crash_site_tester_args,
     get_last_interesting_file,
@@ -351,6 +352,7 @@ def run_treereducer_with_check(
     require_crash_pattern: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     tool: str = "treereduce",
+    auto_var_init_pattern: bool = False,
 ) -> str:
     from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
 
@@ -464,6 +466,16 @@ def run_treereducer_with_check(
     set_current_exec_timeout_ms(exec_timeout_ms)
     print(f"[+] Using fixed execution timeout for check mode: {exec_timeout_ms} ms")
 
+    if phase3_mode == PHASE3_PCH and auto_var_init_pattern:
+        pch_artifacts = prepare_phase3_pch_harness(
+            harness_path,
+            compile_flags,
+            use_replay=fdp_trace_file is not None,
+            amortize_link=amortize_link,
+            auto_var_init_pattern=True,
+        )
+        reducer_source = pch_artifacts.body_source
+
     reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
     cmd = [
         *get_check_tester_command(),
@@ -490,6 +502,7 @@ def run_treereducer_with_check(
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(dynamic_crash_site_tester_args())
 
     runner_context = (
@@ -547,6 +560,7 @@ def run_treereducer_with_check(
                 plugin_link_flags,
                 symbolize=True,
                 require_crash_pattern=require_crash_pattern,
+                auto_var_init_pattern=auto_var_init_pattern,
             )
             full_stack_trace = extract_first_entire_stack_trace(reference_output)
             if not full_stack_trace:
@@ -568,6 +582,7 @@ def run_treereducer_with_check(
                         pch_artifacts,
                         plugin_link_flags,
                         symbolize=False,
+                        auto_var_init_pattern=auto_var_init_pattern,
                     )
                     full_stack_trace_symbolize_0 = (
                         extract_first_entire_stack_trace(reference_output_symbolize_0)

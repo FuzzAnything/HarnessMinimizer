@@ -136,6 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--auto-var-init-pattern",
+        action="store_true",
+        help=(
+            "Compile reducer candidates with Clang's "
+            "-ftrivial-auto-var-init=pattern. Final validation still runs without "
+            "the flag first, then retries with the flag only if needed."
+        ),
+    )
+    parser.add_argument(
         "--slice",
         action="store_true",
         help=(
@@ -246,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         profile=args.profile,
         tool=args.tool,
         protect_initializers=args.protect_initializers,
+        auto_var_init_pattern=args.auto_var_init_pattern,
     )
     try:
         result = reduce_with_config(config)

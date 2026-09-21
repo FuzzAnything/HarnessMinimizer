@@ -1170,6 +1170,24 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertIn("5", cmd)
 
     @patch("harnessreducer.reducer_runner.run_command")
+    def test_validate_crash_pattern_passes_auto_var_init_pattern_flag(self, mock_run):
+        reset_stack_trace_state()
+        mock_run.return_value = SimpleNamespace(returncode=77, stdout="", stderr="")
+
+        ok = validate_crash_pattern(
+            "candidate.cpp",
+            "TargetPattern",
+            "seed.bin",
+            "-O2",
+            "-lm",
+            auto_var_init_pattern=True,
+        )
+
+        self.assertTrue(ok)
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--auto-var-init-pattern", cmd)
+
+    @patch("harnessreducer.reducer_runner.run_command")
     def test_validate_crash_pattern_does_not_retry_text_miss_without_dynamic_anchor(self, mock_run):
         reset_stack_trace_state()
         mock_run.return_value = SimpleNamespace(

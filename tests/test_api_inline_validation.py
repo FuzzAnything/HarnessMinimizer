@@ -34,6 +34,38 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
     assert "int y = 1;" in content
 
 
+def test_inline_literals_retries_final_validation_with_auto_var_init_pattern(
+    tmp_path: Path,
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text("int x = 0;\n", encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+
+    with patch("harnessreducer.api.load_trace", return_value={}), patch(
+        "harnessreducer.api.inline_source_with_report",
+        return_value=InlineResult(source="int y = 1;\n", replaced=1),
+    ), patch(
+        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        side_effect=[False, True],
+    ) as mock_validate:
+        out, generated_headers = inline_literals_in_reduced_harness(
+            str(reduced),
+            str(trace),
+            "AddressSanitizer",
+            "seed.bin",
+            "-I/tmp/include",
+            "",
+            auto_var_init_pattern_fallback=True,
+        )
+
+    assert out.endswith(".inline.cpp")
+    assert generated_headers == ()
+    assert mock_validate.call_count == 2
+    assert mock_validate.call_args_list[0].kwargs["auto_var_init_pattern"] is False
+    assert mock_validate.call_args_list[1].kwargs["auto_var_init_pattern"] is True
+
+
 def test_inline_literals_uses_fast_pattern_when_symbolized_pattern_is_missing(
     tmp_path: Path,
 ) -> None:

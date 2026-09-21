@@ -46,6 +46,15 @@ class TestCliPhase3Mode(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 main(["h.cpp", "-o", "r.cpp", "--protect-initializers", additional])
 
+    def test_auto_var_init_pattern_is_explicitly_opt_in(self):
+        parser = build_parser()
+        self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp"]).auto_var_init_pattern)
+        self.assertTrue(
+            parser.parse_args(
+                ["h.cpp", "-o", "r.cpp", "--auto-var-init-pattern"]
+            ).auto_var_init_pattern
+        )
+
     def test_unvalidated_result_is_not_copied_or_reported_as_success(self):
         result = ReductionResult("failed.cpp", "tagged.cpp", None, success=False)
         with patch("harnessreducer.cli.reduce_with_config", return_value=result), \

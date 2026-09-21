@@ -9,6 +9,36 @@ from tests import crash_tester
 
 
 class TestCrashTesterStatistics(unittest.TestCase):
+    def test_compile_split_uses_auto_var_init_pattern_flag_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source_path = Path(tmpdir) / "candidate.cpp"
+            source_path.write_text("int main() { return 0; }\n", encoding="utf-8")
+
+            args = Namespace(
+                auto_var_init_pattern=True,
+                fdp_trace=None,
+                compile_flags="-I/tmp/include",
+                link_flags="-lm",
+                source=str(source_path),
+            )
+
+            compile_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            link_proc = type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            with patch(
+                "tests.crash_tester.run_supervised",
+                side_effect=[compile_proc, link_proc],
+            ) as mock_run:
+                status, object_path = crash_tester.compile_split(
+                    args,
+                    str(Path(tmpdir) / "candidate.out"),
+                )
+
+            self.assertEqual(status, 0)
+            self.assertIsNotNone(object_path)
+            compile_cmd = mock_run.call_args_list[0].args[0]
+            self.assertIn("-ftrivial-auto-var-init=pattern", compile_cmd)
+
     def test_compile_with_pch_uses_amortized_pch_compile_flags(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             pch_path = Path(tmpdir) / "harness_prefix.pch"

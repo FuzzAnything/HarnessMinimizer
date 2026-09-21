@@ -317,6 +317,25 @@ class TestReducerRunner(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--split", cmd)
 
+    @patch("harnessreducer.reducer_runner.os.path.exists")
+    @patch("harnessreducer.reducer_runner.run_supervised")
+    def test_run_treereducer_passes_auto_var_init_pattern_to_checker(self, mock_run, mock_exists):
+        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_exists.return_value = True
+
+        reducer_runner.run_treereducer(
+            harness_path="/tmp/in.cpp",
+            fdp_trace_file=None,
+            crash_pattern="AddressSanitizer",
+            compile_flags=None,
+            link_flags=None,
+            crash_input=None,
+            auto_var_init_pattern=True,
+        )
+
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--auto-var-init-pattern", cmd)
+
     @patch("harnessreducer.reducer_runner.tempfile.mkdtemp")
     def test_configure_work_dir_uses_user_dir_without_tmp_create(self, mock_mkdtemp):
         work_dir = "/tmp/hr_fixed"
