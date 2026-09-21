@@ -458,7 +458,7 @@ def run_harness_for_stack_trace(
     timeout_seconds: int,
     cwd: Path | None = None,
 ) -> str:
-    command = [str(binary), str(crash_input)]
+    command = [str(binary), "-rss_limit_mb=0", str(crash_input)]
     try:
         process = subprocess.run(
             command,
