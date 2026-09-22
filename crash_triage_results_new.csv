@@ -1,0 +1,27 @@
+dir,tool,triage result
+cjson-4,none,harness-bug
+cjson-5,none,harness-bug
+cjson-6,none,library-bug
+curl-2,none,library-bug
+curl-3,none,harness-bug
+lcms-3,none,harness-bug
+lcms-4,none,harness-bug
+lcms-5,none,harness-bug
+libaom-19,none,library-bug
+libaom-20,none,harness-bug
+libjpeg-turbo-1,none,library-bug
+liblouis-8,none,library-bug
+liblouis-14,none,library-bug
+libmagic-2,none,library-bug
+libpng-2,none,library-bug
+libpng-3,none,library-bug
+libpng-4,none,library-bug
+libpng-5,none,library-bug
+libpng-6,none,library-bug
+libtiff-8,none,library-bug
+libtiff-9,none,library-bug
+libtiff-10,none,harness-bug
+libtiff-11,none,harness-bug
+libtiff-12,none,library-bug
+libvpx-27,none,library-bug
+libvpx-28,none,library-bug

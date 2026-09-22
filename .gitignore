@@ -49,4 +49,5 @@ latest_harnessreducer_perf_run_*.txt
 performance-csvs*
 /temp/
 detailed_crash_triage_reports/
-crash_triage_results.csv
+seeds/
+dictionary/
