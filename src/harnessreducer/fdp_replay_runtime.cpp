@@ -63,6 +63,17 @@ public:
     return value;
   }
 
+  size_t ReplayPickIndexValue(int line, size_t choice_count) {
+    auto it = pick_index_streams_.find(line);
+    if (it == pick_index_streams_.end() || it->second.empty())
+      std::abort();
+    size_t index = it->second.front();
+    it->second.pop_front();
+    if (index >= choice_count)
+      std::abort();
+    return index;
+  }
+
   std::vector<uint8_t> ReplayBytesValue(int line, size_t wanted_size) {
     auto it = bytes_streams_.find(line);
     if (it == bytes_streams_.end() || it->second.empty())
@@ -108,6 +119,12 @@ private:
         iss >> call_line >> value;
         if (iss)
           remaining_streams_[call_line].push_back(value);
+      } else if (tag == 'P') {
+        int call_line = 0;
+        size_t index = 0;
+        iss >> call_line >> index;
+        if (iss)
+          pick_index_streams_[call_line].push_back(index);
       } else if (tag == 'B') {
         int call_line = 0;
         size_t count = 0;
@@ -132,6 +149,7 @@ private:
 
   std::map<int, std::deque<long double>> scalar_streams_;
   std::map<int, std::deque<size_t>> remaining_streams_;
+  std::map<int, std::deque<size_t>> pick_index_streams_;
   std::map<int, std::deque<std::vector<uint8_t>>> bytes_streams_;
 };
 
@@ -350,6 +368,10 @@ void EnsureReplayTraceLoaded() { (void)ReplayTraceStore::Instance(); }
 
 long double ReplayScalarValue(int line) {
   return ReplayTraceStore::Instance().ReplayScalarValue(line);
+}
+
+size_t ReplayPickIndexValue(int line, size_t choice_count) {
+  return ReplayTraceStore::Instance().ReplayPickIndexValue(line, choice_count);
 }
 
 bool ReplayBoolValue(int line) { return ReplayTypedScalar<bool>(line); }

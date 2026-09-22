@@ -10,6 +10,7 @@ namespace fdp_min_internal {
 
 void EnsureReplayTraceLoaded();
 long double ReplayScalarValue(int line);
+size_t ReplayPickIndexValue(int line, size_t choice_count);
 bool ReplayBoolValue(int line);
 char ReplayCharValue(int line);
 signed char ReplaySignedCharValue(int line);

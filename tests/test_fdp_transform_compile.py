@@ -175,6 +175,96 @@ def test_native_dump_and_inlined_program_agree(compiler, tmp_path, iterations):
 
 
 @pytest.mark.parametrize("iterations", [1, 2])
+def test_pick_value_in_array_replays_non_numeric_choices_by_index(
+    compiler, tmp_path, iterations
+):
+    source_text = r"""
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include "fuzzer/FuzzedDataProvider.h"
+
+struct Token {
+    int value;
+};
+
+int main() {
+    uint8_t data[64];
+    for (size_t i = 0; i < sizeof(data); ++i)
+        data[i] = static_cast<uint8_t>(i * 29 + 7);
+    FuzzedDataProvider fdp(data, sizeof(data));
+
+    const char* c_array[] = {"array-0", "array-1", "array-2"};
+    const std::array<const char*, 3> std_array = {
+        "std-array-0", "std-array-1", "std-array-2"
+    };
+    Token tokens[] = {{10}, {20}, {30}};
+    std::string suffix = "-object";
+    int numbers[] = {101, 202, 303};
+
+    for (int iteration = 0; iteration < ITERATIONS; ++iteration) {
+        std::cout
+            << fdp.PickValueInArray(c_array, /*FDP_ID:100301*/ 100301) << '|'
+            << fdp.PickValueInArray(std_array, /*FDP_ID:100302*/ 100302) << '|'
+            << fdp.PickValueInArray<const char*>(
+                   {"list-0", "list-1", "list-2"},
+                   /*FDP_ID:100303*/ 100303)
+            << '|'
+            << fdp.PickValueInArray(tokens, /*FDP_ID:100304*/ 100304).value
+            << '|'
+            << fdp.PickValueInArray<std::string>(
+                   {"string-0", std::string("string-1") + suffix},
+                   /*FDP_ID:100306*/ 100306)
+            << '|'
+            << fdp.PickValueInArray(numbers, /*FDP_ID:100305*/ 100305)
+            << '\n';
+    }
+}
+""".replace("ITERATIONS", str(iterations))
+    source = tmp_path / "pick_non_numeric.cpp"
+    source.write_text(source_text, encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+
+    dump_binary = compile_program(compiler, source, "-DFDP_MIN_MODE_DUMP")
+    expected = run_program(dump_binary, trace)
+    trace_text = trace.read_text(encoding="utf-8")
+    for key in (*range(100301, 100305), 100306):
+        assert trace_text.count(f"P {key} ") == iterations
+    assert trace_text.count("S 100305 ") == iterations
+
+    header_replay = compile_program(compiler, source, "-DFDP_MIN_MODE_REPLAY")
+    assert run_program(header_replay, trace) == expected
+
+    runtime_source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "harnessreducer"
+        / "fdp_replay_runtime.cpp"
+    )
+    external_replay = compile_program(
+        compiler,
+        source,
+        "-DFDP_MIN_MODE_REPLAY",
+        "-DFDP_MIN_EXTERNAL_REPLAY_RUNTIME",
+        str(runtime_source),
+    )
+    assert run_program(external_replay, trace) == expected
+
+    result = inline_source_with_report(source_text, load_trace(trace))
+    assert result.replaced == 6
+    assert not result.skipped
+    assert "FDP_ID" not in result.source
+    assert "PickValueInArray" not in result.source
+    if result.header_name:
+        (tmp_path / result.header_name).write_text(result.header_source, encoding="utf-8")
+    inlined = tmp_path / "pick_non_numeric_inlined.cpp"
+    inlined.write_text(result.source, encoding="utf-8")
+    assert run_program(compile_program(compiler, inlined), trace) == expected
+
+
+@pytest.mark.parametrize("iterations", [1, 2])
 def test_floating_trace_boundaries_compile_and_preserve_values(compiler, tmp_path, iterations):
     trace = tmp_path / "trace.log"
     values = ["-0", "inf", "-inf", "nan", "1.00000000000000000010842", "1e4000"]

@@ -407,6 +407,8 @@ def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
             streams[key].append(("S", val))
         elif record_type == "R":
             streams[key].append(("R", int(parts[2], 0)))
+        elif record_type == "P":
+            streams[key].append(("P", int(parts[2], 0)))
         elif record_type == "B":
             count = int(parts[2], 0)
             bytes_list: list[int] = []
@@ -710,11 +712,34 @@ def _needs_numeric_limits(values: list[Any]) -> bool:
     )
 
 
+def _pick_value_at_index_expression(
+    call: CallSite,
+    result_type: ScalarResultType | None,
+    index_expression: str,
+) -> str | None:
+    if result_type is None or not call.arg_texts:
+        return None
+    array = call.arg_texts[0]
+    if array.startswith("{"):
+        # The FDP overload converts every item to T before selecting it. Keep
+        # that behavior for explicitly typed initializer lists, whose source
+        # items may merely be convertible to T rather than already having T.
+        argument = f"std::initializer_list<{result_type.cpp_type}>{array}"
+    else:
+        argument = f"({array})"
+    selected = f"*(std::begin({argument}) + {index_expression})"
+    return result_type.expression(selected)
+
+
 def _literal_for_single_record(
     call: CallSite, record_type: str, value: Any,
     result_type: ScalarResultType | None,
 ) -> str | None:
     method = call.method
+    if method == "PickValueInArray" and record_type == "P":
+        return _pick_value_at_index_expression(
+            call, result_type, f"static_cast<size_t>({int(value)})"
+        )
     if method in _SCALAR_METHODS:
         if record_type != "S":
             return None
@@ -1039,6 +1064,17 @@ def _repeated_replacement_for_call(
     values_name, index_name = _value_names(matched_key)
     indexed_value = f"{values_name}[{index_name}++]"
 
+    if call.method == "PickValueInArray":
+        values = _extract_record_values(records, "P")
+        if values is not None and result_type is not None and call.arg_texts:
+            replacement = _pick_value_at_index_expression(
+                call, result_type, indexed_value
+            )
+            if replacement is not None:
+                return replacement, _make_size_t_header_entry(
+                    matched_key, call.method, values
+                )
+
     if call.method in _BOOL_METHODS:
         values = _extract_record_values(records, "S")
         if values is None:
@@ -1200,6 +1236,12 @@ def inline_source_with_report(
             continue
         if result_type is not None:
             source_includes.update(result_type.includes)
+        if call.method == "PickValueInArray" and any(
+            record_type == "P" for record_type, _ in streams[matched_key]
+        ):
+            source_includes.update(("<cstddef>", "<iterator>"))
+            if call.arg_texts and call.arg_texts[0].startswith("{"):
+                source_includes.add("<initializer_list>")
         if call.method in _STRING_METHODS:
             source_includes.add("<string>")
         if call.method in _BYTES_METHODS:

@@ -102,6 +102,15 @@ template <typename T>
 inline constexpr bool kUseWideIntegralVectorTrace =
     std::is_integral_v<T> && sizeof(T) > 1 && sizeof(T) <= sizeof(uint64_t);
 
+// Arithmetic and enum choices can be serialized as their selected value.
+// Other choices, such as const char *, must be replayed by recording which
+// element was selected. Pointer addresses and arbitrary objects are neither
+// portable trace data nor convertible to the scalar long-double format.
+template <typename T>
+inline constexpr bool kUseScalarPickTrace =
+    std::is_arithmetic_v<std::remove_cv_t<T>> ||
+    std::is_enum_v<std::remove_cv_t<T>>;
+
 #if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
                                    !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
 
@@ -144,6 +153,16 @@ public:
     if (!out)
       return;
     out << "R " << line << " " << value << "\n";
+  }
+
+  void DumpPickIndex(int line, size_t index) {
+    if (line == -1)
+      return;
+    std::lock_guard<std::mutex> lock(mu_);
+    std::ofstream out(GetTracePath(), std::ios::app);
+    if (!out)
+      return;
+    out << "P " << line << " " << index << "\n";
   }
 
   void DumpBytes(int line, const uint8_t *bytes, size_t size) {
@@ -216,6 +235,17 @@ public:
     size_t value = it->second.front();
     it->second.pop_front();
     return value;
+  }
+
+  size_t ReplayPickIndex(int line, size_t choice_count) {
+    auto it = pick_index_streams_.find(line);
+    if (it == pick_index_streams_.end() || it->second.empty())
+      abort();
+    size_t index = it->second.front();
+    it->second.pop_front();
+    if (index >= choice_count)
+      abort();
+    return index;
   }
 
   std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
@@ -302,6 +332,12 @@ private:
         iss >> call_line >> value;
         if (iss)
           remaining_streams_[call_line].push_back(value);
+      } else if (tag == 'P') {
+        int call_line = 0;
+        size_t index = 0;
+        iss >> call_line >> index;
+        if (iss)
+          pick_index_streams_[call_line].push_back(index);
       } else if (tag == 'B') {
         int call_line = 0;
         size_t count = 0;
@@ -381,6 +417,7 @@ private:
   bool wide_traces_loaded_ = false;
   std::map<int, std::deque<long double>> scalar_streams_;
   std::map<int, std::deque<size_t>> remaining_streams_;
+  std::map<int, std::deque<size_t>> pick_index_streams_;
   std::map<int, std::deque<std::vector<uint8_t>>> bytes_streams_;
   std::map<int, std::deque<WideVectorRecord>> wide_vector_streams_;
 };
@@ -396,6 +433,10 @@ inline void DumpScalar(int line, long double value) {
 
 inline void DumpRemaining(int line, size_t value) {
   TraceStore::Instance().DumpRemaining(line, value);
+}
+
+inline void DumpPickIndex(int line, size_t index) {
+  TraceStore::Instance().DumpPickIndex(line, index);
 }
 
 inline void DumpBytes(int line, const uint8_t *bytes, size_t size) {
@@ -422,6 +463,10 @@ inline size_t ReplayRemaining(int line, size_t fallback) {
   return TraceStore::Instance().ReplayRemaining(line, fallback);
 }
 
+inline size_t ReplayPickIndex(int line, size_t choice_count) {
+  return TraceStore::Instance().ReplayPickIndex(line, choice_count);
+}
+
 inline std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
   return TraceStore::Instance().ReplayBytes(line, wanted_size);
 }
@@ -444,6 +489,8 @@ inline void InitializeReplayStore() { EnsureReplayTraceLoaded(); }
 inline void DumpScalar(int, long double) {}
 
 inline void DumpRemaining(int, size_t) {}
+
+inline void DumpPickIndex(int, size_t) {}
 
 inline void DumpBytes(int, const uint8_t *, size_t) {}
 
@@ -514,6 +561,10 @@ inline size_t ReplayRemaining(int line, size_t fallback) {
   return ReplayRemainingValue(line);
 }
 
+inline size_t ReplayPickIndex(int line, size_t choice_count) {
+  return ReplayPickIndexValue(line, choice_count);
+}
+
 inline std::vector<uint8_t> ReplayBytes(int line, size_t wanted_size) {
   return ReplayBytesValue(line, wanted_size);
 }
@@ -567,6 +618,8 @@ inline void DumpScalar(int, long double) {}
 
 inline void DumpRemaining(int, size_t) {}
 
+inline void DumpPickIndex(int, size_t) {}
+
 inline void DumpBytes(int, const uint8_t *, size_t) {}
 
 template <typename T>
@@ -575,6 +628,8 @@ inline void DumpVector(int, const std::vector<T> &) {}
 template <typename T> T ReplayScalar(int, T fallback) { return fallback; }
 
 inline size_t ReplayRemaining(int, size_t fallback) { return fallback; }
+
+inline size_t ReplayPickIndex(int, size_t) { return 0; }
 
 inline std::vector<uint8_t> ReplayBytes(int, size_t) { return {}; }
 
@@ -1022,10 +1077,22 @@ template <typename T> T FuzzedDataProvider::ConsumeEnum(int line) {
 
 template <typename T, size_t size>
 T FuzzedDataProvider::PickValueInArray(const T (&array)[size], int line) {
-  FDP_REPLAY_SCALAR(T);
-  T res = array[ConsumeIntegralInRange<size_t>(0, size - 1, -1)];
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      return fdp_min_internal::ReplayScalar<T>(line, static_cast<T>(0));
+    } else {
+      return array[fdp_min_internal::ReplayPickIndex(line, size)];
+    }
+  }
+  const size_t index = ConsumeIntegralInRange<size_t>(0, size - 1, -1);
+  T res = array[index];
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    } else {
+      fdp_min_internal::DumpPickIndex(line, index);
+    }
   }
   return res;
 }
@@ -1033,10 +1100,22 @@ T FuzzedDataProvider::PickValueInArray(const T (&array)[size], int line) {
 template <typename T, size_t size>
 T FuzzedDataProvider::PickValueInArray(const std::array<T, size> &array,
                                        int line) {
-  FDP_REPLAY_SCALAR(T);
-  T res = array[ConsumeIntegralInRange<size_t>(0, size - 1, -1)];
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      return fdp_min_internal::ReplayScalar<T>(line, static_cast<T>(0));
+    } else {
+      return array[fdp_min_internal::ReplayPickIndex(line, size)];
+    }
+  }
+  const size_t index = ConsumeIntegralInRange<size_t>(0, size - 1, -1);
+  T res = array[index];
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    } else {
+      fdp_min_internal::DumpPickIndex(line, index);
+    }
   }
   return res;
 }
@@ -1046,11 +1125,24 @@ T FuzzedDataProvider::PickValueInArray(std::initializer_list<const T> list,
                                        int line) {
   if (!list.size())
     abort();
-  FDP_REPLAY_SCALAR(T);
-  T res =
-      *(list.begin() + ConsumeIntegralInRange<size_t>(0, list.size() - 1, -1));
+  if (line != -1 &&
+      fdp_min_internal::kMode == fdp_min_internal::Mode::kReplay) {
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      return fdp_min_internal::ReplayScalar<T>(line, static_cast<T>(0));
+    } else {
+      return *(list.begin() +
+               fdp_min_internal::ReplayPickIndex(line, list.size()));
+    }
+  }
+  const size_t index =
+      ConsumeIntegralInRange<size_t>(0, list.size() - 1, -1);
+  T res = *(list.begin() + index);
   if (line != -1 && fdp_min_internal::kMode == fdp_min_internal::Mode::kDump) {
-    fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    if constexpr (fdp_min_internal::kUseScalarPickTrace<T>) {
+      fdp_min_internal::DumpScalar(line, static_cast<long double>(res));
+    } else {
+      fdp_min_internal::DumpPickIndex(line, index);
+    }
   }
   return res;
 }

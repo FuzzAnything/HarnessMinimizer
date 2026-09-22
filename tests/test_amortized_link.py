@@ -1010,6 +1010,7 @@ def test_amortized_runner_replay_runtime_supports_common_fdp_helpers(
                 "S 105 0.25",
                 "S 106 0.5",
                 "S 107 22",
+                "P 108 1",
                 "B 201 4 5 6 7 99",
                 "B 202 3 97 98 99",
                 "R 301 1234",
@@ -1041,6 +1042,7 @@ extern "C" void replay_target_crash(int);
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
   int choices[] = {11, 22, 33};
+  const char *pointer_choices[] = {"alpha", "beta", "gamma"};
   bool trigger = fdp.ConsumeBool(101);
   int whole = fdp.ConsumeIntegral<int>(102);
   unsigned int ranged = fdp.ConsumeIntegralInRange<unsigned int>(0, 10, 103);
@@ -1048,6 +1050,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   float probability = fdp.ConsumeProbability<float>(105);
   float ranged_number = fdp.ConsumeFloatingPointInRange<float>(-1.0f, 1.0f, 106);
   int choice = fdp.PickValueInArray(choices, 107);
+  const char *pointer_choice = fdp.PickValueInArray(pointer_choices, 108);
   std::vector<uint8_t> terminated =
       fdp.ConsumeBytesWithTerminator<uint8_t>(3, 99, 201);
   char copied[3] = {};
@@ -1055,7 +1058,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   size_t remaining = fdp.remaining_bytes(301);
   bool matches = trigger && whole == 42 && ranged == 9 && number == 3.5 &&
                  probability == 0.25f && ranged_number == 0.5f &&
-                 choice == 22 && terminated.size() == 4 &&
+                 choice == 22 && pointer_choice[0] == 'b' &&
+                 terminated.size() == 4 &&
                  terminated[0] == 5 && terminated[1] == 6 &&
                  terminated[2] == 7 && terminated[3] == 99 &&
                  copied_size == 3 && copied[0] == 'a' && copied[1] == 'b' &&
