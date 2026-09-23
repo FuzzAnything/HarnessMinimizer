@@ -1,163 +1,150 @@
 // This fuzz driver is generated for library libpcap, aiming to fuzz the following functions:
-// pcap_dump_open_append at sf-pcap.c:1005:1 in pcap.h
-// pcap_dump_open at sf-pcap.c:902:1 in pcap.h
-// pcap_file at pcap.c:3495:1 in pcap.h
-// pcap_dump_file at sf-pcap.c:1201:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_dump_open at sf-pcap.c:902:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_dump_open_append at sf-pcap.c:1005:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_close at pcap.c:4177:1 in pcap.h
+// pcap_bufsize at pcap.c:3487:1 in pcap.h
 // pcap_create at pcap.c:2242:1 in pcap.h
 // pcap_activate at pcap.c:2695:1 in pcap.h
-// pcap_dump_open at sf-pcap.c:902:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
+// pcap_set_snaplen at pcap.c:2535:1 in pcap.h
+// pcap_set_tstamp_precision at pcap.c:2640:1 in pcap.h
+// pcap_snapshot at pcap.c:3455:1 in pcap.h
+// pcap_bufsize at pcap.c:3487:1 in pcap.h
 // pcap_close at pcap.c:4177:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_open_offline at savefile.c:388:1 in pcap.h
-// pcap_dump_open at sf-pcap.c:902:1 in pcap.h
-// pcap_dump_file at sf-pcap.c:1201:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_dump_open_append at sf-pcap.c:1005:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
-// pcap_file at pcap.c:3495:1 in pcap.h
-// pcap_dump_fopen at sf-pcap.c:988:1 in pcap.h
-// pcap_dump_close at sf-pcap.c:1262:1 in pcap.h
 // pcap_close at pcap.c:4177:1 in pcap.h
-// pcap_open_offline at savefile.c:388:1 in pcap.h
-// pcap_dump_fopen at sf-pcap.c:988:1 in pcap.h
+// pcap_open_live at pcap.c:2749:1 in pcap.h
+// pcap_snapshot at pcap.c:3455:1 in pcap.h
+// pcap_bufsize at pcap.c:3487:1 in pcap.h
+// pcap_close at pcap.c:4177:1 in pcap.h
+// pcap_create at pcap.c:2242:1 in pcap.h
+// pcap_set_snaplen at pcap.c:2535:1 in pcap.h
+// pcap_set_tstamp_precision at pcap.c:2640:1 in pcap.h
+// pcap_activate at pcap.c:2695:1 in pcap.h
+// pcap_snapshot at pcap.c:3455:1 in pcap.h
+// pcap_bufsize at pcap.c:3487:1 in pcap.h
+// pcap_close at pcap.c:4177:1 in pcap.h
+// pcap_close at pcap.c:4177:1 in pcap.h
+// pcap_set_snaplen at pcap.c:2535:1 in pcap.h
+// pcap_set_tstamp_precision at pcap.c:2640:1 in pcap.h
+// pcap_activate at pcap.c:2695:1 in pcap.h
+// pcap_snapshot at pcap.c:3455:1 in pcap.h
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include "pcap/pcap.h"
-#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 #include <unistd.h>
+#include <fcntl.h>
 
-static void cleanup_dummy_files(void) {
-    remove("./dummy_file");
-    remove("./dummy_output.pcap");
-    remove("./dummy_append.pcap");
-    remove("./dummy_fopen.pcap");
-}
-
-static int write_dummy_file(const uint8_t *data, size_t size) {
-    FILE *fp = fopen("./dummy_file", "wb");
-    if (!fp) return 0;
-    size_t written = fwrite(data, 1, size, fp);
-    fclose(fp);
-    return written == size;
+static void dummy_cleanup(pcap_t *pcap) {
+    if (pcap) {
+        pcap_close(pcap);
+    }
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
-    static int initialized = 0;
-    if (!initialized) {
-        atexit(cleanup_dummy_files);
-        initialized = 1;
+    // Create dummy file for potential offline reading (not used in these APIs but good to have)
+    int fd = open("./dummy_file", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        if (Size > 0) {
+            write(fd, Data, Size > 1024 ? 1024 : Size);
+        }
+        close(fd);
     }
 
-    // Prepare dummy input file
-    if (!write_dummy_file(Data, Size)) {
-        return 0;
-    }
-
+    // Initialize error buffer
     char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *pcap = NULL;
-    pcap_dumper_t *dumper = NULL;
-    FILE *fp = NULL;
-    
-    // Test 1: pcap_dump_open
-    pcap = pcap_open_offline("./dummy_file", errbuf);
+    memset(errbuf, 0, sizeof(errbuf));
+
+    // Test pcap_open_live with various inputs
+    const char *devices[] = {"lo", "eth0", "any", "wlan0", NULL};
+    for (int i = 0; devices[i] != NULL && i < 4; i++) {
+        // Use fuzzer data to parameterize the call
+        int snaplen = Size > 0 ? (Data[0] % 65535) + 1 : 65535;
+        int promisc = Size > 1 ? Data[1] % 2 : 0;
+        int timeout = Size > 2 ? (Data[2] % 1000) : 100;
+        
+        pcap_t *pcap = pcap_open_live(devices[i], snaplen, promisc, timeout, errbuf);
+        if (pcap) {
+            // Test pcap_snapshot on active handle
+            int snap = pcap_snapshot(pcap);
+            (void)snap; // Use result to avoid unused variable warning
+            
+            // Test pcap_bufsize on active handle
+            int buf = pcap_bufsize(pcap);
+            (void)buf;
+            
+            pcap_close(pcap);
+        }
+    }
+
+    // Test pcap_create + pcap_set_snaplen + pcap_set_tstamp_precision + pcap_activate
+    pcap_t *pcap = pcap_create("lo", errbuf);
     if (pcap) {
-        dumper = pcap_dump_open(pcap, "./dummy_output.pcap");
-        if (dumper) {
-            // Test 4: pcap_dump_file
-            FILE *dump_fp = pcap_dump_file(dumper);
-            if (dump_fp) {
-                // Try to write some dummy data
-                fwrite("TEST", 1, 4, dump_fp);
-                fflush(dump_fp);
+        // Set parameters using fuzzer data
+        if (Size > 3) {
+            int set_snaplen = pcap_set_snaplen(pcap, Data[3] % 65535);
+            (void)set_snaplen;
+        }
+        
+        if (Size > 4) {
+            int precision = Data[4] % 3; // 0=PCAP_TSTAMP_PRECISION_MICRO, 1=PCAP_TSTAMP_PRECISION_NANO, 2=other
+            int set_precision = pcap_set_tstamp_precision(pcap, precision);
+            (void)set_precision;
+        }
+        
+        // Activate the handle
+        int activate_ret = pcap_activate(pcap);
+        if (activate_ret == 0) {
+            // Test pcap_snapshot on successfully activated handle
+            int snap = pcap_snapshot(pcap);
+            (void)snap;
+            
+            // Test pcap_bufsize on active handle
+            int buf = pcap_bufsize(pcap);
+            (void)buf;
+        } else if (activate_ret < 0) {
+            // On activation failure, close as instructed
+            pcap_close(pcap);
+            pcap = NULL;
+        }
+    }
+    
+    // Cleanup if handle still exists
+    if (pcap) {
+        pcap_close(pcap);
+    }
+
+    // Test edge cases with invalid/null handles
+    if (Size > 5 && (Data[5] % 2 == 0)) {
+        // Try to call functions with NULL handle
+        pcap_t *null_pcap = NULL;
+        (void)pcap_set_snaplen(null_pcap, 100);
+        (void)pcap_set_tstamp_precision(null_pcap, PCAP_TSTAMP_PRECISION_MICRO);
+        (void)pcap_activate(null_pcap);
+        (void)pcap_snapshot(null_pcap);
+        (void)pcap_bufsize(null_pcap);
+    }
+
+    // Test with already activated handle
+    if (Size > 6) {
+        pcap_t *pcap2 = pcap_create("any", errbuf);
+        if (pcap2) {
+            if (pcap_activate(pcap2) == 0) {
+                // Try to set parameters on already active handle (should fail)
+                (void)pcap_set_snaplen(pcap2, 500);
+                (void)pcap_set_tstamp_precision(pcap2, PCAP_TSTAMP_PRECISION_NANO);
+                
+                // These should work
+                (void)pcap_snapshot(pcap2);
+                (void)pcap_bufsize(pcap2);
             }
-            // Test 5: pcap_dump_close
-            pcap_dump_close(dumper);
-            dumper = NULL;
+            pcap_close(pcap2);
         }
-        
-        // Test 2: pcap_dump_open_append
-        dumper = pcap_dump_open_append(pcap, "./dummy_append.pcap");
-        if (dumper) {
-            pcap_dump_close(dumper);
-            dumper = NULL;
-        }
-        
-        // Test 3: pcap_file
-        FILE *pcap_fp = pcap_file(pcap);
-        if (pcap_fp) {
-            // Try to read from the file pointer
-            fseek(pcap_fp, 0, SEEK_SET);
-            char buf[16];
-            fread(buf, 1, sizeof(buf), pcap_fp);
-        }
-        
-        // Test 6: pcap_dump_fopen
-        fp = fopen("./dummy_fopen.pcap", "wb");
-        if (fp) {
-            dumper = pcap_dump_fopen(pcap, fp);
-            if (dumper) {
-                pcap_dump_close(dumper);
-                dumper = NULL;
-            } else {
-                fclose(fp);
-                fp = NULL;
-            }
-        }
-        
-        pcap_close(pcap);
-        pcap = NULL;
     }
-    
-    // Test with invalid inputs
-    pcap = pcap_open_offline("./dummy_file", errbuf);
-    if (pcap) {
-        // Test with NULL parameters
-        pcap_dump_fopen(NULL, NULL);
-        pcap_dump_open_append(NULL, NULL);
-        pcap_dump_open(NULL, NULL);
-        pcap_file(NULL);
-        pcap_dump_file(NULL);
-        pcap_dump_close(NULL);
-        
-        // Test with empty string
-        dumper = pcap_dump_open(pcap, "");
-        if (dumper) pcap_dump_close(dumper);
-        
-        dumper = pcap_dump_open_append(pcap, "");
-        if (dumper) pcap_dump_close(dumper);
-        
-        pcap_close(pcap);
-    }
-    
-    // Test with different pcap states
-    pcap = pcap_create("lo", errbuf);
-    if (pcap) {
-        pcap_activate(pcap);
-        
-        dumper = pcap_dump_open(pcap, "./dummy_output2.pcap");
-        if (dumper) {
-            pcap_dump_close(dumper);
-        }
-        
-        pcap_close(pcap);
-    }
-    
-    // Clean up any remaining resources
-    if (dumper) pcap_dump_close(dumper);
-    if (fp) fclose(fp);
+
+    // Clean up dummy file
+    unlink("./dummy_file");
     
     return 0;
 }

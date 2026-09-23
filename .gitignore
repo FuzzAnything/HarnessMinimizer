@@ -32,6 +32,7 @@ scripts
 reduced.cpp
 harness_values.h
 benchmark.tar.gz
+benchmark-bug.tar.gz
 backup/
 time/
 benchmark/*/*/time-*/*
@@ -51,3 +52,5 @@ performance-csvs*
 detailed_crash_triage_reports/
 seeds/
 dictionary/
+corpus/
+dummy*
