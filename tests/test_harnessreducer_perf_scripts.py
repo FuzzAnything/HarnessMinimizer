@@ -231,18 +231,20 @@ def test_collection_copies_nested_files_without_overwriting_and_is_repeatable(tm
     destination.mkdir()
     (destination / "results.csv").write_bytes(b"keep this original\n")
     first = collector.collect_csvs(source, destination)
-    assert first["csv_files_found"] == 6
-    assert first["copied"] == 5
-    assert first["already_present"] == 1
-    assert first["skipped_csv_symlinks"] == 1
+    assert first["csv_files_found"] == 2
+    assert first["copied"] == 2
+    assert first["already_present"] == 0
+    assert first["skipped_non_performance_csvs"] == 5
+    assert first["skipped_csv_symlinks"] == 0
     assert (destination / "results.csv").read_bytes() == b"keep this original\n"
     for row in first["files"]:
         assert (destination / row["destination"]).read_bytes() == files[row["source"]]
-    assert (destination / "results__2.csv").is_file()
-    assert (destination / "results__3.csv").is_file()
+        assert row["destination"].startswith("performance_comparison_")
+    assert not (destination / "results__2.csv").is_file()
+    assert not (destination / "results__3.csv").is_file()
     second = collector.collect_csvs(source, destination)
     assert second["copied"] == 0
-    assert second["already_present"] == 6
+    assert second["already_present"] == 2
     assert first["manifest"] != second["manifest"]
     for name, content in files.items():
         assert (source / name).read_bytes() == content
@@ -265,11 +267,13 @@ def test_collector_default_paths_do_not_depend_on_working_directory(tmp_path, mo
     source = root / "benchmark/library-bug"
     source.mkdir(parents=True)
     (source / "values.csv").write_text("value\n1\n")
+    (source / "performance_comparison_wdd_bug-1.csv").write_text("value\n2\n")
     monkeypatch.setattr(collector, "PROJECT_ROOT", root)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["collect"])
     assert collector.main() == 0
-    assert (root / "temp/values.csv").is_file()
+    assert not (root / "temp/values.csv").is_file()
+    assert (root / "temp/performance_comparison_wdd_bug-1.csv").is_file()
 
 
 def saved_sweep(bench, name, tool="wdd", created="2026-09-01T00:00:00+00:00", status="completed"):

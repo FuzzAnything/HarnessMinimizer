@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy every CSV under benchmark/library-bug into root temp/ without overwrites."""
+"""Copy performance comparison CSVs under benchmark/library-bug into temp/."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import tempfile
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+PERFORMANCE_CSV_PREFIX = "performance_comparison_"
 
 
 def copy_without_overwrite(source: Path, destination: Path) -> tuple[Path, bool]:
@@ -51,6 +52,7 @@ def collect_csvs(source_root: Path, destination: Path) -> dict[str, object]:
     filecmp.clear_cache()
     records = []
     skipped_symlinks = 0
+    skipped_non_performance_csvs = 0
 
     def fail_walk(error: OSError) -> None:
         raise error
@@ -61,6 +63,9 @@ def collect_csvs(source_root: Path, destination: Path) -> dict[str, object]:
         for name in sorted(files):
             source = Path(directory) / name
             if source.suffix.lower() != ".csv":
+                continue
+            if not source.name.startswith(PERFORMANCE_CSV_PREFIX):
+                skipped_non_performance_csvs += 1
                 continue
             if source.is_symlink():
                 skipped_symlinks += 1
@@ -81,6 +86,7 @@ def collect_csvs(source_root: Path, destination: Path) -> dict[str, object]:
         "copied": sum(row["action"] == "copied" for row in records),
         "already_present": sum(row["action"] == "already_present" for row in records),
         "skipped_csv_symlinks": skipped_symlinks,
+        "skipped_non_performance_csvs": skipped_non_performance_csvs,
         "files": records,
     }
     # Keep provenance, including renamed collisions, without replacing old manifests.
@@ -107,6 +113,7 @@ def main() -> int:
         parser.exit(1, f"CSV collection failed: {exc}\n")
     print(f"CSV files found: {summary['csv_files_found']}")
     print(f"Copied: {summary['copied']}; already present: {summary['already_present']}")
+    print(f"Non-performance CSVs skipped: {summary['skipped_non_performance_csvs']}")
     print(f"CSV symlinks skipped: {summary['skipped_csv_symlinks']}")
     print(f"Destination: {summary['destination']}")
     print(f"Copy manifest: {summary['manifest']}")

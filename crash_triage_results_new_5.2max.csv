@@ -107,3 +107,7 @@ sqlite-4,treereduce,harness-bug
 sqlite-5,treereduce,harness-bug
 zlib-2,treereduce,harness-bug
 zlib-3,treereduce,harness-bug
+c-ares-2,none,library-bug
+libtiff-13,none,library-bug
+libtiff-14,none,library-bug
+libpng-7,none,harness-bug

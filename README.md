@@ -888,15 +888,17 @@ Values below 1 are retained if an optimization was slower. Explicit `--output`
 and `--csv-output` paths still override the default report names for a single
 run; they cannot be combined with `--all-tools`.
 
-Collect existing CSV files from the entire `benchmark/library-bug` tree:
+Collect existing performance comparison CSV files from the entire
+`benchmark/library-bug` tree:
 
 ```bash
 python collect_harnessreducer_perf_csvs.py
 ```
 
-This copies regular `.csv` files (case-insensitive), including existing legacy
-reports and engines' internal CSVs, into repository-root `temp/`. Source files
-are unchanged. Different contents with the same filename get `__2`, `__3`, etc.;
+This copies regular files whose names start with
+`performance_comparison_` and end with `.csv` into repository-root `temp/`.
+Perses working CSVs and other internal CSV files are skipped. Source files are
+unchanged. Different contents with the same filename get `__2`, `__3`, etc.;
 identical copies are reused, so rerunning does not duplicate unchanged files.
 CSV symlinks and symlinked directories are not followed. Each invocation writes
 a unique `csv_collection_*.json` mapping source paths to collected names.
@@ -904,8 +906,9 @@ a unique `csv_collection_*.json` mapping source paths to collected names.
 outside the benchmark tree. Existing CSV contents/names are not rewritten to
 guess an engine; engine-bearing names come from the updated table generator.
 Selecting latest runs for report generation does not delete historical reports.
-The collector still collects **all existing CSV files**, including older reports
-already on disk; it does not itself filter to the latest runs.
+The collector still collects **all existing performance comparison CSV files**,
+including older reports already on disk; it does not itself filter to the latest
+runs.
 
 ## Reducer throughput baseline
 
