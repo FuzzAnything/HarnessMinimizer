@@ -70,7 +70,6 @@ libjpeg-turbo-3,none,library-bug
 libjpeg-turbo-4,none,library-bug
 libjpeg-turbo-5,none,library-bug
 libvpx-37,none,library-bug
-openssl-9,none,library-bug
 protobuf-6,none,library-bug
 zlib-4,none,library-bug
 sqlite-6,none,harness-bug
@@ -85,7 +84,6 @@ sqlite-8,none,harness-bug
 sqlite-9,none,library-bug
 sqlite-10,none,library-bug
 pugixml-8,none,library-bug
-pugixml-9,none,harness-bug
 pugixml-10,none,harness-bug
 pugixml-11,none,harness-bug
 libpcap-3,none,harness-bug
