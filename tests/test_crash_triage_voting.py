@@ -3,6 +3,8 @@
 from contextlib import redirect_stdout
 import io
 import itertools
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -13,12 +15,17 @@ class CrashTriageVotingTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(triage, "TRIAGE_REPETITIONS", 4))
         self.enterContext(patch.object(triage, "PRINT_STACK_TRACE", False))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(patch.object(
+            triage, "FIFTH_VOTE_CSV_PATH", Path(directory) / "fifth-vote-cases.csv"
+        ))
         self.output = io.StringIO()
         self.enterContext(redirect_stdout(self.output))
 
     def request_votes(self):
         return triage.send_stack_trace_to_llm(
             "harness source", None, "stack trace",
+            benchmark_name="test-case", tool="none",
             llm_timeout_seconds=3600, reasoning_effort="max",
         )
 

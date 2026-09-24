@@ -24,6 +24,8 @@ import urllib.request
 PROJECT_ROOT = Path(__file__).resolve().parent
 BENCHMARK_ROOT = PROJECT_ROOT / "benchmark" / "bug"
 DEFAULT_CSV_PATH = PROJECT_ROOT / "crash_triage_results_new.csv"
+# Fixed audit file for cases whose initial votes require a deciding vote.
+FIFTH_VOTE_CSV_PATH = PROJECT_ROOT / "crash_triage_fifth_vote_cases.csv"
 
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from harnessreducer import reducer_runner as rr  # noqa: E402
@@ -880,6 +882,8 @@ def send_stack_trace_to_llm(
     values_header_source: str | None,
     stack_trace: str,
     *,
+    benchmark_name: str,
+    tool: str,
     llm_timeout_seconds: int = LLM_TIMEOUT_SECONDS,
     reasoning_effort: str = LLM_REASONING_EFFORT,
 ) -> str:
@@ -914,6 +918,8 @@ def send_stack_trace_to_llm(
     library_count = votes.count("library-bug")
     harness_count = votes.count("harness-bug")
     if library_count == harness_count:
+        # Record the need for an extra vote even if that request later fails.
+        append_fifth_vote_case(benchmark_name, tool, library_count, harness_count)
         index = len(votes) + 1
         print(
             f"[+] Triage votes tied {library_count}-{harness_count}; "
@@ -931,11 +937,10 @@ def send_stack_trace_to_llm(
     return majority_vote(votes)
 
 
-def append_csv_row(
+def append_locked_csv_row(
     csv_path: Path,
-    benchmark_name: str,
-    tool: str,
-    result: str,
+    header: Sequence[str],
+    row: Sequence[object],
 ) -> None:
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
@@ -945,8 +950,34 @@ def append_csv_row(
         write_header = os.fstat(handle.fileno()).st_size == 0
         writer = csv.writer(handle)
         if write_header:
-            writer.writerow(["dir", "tool", "triage result"])
-        writer.writerow([benchmark_name, tool, result])
+            writer.writerow(header)
+        writer.writerow(row)
+
+
+def append_csv_row(
+    csv_path: Path,
+    benchmark_name: str,
+    tool: str,
+    result: str,
+) -> None:
+    append_locked_csv_row(
+        csv_path,
+        ["dir", "tool", "triage result"],
+        [benchmark_name, tool, result],
+    )
+
+
+def append_fifth_vote_case(
+    benchmark_name: str,
+    tool: str,
+    library_votes: int,
+    harness_votes: int,
+) -> None:
+    append_locked_csv_row(
+        FIFTH_VOTE_CSV_PATH,
+        ["dir", "tool", "library_votes", "harness_votes"],
+        [benchmark_name, tool, library_votes, harness_votes],
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1107,6 +1138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             harness_source,
             values_header_source,
             stack_trace,
+            benchmark_name=benchmark_dir.name,
+            tool=csv_tool,
             llm_timeout_seconds=args.llm_timeout,
             reasoning_effort=args.llm_reasoning_effort,
         )
