@@ -41,6 +41,7 @@ LLM_TOP_P = 0.95
 LLM_RETRIES = 5
 # LLM_REASONING_EFFORT = "high"
 LLM_REASONING_EFFORT = "max"
+# Minimum votes per triage; a tie requires one additional vote.
 TRIAGE_REPETITIONS = 4
 # Echo the collected stack trace to the screen before sending it to the LLM.
 PRINT_STACK_TRACE = True
@@ -859,6 +860,8 @@ def build_prompt(
 def majority_vote(votes: list[str]) -> str:
     library_count = votes.count("library-bug")
     harness_count = votes.count("harness-bug")
+    if library_count == harness_count:
+        raise TriageError("Triage votes are tied; an additional vote is required.")
     return "library-bug" if library_count > harness_count else "harness-bug"
 
 
@@ -884,8 +887,8 @@ def send_stack_trace_to_llm(
 
     The collected stack trace is first echoed to the screen (unless disabled
     via PRINT_STACK_TRACE) so the crash output can be verified before it
-    reaches the LLM. The prompt is then sent TRIAGE_REPETITIONS times and the
-    majority verdict is returned.
+    reaches the LLM. The prompt is then sent TRIAGE_REPETITIONS times. If the
+    votes are tied, one additional independent vote decides the majority.
     """
     if PRINT_STACK_TRACE:
         print_stack_trace(stack_trace)
@@ -899,6 +902,24 @@ def send_stack_trace_to_llm(
     votes: list[str] = []
     for index in range(1, TRIAGE_REPETITIONS + 1):
         print(f"[+] Requesting triage vote {index}/{TRIAGE_REPETITIONS}", flush=True)
+        response = post_chat_completion(
+            prompt,
+            timeout_seconds=llm_timeout_seconds,
+            reasoning_effort=reasoning_effort,
+        )
+        vote = normalize_triage_result(response)
+        votes.append(vote)
+        print(f"[+] Triage vote {index}: {vote}")
+
+    library_count = votes.count("library-bug")
+    harness_count = votes.count("harness-bug")
+    if library_count == harness_count:
+        index = len(votes) + 1
+        print(
+            f"[+] Triage votes tied {library_count}-{harness_count}; "
+            f"requesting deciding vote {index}",
+            flush=True,
+        )
         response = post_chat_completion(
             prompt,
             timeout_seconds=llm_timeout_seconds,
@@ -932,7 +953,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Triage a benchmark crash with one direct LLM prompt, repeated "
-            f"{TRIAGE_REPETITIONS} times, and append the majority result to a CSV file."
+            f"{TRIAGE_REPETITIONS} times plus one extra vote if tied, "
+            "and append the majority result to a CSV file."
         )
     )
     parser.add_argument(

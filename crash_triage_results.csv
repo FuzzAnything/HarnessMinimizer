@@ -22,6 +22,7 @@ libaom-15,none,library-bug
 libaom-16,none,library-bug
 libaom-17,none,library-bug
 libaom-18,none,library-bug
+libaom-23,none,library-bug
 liblouis-1,none,library-bug
 liblouis-2,none,library-bug
 liblouis-3,none,library-bug
@@ -31,9 +32,6 @@ liblouis-6,none,library-bug
 liblouis-7,none,library-bug
 liblouis-9,none,library-bug
 liblouis-10,none,library-bug
-liblouis-11,none,library-bug
-liblouis-12,none,library-bug
-liblouis-13,none,library-bug
 libmagic-1,none,library-bug
 libpcap-1,none,library-bug
 libpcap-2,none,library-bug
@@ -60,7 +58,6 @@ libvpx-12,none,library-bug
 libvpx-13,none,library-bug
 libvpx-14,none,library-bug
 libvpx-15,none,library-bug
-libvpx-16,none,library-bug
 libvpx-17,none,library-bug
 libvpx-18,none,library-bug
 libvpx-19,none,library-bug
@@ -71,6 +68,9 @@ libvpx-23,none,library-bug
 libvpx-24,none,library-bug
 libvpx-25,none,library-bug
 libvpx-26,none,library-bug
+libvpx-38,none,library-bug
+libvpx-39,none,library-bug
+libvpx-40,none,library-bug
 cjson-1,none,library-bug
 cjson-2,none,library-bug
 cjson-3,none,library-bug
@@ -83,7 +83,6 @@ opencv-8,none,library-bug
 opencv-9,none,library-bug
 opencv-10,none,library-bug
 opencv-11,none,library-bug
-opencv-12,none,library-bug
 opencv-13,none,library-bug
 opencv-14,none,library-bug
 opencv-15,none,library-bug
@@ -123,6 +122,7 @@ libaom-15,treereduce,library-bug
 libaom-16,treereduce,library-bug
 libaom-17,treereduce,library-bug
 libaom-18,treereduce,library-bug
+libaom-23,treereduce,library-bug
 liblouis-1,treereduce,library-bug
 liblouis-2,treereduce,library-bug
 liblouis-3,treereduce,library-bug
@@ -132,9 +132,6 @@ liblouis-6,treereduce,library-bug
 liblouis-7,treereduce,library-bug
 liblouis-9,treereduce,library-bug
 liblouis-10,treereduce,library-bug
-liblouis-11,treereduce,library-bug
-liblouis-12,treereduce,library-bug
-liblouis-13,treereduce,library-bug
 libmagic-1,treereduce,library-bug
 libpcap-1,treereduce,library-bug
 libpcap-2,treereduce,library-bug
@@ -161,7 +158,6 @@ libvpx-12,treereduce,library-bug
 libvpx-13,treereduce,library-bug
 libvpx-14,treereduce,library-bug
 libvpx-15,treereduce,library-bug
-libvpx-16,treereduce,library-bug
 libvpx-17,treereduce,library-bug
 libvpx-18,treereduce,library-bug
 libvpx-19,treereduce,library-bug
@@ -172,6 +168,9 @@ libvpx-23,treereduce,library-bug
 libvpx-24,treereduce,library-bug
 libvpx-25,treereduce,library-bug
 libvpx-26,treereduce,library-bug
+libvpx-38,treereduce,library-bug
+libvpx-39,treereduce,library-bug
+libvpx-40,treereduce,library-bug
 cjson-1,treereduce,library-bug
 cjson-2,treereduce,library-bug
 cjson-3,treereduce,library-bug
@@ -184,7 +183,6 @@ opencv-8,treereduce,library-bug
 opencv-9,treereduce,library-bug
 opencv-10,treereduce,library-bug
 opencv-11,treereduce,library-bug
-opencv-12,treereduce,library-bug
 opencv-13,treereduce,library-bug
 opencv-14,treereduce,library-bug
 opencv-15,treereduce,library-bug
@@ -224,6 +222,7 @@ libaom-15,perses,library-bug
 libaom-16,perses,library-bug
 libaom-17,perses,library-bug
 libaom-18,perses,library-bug
+libaom-23,perses,library-bug
 liblouis-1,perses,library-bug
 liblouis-2,perses,library-bug
 liblouis-3,perses,library-bug
@@ -233,9 +232,6 @@ liblouis-6,perses,library-bug
 liblouis-7,perses,library-bug
 liblouis-9,perses,library-bug
 liblouis-10,perses,library-bug
-liblouis-11,perses,library-bug
-liblouis-12,perses,library-bug
-liblouis-13,perses,library-bug
 libmagic-1,perses,library-bug
 libpcap-1,perses,library-bug
 libpcap-2,perses,library-bug
@@ -262,7 +258,6 @@ libvpx-12,perses,library-bug
 libvpx-13,perses,library-bug
 libvpx-14,perses,library-bug
 libvpx-15,perses,library-bug
-libvpx-16,perses,library-bug
 libvpx-17,perses,library-bug
 libvpx-18,perses,library-bug
 libvpx-19,perses,library-bug
@@ -273,6 +268,9 @@ libvpx-23,perses,library-bug
 libvpx-24,perses,library-bug
 libvpx-25,perses,library-bug
 libvpx-26,perses,library-bug
+libvpx-38,perses,library-bug
+libvpx-39,perses,library-bug
+libvpx-40,perses,library-bug
 cjson-1,perses,library-bug
 cjson-2,perses,library-bug
 cjson-3,perses,library-bug
@@ -285,7 +283,6 @@ opencv-8,perses,library-bug
 opencv-9,perses,library-bug
 opencv-10,perses,library-bug
 opencv-11,perses,library-bug
-opencv-12,perses,library-bug
 opencv-13,perses,library-bug
 opencv-14,perses,library-bug
 opencv-15,perses,library-bug
@@ -325,6 +322,7 @@ libaom-15,wdd,library-bug
 libaom-16,wdd,library-bug
 libaom-17,wdd,library-bug
 libaom-18,wdd,library-bug
+libaom-23,wdd,library-bug
 liblouis-1,wdd,library-bug
 liblouis-2,wdd,library-bug
 liblouis-3,wdd,library-bug
@@ -334,9 +332,6 @@ liblouis-6,wdd,library-bug
 liblouis-7,wdd,library-bug
 liblouis-9,wdd,library-bug
 liblouis-10,wdd,library-bug
-liblouis-11,wdd,library-bug
-liblouis-12,wdd,library-bug
-liblouis-13,wdd,library-bug
 libmagic-1,wdd,library-bug
 libpcap-1,wdd,library-bug
 libpcap-2,wdd,library-bug
@@ -363,7 +358,6 @@ libvpx-12,wdd,library-bug
 libvpx-13,wdd,library-bug
 libvpx-14,wdd,library-bug
 libvpx-15,wdd,library-bug
-libvpx-16,wdd,library-bug
 libvpx-17,wdd,library-bug
 libvpx-18,wdd,library-bug
 libvpx-19,wdd,library-bug
@@ -374,6 +368,9 @@ libvpx-23,wdd,library-bug
 libvpx-24,wdd,library-bug
 libvpx-25,wdd,library-bug
 libvpx-26,wdd,library-bug
+libvpx-38,wdd,library-bug
+libvpx-39,wdd,library-bug
+libvpx-40,wdd,library-bug
 cjson-1,wdd,library-bug
 cjson-2,wdd,library-bug
 cjson-3,wdd,library-bug
@@ -386,7 +383,6 @@ opencv-8,wdd,library-bug
 opencv-9,wdd,library-bug
 opencv-10,wdd,library-bug
 opencv-11,wdd,library-bug
-opencv-12,wdd,library-bug
 opencv-13,wdd,library-bug
 opencv-14,wdd,library-bug
 opencv-15,wdd,library-bug
@@ -426,6 +422,7 @@ libaom-15,cdd,library-bug
 libaom-16,cdd,library-bug
 libaom-17,cdd,library-bug
 libaom-18,cdd,library-bug
+libaom-23,cdd,library-bug
 liblouis-1,cdd,library-bug
 liblouis-2,cdd,library-bug
 liblouis-3,cdd,library-bug
@@ -435,9 +432,6 @@ liblouis-6,cdd,library-bug
 liblouis-7,cdd,library-bug
 liblouis-9,cdd,library-bug
 liblouis-10,cdd,library-bug
-liblouis-11,cdd,library-bug
-liblouis-12,cdd,library-bug
-liblouis-13,cdd,library-bug
 libmagic-1,cdd,library-bug
 libpcap-1,cdd,library-bug
 libpcap-2,cdd,library-bug
@@ -464,7 +458,6 @@ libvpx-12,cdd,library-bug
 libvpx-13,cdd,library-bug
 libvpx-14,cdd,library-bug
 libvpx-15,cdd,library-bug
-libvpx-16,cdd,library-bug
 libvpx-17,cdd,library-bug
 libvpx-18,cdd,library-bug
 libvpx-19,cdd,library-bug
@@ -475,6 +468,9 @@ libvpx-23,cdd,library-bug
 libvpx-24,cdd,library-bug
 libvpx-25,cdd,library-bug
 libvpx-26,cdd,library-bug
+libvpx-38,cdd,library-bug
+libvpx-39,cdd,library-bug
+libvpx-40,cdd,library-bug
 cjson-1,cdd,library-bug
 cjson-2,cdd,library-bug
 cjson-3,cdd,library-bug
@@ -487,7 +483,6 @@ opencv-8,cdd,library-bug
 opencv-9,cdd,library-bug
 opencv-10,cdd,library-bug
 opencv-11,cdd,library-bug
-opencv-12,cdd,library-bug
 opencv-13,cdd,library-bug
 opencv-14,cdd,library-bug
 opencv-15,cdd,library-bug
