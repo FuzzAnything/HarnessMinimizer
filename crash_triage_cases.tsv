@@ -1,0 +1,104 @@
+benchmark	compile_flags	link_flags
+c-ares-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcares
+c-ares-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcares
+cjson-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+cjson-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+cjson-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+cjson-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+cjson-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+cjson-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcjson -lcjson_utils
+curl-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcurl -lssl -lcrypto -lz
+curl-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcurl -lssl -lcrypto -lz
+curl-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcurl -lssl -lcrypto -lz
+curl-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcurl -lssl -lcrypto -lz
+curl-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lcurl -lssl -lcrypto -lz
+lcms-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+lcms-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
+libaom-19	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
+libaom-20	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
+libaom-21	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
+libaom-22	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
+libjpeg-turbo-1	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg
+libjpeg-turbo-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
+libjpeg-turbo-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
+libjpeg-turbo-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
+libjpeg-turbo-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
+liblouis-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+liblouis-14	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+liblouis-15	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+liblouis-16	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+liblouis-17	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+liblouis-18	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llouis
+libmagic-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lmagic -lz -lzstd -lbz2 -llzma
+libpcap-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1
+libpcap-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1
+libpng-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libpng-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
+libtiff-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ltiffxx -ljbig -ljpeg -llzma -lz
+libtiff-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-12	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-13	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-14	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libvpx-27	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-28	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-29	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-30	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-31	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-32	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-33	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-34	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-35	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-36	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+libvpx-37	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
+opencv-4	-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4	-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -lz -lm
+opencv-5	-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4	-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core -lz -lm
+opencv-18	-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4	-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core
+opencv-19	-I$(pwd)/build/sanitizer/include -I$(pwd)/build/sanitizer/include/opencv4	-L$(pwd)/build/sanitizer/lib -lopencv_imgproc -lopencv_core
+openssl-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lssl -lcrypto
+openssl-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lssl -lcrypto
+openssl-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lssl -lcrypto
+openssl-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lssl -lcrypto
+openssl-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lssl -lcrypto
+protobuf-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lprotobuf -lutf8_range -labsl_log_internal_message -labsl_cord -labsl_cordz_info -labsl_cord_internal
+protobuf-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lprotobuf -lutf8_range
+protobuf-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lprotobuf -lutf8_range -labsl_cord -labsl_cordz_info -labsl_cord_internal
+protobuf-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lprotobuf -lutf8_range -labsl_cord
+pugixml-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+pugixml-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpugixml
+re2-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lre2 -labsl_log_internal_check_op -labsl_leak_check -labsl_log_internal_conditions -labsl_log_internal_message -labsl_examine_stack -labsl_log_internal_format -labsl_log_internal_nullguard -labsl_log_internal_structured_proto -labsl_log_internal_proto -labsl_log_internal_log_sink_set -labsl_log_internal_globals -labsl_log_globals -labsl_log_sink -labsl_log_entry -labsl_strerror -labsl_vlog_config_internal -labsl_log_internal_fnmatch -labsl_flags_internal -labsl_flags_marshalling -labsl_flags_reflection -labsl_flags_private_handle_accessor -labsl_flags_commandlineflag -labsl_flags_commandlineflag_internal -labsl_flags_config -labsl_flags_program_name -labsl_raw_hash_set -labsl_cord -labsl_cordz_info -labsl_cord_internal -labsl_cordz_functions -labsl_cordz_handle -labsl_crc_cord_state -labsl_crc32c -labsl_crc_internal -labsl_hashtablez_sampler -labsl_exponential_biased -labsl_hash -labsl_city -labsl_str_format_internal -labsl_synchronization -labsl_graphcycles_internal -labsl_kernel_timeout_internal -labsl_stacktrace -labsl_symbolize -labsl_debugging_internal -labsl_demangle_internal -labsl_demangle_rust -labsl_decode_rust_punycode -labsl_utf8_for_code_point -labsl_malloc_internal -labsl_time -labsl_civil_time -labsl_strings -labsl_strings_internal -labsl_int128 -labsl_throw_delegate -labsl_time_zone -labsl_tracing_internal -labsl_base -labsl_base_cpu_detect -labsl_raw_logging_internal -labsl_log_severity -labsl_spinlock_wait
+re2-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lre2 -labsl_log_internal_check_op -labsl_leak_check -labsl_log_internal_conditions -labsl_log_internal_message -labsl_examine_stack -labsl_log_internal_format -labsl_log_internal_nullguard -labsl_log_internal_structured_proto -labsl_log_internal_proto -labsl_log_internal_log_sink_set -labsl_log_internal_globals -labsl_log_globals -labsl_log_sink -labsl_log_entry -labsl_strerror -labsl_vlog_config_internal -labsl_log_internal_fnmatch -labsl_flags_internal -labsl_flags_marshalling -labsl_flags_reflection -labsl_flags_private_handle_accessor -labsl_flags_commandlineflag -labsl_flags_commandlineflag_internal -labsl_flags_config -labsl_flags_program_name -labsl_raw_hash_set -labsl_cord -labsl_cordz_info -labsl_cord_internal -labsl_cordz_functions -labsl_cordz_handle -labsl_crc_cord_state -labsl_crc32c -labsl_crc_internal -labsl_hashtablez_sampler -labsl_exponential_biased -labsl_hash -labsl_city -labsl_str_format_internal -labsl_synchronization -labsl_graphcycles_internal -labsl_kernel_timeout_internal -labsl_stacktrace -labsl_symbolize -labsl_debugging_internal -labsl_demangle_internal -labsl_demangle_rust -labsl_decode_rust_punycode -labsl_utf8_for_code_point -labsl_malloc_internal -labsl_time -labsl_civil_time -labsl_strings -labsl_strings_internal -labsl_int128 -labsl_throw_delegate -labsl_time_zone -labsl_tracing_internal -labsl_base -labsl_base_cpu_detect -labsl_raw_logging_internal -labsl_log_severity -labsl_spinlock_wait
+sqlite-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+sqlite-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lsqlite3
+tinygltf-1	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltinygltf
+tinygltf-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltinygltf
+tinygltf-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltinygltf
+zlib-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lz
+zlib-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lz
+zlib-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lz
