@@ -41,8 +41,8 @@ LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
 LLM_RETRIES = 5
-# LLM_REASONING_EFFORT = "high"
-LLM_REASONING_EFFORT = "max"
+LLM_REASONING_EFFORT = "high"
+# LLM_REASONING_EFFORT = "max"
 # Minimum votes per triage; a tie requires one additional vote.
 TRIAGE_REPETITIONS = 4
 # Echo the collected stack trace to the screen before sending it to the LLM.
@@ -56,7 +56,7 @@ TRIM_LARGE_VALUES_HEADER_INITIALIZERS = True
 
 # Any {...} initializer larger than this many characters is replaced in the
 # LLM prompt with a short placeholder.
-MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 8_000
+MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 2_000
 # MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 20_000
 
 

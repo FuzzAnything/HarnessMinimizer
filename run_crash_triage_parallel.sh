@@ -11,7 +11,7 @@ if [[ $# -gt 2 || ! "$HR_TRIAGE_JOBS" =~ ^[1-9][0-9]*$ ||
 fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-export HR_TRIAGE_CSV=${HR_TRIAGE_CSV:-crash_triage_results_new_5.3max.csv}
+export HR_TRIAGE_CSV=${HR_TRIAGE_CSV:-crash_triage_results_new_5.3high.csv}
 export HR_TRIAGE_LOG_DIR=${HR_TRIAGE_LOG_DIR:-triage-logs/$(date +%Y%m%d-%H%M%S)-$$}
 
 hr_emit_cases() {

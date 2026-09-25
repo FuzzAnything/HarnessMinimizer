@@ -147,6 +147,20 @@ allocated by thread T0 here:
 SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/poc.out+0x111)
 """
 
+SAMPLE_ASAN_OUTPUT_MIXED_SYMBOLIZATION = """\
+=================================================================
+==12345==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x503000000050
+    #0 0x57a2db9c4e27 in memcpy (/tmp/case/poc.out+0x116e27)
+    #1 0x729fcb25ff8b  (/lib/x86_64-linux-gnu/libz.so.1+0x7f8b)
+    #2 0x729fcb260044  (/lib/x86_64-linux-gnu/libz.so.1+0x8044)
+    #3 0x729fcb260cc7  (/lib/x86_64-linux-gnu/libz.so.1+0x8cc7)
+    #4 0x729fcb2628e3 in deflate (/lib/x86_64-linux-gnu/libz.so.1+0xa8e3)
+    #5 0x729fcb0da6da in ZIPEncode /root/src/libtiff/libtiff/tif_zip.c:492:13
+    #6 0x729fcb0d018c in TIFFWriteEncodedTile /root/src/libtiff/libtiff/tif_write.c:511:10
+    #7 0x57a2dba0caf0 in LLVMFuzzerTestOneInput /tmp/case/harness.cpp:252:19
+SUMMARY: AddressSanitizer: heap-buffer-overflow (/tmp/case/poc.out+0x116e27) in memcpy
+"""
+
 SAMPLE_DYNAMIC_LIBRARY_OUTPUT = """\
 =================================================================
 ==12345==ERROR: AddressSanitizer: heap-buffer-overflow
@@ -348,6 +362,26 @@ class TestExtractStackTrace(unittest.TestCase):
             3,
         )
 
+    def test_extracts_mixed_symbolized_and_unsymbolized_frames(self):
+        result = extract_stack_trace(
+            SAMPLE_ASAN_OUTPUT_MIXED_SYMBOLIZATION,
+            harness_path="/tmp/case/harness.cpp",
+        )
+        self.assertIsNotNone(result)
+        lines = result.strip().splitlines()
+        self.assertEqual(len(lines), 7)
+        self.assertIn("(/lib/x86_64-linux-gnu/libz.so.1+0x7f8b)", lines[1])
+        self.assertIn("ZIPEncode /root/src/libtiff/libtiff/tif_zip.c:492:13", result)
+        self.assertNotIn("LLVMFuzzerTestOneInput", result)
+
+        self.assertEqual(
+            result,
+            ct_extract_stack_trace(
+                SAMPLE_ASAN_OUTPUT_MIXED_SYMBOLIZATION,
+                harness_path="/tmp/case/harness.cpp",
+            ),
+        )
+
     def test_extract_symbolized_crash_location_uses_first_pre_harness_source_location(self):
         self.assertEqual(
             extract_symbolized_crash_location(
@@ -355,6 +389,15 @@ class TestExtractStackTrace(unittest.TestCase):
                 harness_path="/tmp/case/custom_harness.cpp",
             ),
             "/src/lib.c:10:3",
+        )
+
+    def test_extract_symbolized_crash_location_skips_unsymbolized_middle_frames(self):
+        self.assertEqual(
+            extract_symbolized_crash_location(
+                SAMPLE_ASAN_OUTPUT_MIXED_SYMBOLIZATION,
+                harness_path="/tmp/case/harness.cpp",
+            ),
+            "/root/src/libtiff/libtiff/tif_zip.c:492:13",
         )
 
     def test_extract_symbolized_crash_location_skips_abort_wrapper_frames(self):

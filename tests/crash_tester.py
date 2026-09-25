@@ -37,7 +37,7 @@ from harnessreducer.reducer_runner import (
     PHASE3_SPLIT_OPT_FLAGS,
     PHASE3_WARNING_FLAGS,
     PHASE3_PLUGIN_SANITIZER_FLAGS,
-    STACK_FRAME_PATTERN,
+    STACK_FRAME_COUNT_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
     count_first_stack_trace_frames,
@@ -47,7 +47,7 @@ from harnessreducer.reducer_runner import (
     fdp_wide_trace_path,
     runtime_library_env,
 )
-# STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
+# STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 UNINITIALIZED_COMPILE_ERROR_PATTERN = re.compile(r"(?i)(?:\[-Wuninitialized\]|uninitialized)")
 AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
@@ -194,7 +194,7 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
     frames: list[str] = []
     in_first_trace = False
     for line in output.splitlines():
-        if STACK_FRAME_PATTERN.match(line):
+        if STACK_FRAME_COUNT_PATTERN.match(line):
             in_first_trace = True
             if _frame_matches_harness_source(line, harness_path):
                 break

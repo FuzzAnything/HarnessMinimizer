@@ -2320,10 +2320,12 @@ def _source_location_matches_harness(location: str, harness_path: str | None) ->
 def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
     """Extract the first stack trace from symbolized sanitizer output.
 
-    Parses stack frames (lines matching ``#N 0xADDR in ...``) and returns the
-    first stack trace, truncated before the harness frames. When ``harness_path``
-    is provided, truncation happens at the first frame whose source location
-    belongs to that harness file. Otherwise it falls back to truncating at
+    Parses sanitizer stack frames (lines beginning ``#N 0xADDR``) and returns
+    the first stack trace, truncated before the harness frames. Symbolized
+    reports can contain unsymbolized middle frames, so collection must not
+    require every frame to contain ``in``. When ``harness_path`` is provided,
+    truncation happens at the first frame whose source location belongs to that
+    harness file. Otherwise it falls back to truncating at
     ``LLVMFuzzerTestOneInput``.
 
     Only the *first* stack trace is kept (ASan may emit multiple — e.g., one
@@ -2333,7 +2335,7 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
     frames: list[str] = []
     in_first_trace = False
     for line in output.splitlines():
-        if STACK_FRAME_PATTERN.match(line):
+        if STACK_FRAME_COUNT_PATTERN.match(line):
             in_first_trace = True
             if _frame_matches_harness_source(line, harness_path):
                 break
