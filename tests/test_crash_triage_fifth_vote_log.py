@@ -58,9 +58,10 @@ class CrashTriageFifthVoteLogTests(unittest.TestCase):
         self.assertEqual(calls, 5)
         self.assertEqual(len(self.read_cases()), 1)
 
-    def test_untied_case_does_not_create_the_extra_csv(self):
-        with patch.object(triage, "post_chat_completion", return_value="harness-bug"):
+    def test_early_stop_does_not_create_the_extra_csv(self):
+        with patch.object(triage, "post_chat_completion", return_value="harness-bug") as request:
             self.assertEqual(self.request_votes(), "harness-bug")
+        self.assertEqual(request.call_count, 3)
         self.assertFalse(self.log_path.exists())
 
     def test_case_remains_recorded_when_the_deciding_vote_fails(self):

@@ -36,7 +36,7 @@ hr_run_case() {
     local -a command
     # Keep the two tools for a benchmark sequential: both harnesses use the
     # same benchmark working directory. Different benchmarks run in parallel.
-    for tool in none treereduce; do
+    for tool in none; do
         command=(
             python3 -u crash_triage_new.py
             --tool "$tool" --dir "$benchmark"

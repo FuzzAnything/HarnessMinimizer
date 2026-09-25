@@ -1,4 +1,4 @@
-"""Check minimum vote counts and tie resolution without making API calls."""
+"""Check early majority stopping and tie resolution without making API calls."""
 
 from contextlib import redirect_stdout
 import io
@@ -29,26 +29,33 @@ class CrashTriageVotingTests(unittest.TestCase):
             llm_timeout_seconds=3600, reasoning_effort="max",
         )
 
-    def test_all_four_vote_outcomes_request_a_fifth_only_when_tied(self):
+    def test_stops_at_three_matching_votes_for_every_five_vote_sequence(self):
         verdicts = ("library-bug", "harness-bug")
-        for initial in itertools.product(verdicts, repeat=4):
-            tied = initial.count("library-bug") == 2
-            for deciding in verdicts if tied else (None,):
-                with self.subTest(initial=initial, deciding=deciding):
-                    responses = list(initial)
-                    if tied:
-                        responses.append(deciding)
-                    with patch.object(triage, "post_chat_completion", side_effect=responses) as request:
-                        result = self.request_votes()
-                    expected = deciding if tied else max(verdicts, key=initial.count)
-                    self.assertEqual(result, expected)
-                    self.assertEqual(request.call_count, 5 if tied else 4)
-                    # The deciding vote uses the same evidence and model settings.
-                    for call in request.call_args_list:
-                        self.assertEqual(call, request.call_args_list[0])
-                    self.assertEqual(request.call_args.kwargs, {
-                        "timeout_seconds": 3600, "reasoning_effort": "max",
-                    })
+        for responses in itertools.product(verdicts, repeat=5):
+            with self.subTest(responses=responses):
+                if len(set(responses[:3])) == 1:
+                    expected_calls = 3
+                elif responses[:4].count("library-bug") == 2:
+                    expected_calls = 5
+                else:
+                    expected_calls = 4
+                with (
+                    patch.object(triage, "post_chat_completion", side_effect=responses) as request,
+                    patch.object(triage, "append_fifth_vote_case") as record,
+                ):
+                    result = self.request_votes()
+                # Stopping early must preserve the full five-vote majority.
+                self.assertEqual(result, max(verdicts, key=responses.count))
+                self.assertEqual(request.call_count, expected_calls)
+                if expected_calls == 5:
+                    record.assert_called_once_with("test-case", "none", 2, 2)
+                else:
+                    record.assert_not_called()
+                for call in request.call_args_list:
+                    self.assertEqual(call, request.call_args_list[0])
+                self.assertEqual(request.call_args.kwargs, {
+                    "timeout_seconds": 3600, "reasoning_effort": "max",
+                })
 
     def test_deciding_vote_failure_does_not_default_to_harness_bug(self):
         responses = ["library-bug", "harness-bug"] * 2 + [triage.TriageError("request failed")]

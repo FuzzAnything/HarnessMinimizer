@@ -78,6 +78,7 @@ libmagic-2,treereduce,harness-bug
 libpcap-3,none,harness-bug
 libpcap-3,treereduce,harness-bug
 libpng-3,none,library-bug
+libpng-7,none,harness-bug
 libpng-5,none,library-bug
 libpng-4,none,library-bug
 libpng-2,none,library-bug
@@ -91,6 +92,7 @@ libpng-9,none,harness-bug
 libpng-8,treereduce,harness-bug
 libpng-7,treereduce,harness-bug
 libtiff-8,none,library-bug
+libtiff-9,none,library-bug
 libtiff-10,none,harness-bug
 libpng-9,treereduce,harness-bug
 libtiff-8,treereduce,library-bug

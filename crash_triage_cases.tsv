@@ -23,7 +23,6 @@ lcms-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
 lcms-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
 libaom-19	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
 libaom-20	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
-libaom-21	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
 libaom-22	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
 libjpeg-turbo-1	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg
 libjpeg-turbo-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
@@ -41,7 +40,6 @@ libpcap-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpcap -
 libpcap-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpcap -lnl-genl-3 -lnl-3 -ldbus-1
 libpng-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
 libpng-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
-libpng-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
 libpng-5	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
 libpng-6	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
 libpng-7	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
@@ -50,7 +48,6 @@ libpng-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lpng -lz
 libtiff-8	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-9	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ltiffxx -ljbig -ljpeg -llzma -lz
-libtiff-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-12	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-13	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-14	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz

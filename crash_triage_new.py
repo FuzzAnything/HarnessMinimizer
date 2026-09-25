@@ -41,9 +41,9 @@ LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
 LLM_RETRIES = 5
-LLM_REASONING_EFFORT = "high"
-# LLM_REASONING_EFFORT = "max"
-# Minimum votes per triage; a tie requires one additional vote.
+# LLM_REASONING_EFFORT = "high"
+LLM_REASONING_EFFORT = "max"
+# Initial vote limit; stop once a majority is secured, or add one vote if tied.
 TRIAGE_REPETITIONS = 4
 # Echo the collected stack trace to the screen before sending it to the LLM.
 PRINT_STACK_TRACE = True
@@ -891,8 +891,9 @@ def send_stack_trace_to_llm(
 
     The collected stack trace is first echoed to the screen (unless disabled
     via PRINT_STACK_TRACE) so the crash output can be verified before it
-    reaches the LLM. The prompt is then sent TRIAGE_REPETITIONS times. If the
-    votes are tied, one additional independent vote decides the majority.
+    reaches the LLM. Request up to TRIAGE_REPETITIONS votes, stopping as soon
+    as one verdict secures a majority. If the votes are tied at the limit,
+    one additional independent vote decides the majority.
     """
     if PRINT_STACK_TRACE:
         print_stack_trace(stack_trace)
@@ -903,6 +904,7 @@ def send_stack_trace_to_llm(
         stack_trace,
     )
 
+    votes_needed = TRIAGE_REPETITIONS // 2 + 1
     votes: list[str] = []
     for index in range(1, TRIAGE_REPETITIONS + 1):
         print(f"[+] Requesting triage vote {index}/{TRIAGE_REPETITIONS}", flush=True)
@@ -914,6 +916,13 @@ def send_stack_trace_to_llm(
         vote = normalize_triage_result(response)
         votes.append(vote)
         print(f"[+] Triage vote {index}: {vote}")
+        if votes.count(vote) >= votes_needed:
+            print(
+                f"[+] Majority secured: {vote} received {votes_needed} votes "
+                f"after {index} triages; stopping.",
+                flush=True,
+            )
+            return vote
 
     library_count = votes.count("library-bug")
     harness_count = votes.count("harness-bug")
@@ -983,8 +992,9 @@ def append_fifth_vote_case(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Triage a benchmark crash with one direct LLM prompt, repeated "
-            f"{TRIAGE_REPETITIONS} times plus one extra vote if tied, "
+            "Triage a benchmark crash with up to "
+            f"{TRIAGE_REPETITIONS} votes, stopping once a verdict receives "
+            f"{TRIAGE_REPETITIONS // 2 + 1} votes, with one extra vote if tied, "
             "and append the majority result to a CSV file."
         )
     )
