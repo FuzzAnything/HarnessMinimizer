@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bash run_crash_triage_parallel.sh [jobs=4] [--dry-run]
+# Usage: bash run_crash_triage_parallel_hku.sh [jobs=4] [--dry-run]
 set -euo pipefail
 
 # Change this to low, high, or max; it overrides the Python default.
@@ -9,13 +9,13 @@ HR_TRIAGE_JOBS=${1:-4}
 export HR_TRIAGE_DRY_RUN=${2:-}
 if [[ $# -gt 2 || ! "$HR_TRIAGE_JOBS" =~ ^[1-9][0-9]*$ ||
       ( -n "$HR_TRIAGE_DRY_RUN" && "$HR_TRIAGE_DRY_RUN" != --dry-run ) ]]; then
-    printf 'Usage: bash run_crash_triage_parallel.sh [positive job count] [--dry-run]\n' >&2
+    printf 'Usage: bash run_crash_triage_parallel_hku.sh [positive job count] [--dry-run]\n' >&2
     exit 2
 fi
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-export HR_TRIAGE_CSV=${HR_TRIAGE_CSV:-crash_triage_results_new_5.3${HR_TRIAGE_REASONING_EFFORT}.csv}
-export HR_TRIAGE_LOG_DIR=${HR_TRIAGE_LOG_DIR:-triage-logs-${HR_TRIAGE_REASONING_EFFORT}/$(date +%Y%m%d-%H%M%S)-$$}
+export HR_TRIAGE_CSV=${HR_TRIAGE_CSV:-crash_triage_results_new_hku_5.3${HR_TRIAGE_REASONING_EFFORT}.csv}
+export HR_TRIAGE_LOG_DIR=${HR_TRIAGE_LOG_DIR:-triage-logs-hku-${HR_TRIAGE_REASONING_EFFORT}/$(date +%Y%m%d-%H%M%S)-$$}
 
 hr_emit_cases() {
     python3 - <<'PY'
@@ -39,9 +39,9 @@ hr_run_case() {
     local -a command
     # Keep the two tools for a benchmark sequential: both harnesses use the
     # same benchmark working directory. Different benchmarks run in parallel.
-    for tool in treereduce; do
+    for tool in none treereduce; do
         command=(
-            python3 -u crash_triage_new.py
+            python3 -u crash_triage_new_hku.py
             --tool "$tool" --dir "$benchmark"
             "--compile-flags=$compile_flags" "--link-flags=$link_flags"
             --csv "$HR_TRIAGE_CSV" --llm-reasoning-effort "$HR_TRIAGE_REASONING_EFFORT"

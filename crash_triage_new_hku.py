@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
+import http.client
 import json
 import os
 from pathlib import Path
@@ -14,30 +16,33 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 import urllib.error
 import urllib.request
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 BENCHMARK_ROOT = PROJECT_ROOT / "benchmark" / "bug"
-DEFAULT_CSV_PATH = PROJECT_ROOT / "crash_triage_results_new_5.1.csv"
+DEFAULT_CSV_PATH = PROJECT_ROOT / "crash_triage_results_new.csv"
+# Fixed audit file for cases whose initial votes require a deciding vote.
+FIFTH_VOTE_CSV_PATH = PROJECT_ROOT / "crash_triage_fifth_vote_cases_hku.csv"
 
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from harnessreducer import reducer_runner as rr  # noqa: E402
 
 
-OPENAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-# OPENAI_BASE_URL = "https://llm.shtech.org/v1"
-OPENAI_MODEL = "glm-5.1"
-# OPENAI_MODEL = "GLM-5.3"
-LLM_TIMEOUT_SECONDS = 240
+OPENAI_BASE_URL = "https://llm.shtech.org/v1"
+OPENAI_MODEL = "GLM-5.3"
+# Timeout for a blocking network operation, not the total generation time.
+# Streaming requests can run longer while the provider keeps sending data.
+LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
-LLM_RETRIES = 5
-# LLM_REASONING_EFFORT = "high"
-LLM_REASONING_EFFORT = "xhigh"
-TRIAGE_REPETITIONS = 3
+# Retries after the initial request, per vote (10 retries = 11 attempts).
+LLM_RETRIES = 10
+LLM_REASONING_EFFORT = "max"
+# Initial vote limit; stop once a majority is secured, or add one vote if tied.
+TRIAGE_REPETITIONS = 10
 # Echo the collected stack trace to the screen before sending it to the LLM.
 PRINT_STACK_TRACE = True
 # PRINT_STACK_TRACE = False
@@ -49,7 +54,7 @@ TRIM_LARGE_VALUES_HEADER_INITIALIZERS = True
 
 # Any {...} initializer larger than this many characters is replaced in the
 # LLM prompt with a short placeholder.
-MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 8_000
+MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 500
 # MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 20_000
 
 
@@ -98,6 +103,10 @@ TRIAGE_RULES = r"""
 
 class TriageError(RuntimeError):
     """Raised when the triage script cannot prepare or parse a run."""
+
+
+class IncompleteLLMResponse(TriageError):
+    """An empty or disconnected response to retry, never use as a verdict."""
 
 
 def format_command(command: Sequence[str]) -> str:
@@ -507,14 +516,13 @@ def run_harness_for_stack_trace(
 def llm_configuration() -> tuple[str, str, str]:
     base_url = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
     model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
-    api_key = os.environ.get("GLM_API_KEY", "").strip()
-    # api_key = os.environ.get("HKU_API_KEY", "").strip()
+    api_key = os.environ.get("HKU_API_KEY", "").strip()
     if not base_url:
         raise TriageError("OPENAI_BASE_URL is empty.")
     if not model:
         raise TriageError("OPENAI_MODEL is empty.")
     if not api_key:
-        raise TriageError("GLM_API_KEY is empty. Export GLM_API_KEY before running.")
+        raise TriageError("HKU_API_KEY is empty. Export HKU_API_KEY before running.")
     return base_url, model, api_key
 
 
@@ -525,41 +533,149 @@ def chat_completions_endpoint(base_url: str) -> str:
     return normalized + "/chat/completions"
 
 
-def post_chat_completion(messages: list[dict[str, str]]) -> str:
+def iter_sse_data(lines: Iterable[bytes]) -> Iterator[str]:
+    """Read SSE data events, including comments and multi-line JSON payloads."""
+    data: list[str] = []
+    for raw_line in lines:
+        line = raw_line.decode("utf-8").rstrip("\r\n")
+        if not line:
+            if data:
+                yield "\n".join(data)
+                data.clear()
+        elif line.startswith("data:"):
+            value = line[5:]
+            data.append(value[1:] if value.startswith(" ") else value)
+
+
+def completed_llm_content(content: Any, finish_reason: Any) -> str:
+    if finish_reason == "network_error":
+        raise IncompleteLLMResponse("The provider ended generation with network_error.")
+    if finish_reason not in {None, "stop"}:
+        raise TriageError(
+            f"LLM stopped with finish_reason={finish_reason!r}; "
+            "refusing to classify a possibly incomplete answer."
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise IncompleteLLMResponse("The LLM returned no final answer text.")
+    return content.strip()
+
+
+def read_streamed_chat_completion(
+    response: Iterable[bytes],
+    started_at: float,
+) -> str:
+    parts: list[str] = []
+    reasoning_chars = 0
+    answer_chars = 0
+    last_progress: float | None = None
+    finish_reason = None
+    completed = False
+    for data in iter_sse_data(response):
+        if data.strip() == "[DONE]":
+            completed = True
+            break
+        chunk = json.loads(data)
+        if "error" in chunk:
+            raise TriageError(f"LLM stream error: {chunk['error']}")
+        choices = chunk.get("choices")
+        if not choices:
+            continue  # Usage-only events and heartbeats have no answer text.
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_chars += len(reasoning)
+        content = delta.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+            answer_chars += len(content)
+
+        now = time.monotonic()
+        if (reasoning_chars or answer_chars) and (
+            last_progress is None or now - last_progress >= 30
+        ):
+            print(
+                f"[+] LLM streaming after {now - started_at:.0f}s: "
+                f"{reasoning_chars} reasoning characters, "
+                f"{answer_chars} answer characters received",
+                flush=True,
+            )
+            last_progress = now
+
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None:
+            completed = True
+            break
+
+    if not completed:
+        raise IncompleteLLMResponse(
+            "LLM stream disconnected before completion "
+            f"({reasoning_chars} reasoning characters, {answer_chars} answer "
+            "characters received); discarding the partial answer."
+        )
+    # Reasoning chunks keep the connection active but must not become verdicts.
+    return completed_llm_content("".join(parts), finish_reason)
+
+
+def post_chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    timeout_seconds: int = LLM_TIMEOUT_SECONDS,
+    reasoning_effort: str = LLM_REASONING_EFFORT,
+) -> str:
     base_url, model, api_key = llm_configuration()
     payload = {
         "model": model,
         "messages": messages,
         "temperature": LLM_TEMPERATURE,
         "top_p": LLM_TOP_P,
-        "stream": False,
+        "stream": True,
         "thinking": {"type": "enabled"},
-        "reasoning_effort": LLM_REASONING_EFFORT,
+        "reasoning_effort": reasoning_effort,
     }
     encoded_payload = json.dumps(payload).encode("utf-8")
     endpoint = chat_completions_endpoint(base_url)
     last_error: Exception | None = None
+    max_attempts = LLM_RETRIES + 1
 
-    for attempt in range(1, LLM_RETRIES + 1):
+    for attempt in range(1, max_attempts + 1):
+        started_at = time.monotonic()
+        print(
+            f"[+] LLM attempt {attempt}/{max_attempts}: model={model}, "
+            f"reasoning={reasoning_effort}, network timeout={timeout_seconds}s",
+            flush=True,
+        )
         request = urllib.request.Request(
             endpoint,
             data=encoded_payload,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "Accept": "text/event-stream",
             },
             method="POST",
         )
         try:
             with urllib.request.urlopen(
                 request,
-                timeout=LLM_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             ) as response:
-                parsed = json.loads(response.read().decode("utf-8"))
-            content = parsed["choices"][0]["message"]["content"]
-            if not isinstance(content, str):
-                raise TriageError(f"Unexpected LLM content: {content!r}")
-            return content.strip()
+                if response.headers.get_content_type() == "application/json":
+                    # Some compatible gateways ignore the streaming request.
+                    parsed = json.loads(response.read().decode("utf-8"))
+                    if "error" in parsed:
+                        raise TriageError(f"LLM response error: {parsed['error']}")
+                    choice = parsed["choices"][0]
+                    content = completed_llm_content(
+                        choice["message"]["content"], choice.get("finish_reason")
+                    )
+                else:
+                    content = read_streamed_chat_completion(response, started_at)
+            print(
+                f"[+] LLM answer completed in {time.monotonic() - started_at:.1f}s",
+                flush=True,
+            )
+            return content
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             last_error = RuntimeError(f"LLM HTTP {exc.code}: {detail}")
@@ -570,14 +686,26 @@ def post_chat_completion(messages: list[dict[str, str]]) -> str:
             IndexError,
             TypeError,
             json.JSONDecodeError,
+            UnicodeDecodeError,
             urllib.error.URLError,
             TimeoutError,
+            ConnectionError,
+            http.client.HTTPException,
+            IncompleteLLMResponse,
         ) as exc:
             last_error = exc
-        if attempt < LLM_RETRIES:
+        print(
+            f"[-] LLM attempt {attempt}/{max_attempts} failed after "
+            f"{time.monotonic() - started_at:.1f}s: "
+            f"{type(last_error).__name__}: {last_error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        if attempt < max_attempts:
             time.sleep(min(2**attempt, 10))
     raise TriageError(
-        f"LLM request failed after {LLM_RETRIES} attempts: {last_error}"
+        f"LLM request failed after {attempt} attempt(s): "
+        f"{type(last_error).__name__}: {last_error}"
     )
 
 
@@ -687,8 +815,8 @@ def build_prompt(
     stack_trace: str,
 ) -> list[dict[str, str]]:
     system_prompt = (
-        "You are a C/C++ fuzzing crash triage assistant. "
-        "Use only the supplied harness source, optional generated fuzz value "
+        "You are a C/C++ fuzzing crash triage assistant. You are an expert in analyzing fuzzing harnesses, generated fuzz values, and stack traces and determining whether a crash is due to a bug in the harness or the target library. "
+        "You are provided with the harness source code, optional generated fuzz value "
         "header, stack trace, and decision rules. "
         "Apply the rules, then state the verdict. "
         "OUTPUT FORMAT (mandatory): your reply must end with a final line "
@@ -732,6 +860,8 @@ def build_prompt(
 def majority_vote(votes: list[str]) -> str:
     library_count = votes.count("library-bug")
     harness_count = votes.count("harness-bug")
+    if library_count == harness_count:
+        raise TriageError("Triage votes are tied; an additional vote is required.")
     return "library-bug" if library_count > harness_count else "harness-bug"
 
 
@@ -749,13 +879,19 @@ def send_stack_trace_to_llm(
     harness_source: str,
     values_header_source: str | None,
     stack_trace: str,
+    *,
+    benchmark_name: str,
+    tool: str,
+    llm_timeout_seconds: int = LLM_TIMEOUT_SECONDS,
+    reasoning_effort: str = LLM_REASONING_EFFORT,
 ) -> str:
     """Send the stack trace to the LLM as part of the triage prompt.
 
     The collected stack trace is first echoed to the screen (unless disabled
     via PRINT_STACK_TRACE) so the crash output can be verified before it
-    reaches the LLM. The prompt is then sent TRIAGE_REPETITIONS times and the
-    majority verdict is returned.
+    reaches the LLM. Request up to TRIAGE_REPETITIONS votes, stopping as soon
+    as one verdict secures a majority. If the votes are tied at the limit,
+    one additional independent vote decides the majority.
     """
     if PRINT_STACK_TRACE:
         print_stack_trace(stack_trace)
@@ -766,13 +902,63 @@ def send_stack_trace_to_llm(
         stack_trace,
     )
 
+    votes_needed = TRIAGE_REPETITIONS // 2 + 1
     votes: list[str] = []
     for index in range(1, TRIAGE_REPETITIONS + 1):
-        response = post_chat_completion(prompt)
+        print(f"[+] Requesting triage vote {index}/{TRIAGE_REPETITIONS}", flush=True)
+        response = post_chat_completion(
+            prompt,
+            timeout_seconds=llm_timeout_seconds,
+            reasoning_effort=reasoning_effort,
+        )
+        vote = normalize_triage_result(response)
+        votes.append(vote)
+        print(f"[+] Triage vote {index}: {vote}")
+        if votes.count(vote) >= votes_needed:
+            print(
+                f"[+] Majority secured: {vote} received {votes_needed} votes "
+                f"after {index} triages; stopping.",
+                flush=True,
+            )
+            return vote
+
+    library_count = votes.count("library-bug")
+    harness_count = votes.count("harness-bug")
+    if library_count == harness_count:
+        # Record the need for an extra vote even if that request later fails.
+        append_fifth_vote_case(benchmark_name, tool, library_count, harness_count)
+        index = len(votes) + 1
+        print(
+            f"[+] Triage votes tied {library_count}-{harness_count}; "
+            f"requesting deciding vote {index}",
+            flush=True,
+        )
+        response = post_chat_completion(
+            prompt,
+            timeout_seconds=llm_timeout_seconds,
+            reasoning_effort=reasoning_effort,
+        )
         vote = normalize_triage_result(response)
         votes.append(vote)
         print(f"[+] Triage vote {index}: {vote}")
     return majority_vote(votes)
+
+
+def append_locked_csv_row(
+    csv_path: Path,
+    header: Sequence[str],
+    row: Sequence[object],
+) -> None:
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("a", newline="", encoding="utf-8") as handle:
+        # Hold the lock through close/flush so parallel jobs share one header
+        # and append complete rows. Compilation and LLM requests stay parallel.
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        write_header = os.fstat(handle.fileno()).st_size == 0
+        writer = csv.writer(handle)
+        if write_header:
+            writer.writerow(header)
+        writer.writerow(row)
 
 
 def append_csv_row(
@@ -781,20 +967,33 @@ def append_csv_row(
     tool: str,
     result: str,
 ) -> None:
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not csv_path.exists() or csv_path.stat().st_size == 0
-    with csv_path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        if write_header:
-            writer.writerow(["dir", "tool", "triage result"])
-        writer.writerow([benchmark_name, tool, result])
+    append_locked_csv_row(
+        csv_path,
+        ["dir", "tool", "triage result"],
+        [benchmark_name, tool, result],
+    )
+
+
+def append_fifth_vote_case(
+    benchmark_name: str,
+    tool: str,
+    library_votes: int,
+    harness_votes: int,
+) -> None:
+    append_locked_csv_row(
+        FIFTH_VOTE_CSV_PATH,
+        ["dir", "tool", "library_votes", "harness_votes"],
+        [benchmark_name, tool, library_votes, harness_votes],
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Triage a benchmark crash with one direct LLM prompt, repeated three "
-            "times, and append the majority result to a CSV file."
+            "Triage a benchmark crash with up to "
+            f"{TRIAGE_REPETITIONS} votes, stopping once a verdict receives "
+            f"{TRIAGE_REPETITIONS // 2 + 1} votes, with one extra vote if tied, "
+            "and append the majority result to a CSV file."
         )
     )
     parser.add_argument(
@@ -835,6 +1034,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=60,
         help="Timeout in seconds for the local crash run used to collect stack trace.",
     )
+    parser.add_argument(
+        "--llm-timeout",
+        type=int,
+        default=LLM_TIMEOUT_SECONDS,
+        help=(
+            "LLM network I/O timeout in seconds, not total generation time "
+            f"(default: {LLM_TIMEOUT_SECONDS}). Active streams may run longer."
+        ),
+    )
+    parser.add_argument(
+        "--llm-reasoning-effort",
+        choices=("low", "high", "max"),
+        default=LLM_REASONING_EFFORT,
+        help=f"LLM reasoning effort (default: {LLM_REASONING_EFFORT}).",
+    )
     return parser
 
 
@@ -842,6 +1056,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
+    if args.llm_timeout <= 0:
+        raise SystemExit("--llm-timeout must be positive")
 
     try:
         benchmark_dir = resolve_benchmark_dir(args.dir)
@@ -930,6 +1146,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             harness_source,
             values_header_source,
             stack_trace,
+            benchmark_name=benchmark_dir.name,
+            tool=csv_tool,
+            llm_timeout_seconds=args.llm_timeout,
+            reasoning_effort=args.llm_reasoning_effort,
         )
 
         csv_path = Path(args.csv).expanduser().resolve()

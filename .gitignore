@@ -55,7 +55,7 @@ dictionary/
 corpus/
 dummy*
 library-bug-cdd-results.tar.gz
-triage-logs/
+triage-logs*/
 unused-benchmark/
 benchmark-library-bug.tar.gz
 benchmark-harness-bug.tar.gz

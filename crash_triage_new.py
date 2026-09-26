@@ -32,7 +32,6 @@ from harnessreducer import reducer_runner as rr  # noqa: E402
 
 
 OPENAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-# OPENAI_BASE_URL = "https://llm.shtech.org/v1"
 OPENAI_MODEL = "glm-5.3"
 # OPENAI_MODEL = "GLM-5.3"
 # Timeout for a blocking network operation, not the total generation time.
@@ -41,8 +40,7 @@ LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
 LLM_RETRIES = 5
-# LLM_REASONING_EFFORT = "high"
-LLM_REASONING_EFFORT = "max"
+LLM_REASONING_EFFORT = "high"
 # Initial vote limit; stop once a majority is secured, or add one vote if tied.
 TRIAGE_REPETITIONS = 4
 # Echo the collected stack trace to the screen before sending it to the LLM.
@@ -56,7 +54,7 @@ TRIM_LARGE_VALUES_HEADER_INITIALIZERS = True
 
 # Any {...} initializer larger than this many characters is replaced in the
 # LLM prompt with a short placeholder.
-MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 2_000
+MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 500
 # MAX_LLM_VALUES_HEADER_INITIALIZER_CHARS = 20_000
 
 
@@ -519,7 +517,6 @@ def llm_configuration() -> tuple[str, str, str]:
     base_url = os.environ.get("OPENAI_BASE_URL", OPENAI_BASE_URL).strip()
     model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL).strip()
     api_key = os.environ.get("GLM_API_KEY", "").strip()
-    # api_key = os.environ.get("HKU_API_KEY", "").strip()
     if not base_url:
         raise TriageError("OPENAI_BASE_URL is empty.")
     if not model:
@@ -1049,7 +1046,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-reasoning-effort",
         choices=("low", "high", "max"),
         default=LLM_REASONING_EFFORT,
-        help=f"GLM reasoning effort (default: {LLM_REASONING_EFFORT}).",
+        help=f"LLM reasoning effort (default: {LLM_REASONING_EFFORT}).",
     )
     return parser
 
