@@ -154,6 +154,7 @@ pugixml-10,treereduce,harness-bug
 pugixml-11,none,harness-bug
 pugixml-11,treereduce,harness-bug
 pugixml-7,none,harness-bug
+pugixml-8,none,harness-bug
 pugixml-6,treereduce,harness-bug
 re2-3,none,harness-bug
 re2-2,none,harness-bug
@@ -184,4 +185,5 @@ zlib-2,treereduce,harness-bug
 tinygltf-1,none,harness-bug
 tinygltf-2,treereduce,harness-bug
 tinygltf-3,treereduce,harness-bug
+zlib-4,none,library-bug
 zlib-4,treereduce,harness-bug
