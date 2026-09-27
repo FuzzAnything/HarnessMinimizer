@@ -127,16 +127,13 @@ libaom-22,treereduce,harness-bug
 libaom-22,cdd,library-bug
 curl-2,cdd,library-bug
 lcms-7,cdd,harness-bug
-libjpeg-turbo-1,none,library-bug
 lcms-6,cdd,harness-bug
 libjpeg-turbo-2,cdd,harness-bug
 cjson-5,cdd,harness-bug
 libjpeg-turbo-4,cdd,library-bug
 liblouis-8,cdd,library-bug
-libjpeg-turbo-1,treereduce,library-bug
 liblouis-14,cdd,library-bug
 lcms-10,treereduce,harness-bug
-libjpeg-turbo-1,cdd,library-bug
 libjpeg-turbo-3,cdd,library-bug
 lcms-11,treereduce,library-bug
 libjpeg-turbo-5,cdd,library-bug

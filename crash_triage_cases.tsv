@@ -24,7 +24,6 @@ lcms-11	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -llcms2
 libaom-19	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
 libaom-20	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
 libaom-22	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -laom
-libjpeg-turbo-1	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg
 libjpeg-turbo-2	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
 libjpeg-turbo-3	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
 libjpeg-turbo-4	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ljpeg -lturbojpeg
@@ -51,6 +50,7 @@ libtiff-10	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff 
 libtiff-12	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-13	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libtiff-14	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
+libtiff-15	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -ltiff -ljbig -ljpeg -llzma -lz
 libvpx-27	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
 libvpx-28	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
 libvpx-29	-I$(pwd)/build/sanitizer/include	-L$(pwd)/build/sanitizer/lib -lvpx
