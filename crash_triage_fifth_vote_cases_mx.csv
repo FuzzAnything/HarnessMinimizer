@@ -1,8 +1,0 @@
-dir,tool,library_votes,harness_votes
-curl-2,treereduce,2,2
-libjpeg-turbo-3,none,2,2
-libjpeg-turbo-4,treereduce,2,2
-liblouis-15,none,2,2
-libvpx-28,none,2,2
-libvpx-33,treereduce,2,2
-tinygltf-3,treereduce,2,2
