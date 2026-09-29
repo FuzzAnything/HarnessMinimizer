@@ -17,6 +17,8 @@ def answer(verdict):
 
 class CrashTriageHKURetryTests(unittest.TestCase):
     def setUp(self):
+        # Exercise a fixed budget independently of the user's script setting.
+        self.enterContext(patch.object(triage, "LLM_RETRIES", 10))
         self.output = io.StringIO()
         self.errors = io.StringIO()
         self.enterContext(redirect_stdout(self.output))

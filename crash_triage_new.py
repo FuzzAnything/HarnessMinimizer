@@ -40,9 +40,9 @@ LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
 LLM_RETRIES = 5
-LLM_REASONING_EFFORT = "high"
+LLM_REASONING_EFFORT = "max"
 # Initial vote limit; stop once a majority is secured, or add one vote if tied.
-TRIAGE_REPETITIONS = 4
+TRIAGE_REPETITIONS = 10
 # Echo the collected stack trace to the screen before sending it to the LLM.
 PRINT_STACK_TRACE = True
 # PRINT_STACK_TRACE = False
