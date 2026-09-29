@@ -89,7 +89,7 @@ def benchmark_dir(value: str) -> Path:
 
 
 def default_python() -> str:
-    venv_python = PROJECT_ROOT / ".venv-host" / "bin" / "python"
+    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
     if venv_python.is_file():
         return str(venv_python)
     return sys.executable
@@ -138,11 +138,26 @@ def token_reduction_percent(
     return 100.0 * (1.0 - (final_tokens / original_tokens))
 
 
-def source_metrics(original_path: Path, reduced_path: Path) -> dict[str, object]:
+def source_metrics(
+    original_path: Path,
+    reduced_path: Path,
+    pre_inline_path: Path | None = None,
+) -> dict[str, object]:
     original_tokens = count_source_tokens(original_path)
-    final_tokens = count_source_tokens(reduced_path)
+    counted_reduced_path = (
+        pre_inline_path
+        if pre_inline_path is not None and pre_inline_path.is_file()
+        else reduced_path
+    )
+    final_tokens = count_source_tokens(counted_reduced_path)
     return {
         "token_count_method": SOURCE_TOKEN_COUNT_METHOD,
+        "reduced_token_source": (
+            "pre_inline_reduced_harness"
+            if counted_reduced_path == pre_inline_path
+            else "final_output"
+        ),
+        "reduced_token_source_path": str(counted_reduced_path),
         "original_tokens": original_tokens,
         "final_tokens": final_tokens,
         "token_reduction_percent": token_reduction_percent(
@@ -272,7 +287,11 @@ def run_case(
     )
 
     total_checks = profiled_checks(job_dir / "reduction_profile.json")
-    source_reduction = source_metrics(harness_path, output_path)
+    source_reduction = source_metrics(
+        harness_path,
+        output_path,
+        work_dir / "reduced_harness.cpp",
+    )
     source_reduction_path = job_dir / "source_reduction_metrics.json"
     source_reduction_path.write_text(
         json.dumps(source_reduction, indent=2, sort_keys=True) + "\n",
