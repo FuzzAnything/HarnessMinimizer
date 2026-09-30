@@ -38,9 +38,11 @@ OPENAI_MODEL = "GLM-5.3"
 LLM_TIMEOUT_SECONDS = 3_600  # One hour.
 LLM_TEMPERATURE = 0.3
 LLM_TOP_P = 0.95
-# Retries after the initial request, per vote (10 retries = 11 attempts).
-LLM_RETRIES = 10
+# Retries after the initial request, per vote and reasoning effort.
+LLM_RETRIES = 0
 LLM_REASONING_EFFORT = "max"
+# Applied only to cases started at high, once a vote exhausts its retries.
+LLM_FALLBACK_REASONING_EFFORT = "low"
 # Initial vote limit; stop once a majority is secured, or add one vote if tied.
 TRIAGE_REPETITIONS = 10
 # Echo the collected stack trace to the screen before sending it to the LLM.
@@ -107,6 +109,10 @@ class TriageError(RuntimeError):
 
 class IncompleteLLMResponse(TriageError):
     """An empty or disconnected response to retry, never use as a verdict."""
+
+
+class LLMRetriesExhausted(TriageError):
+    """All attempts for a retryable LLM failure have been used."""
 
 
 def format_command(command: Sequence[str]) -> str:
@@ -637,6 +643,7 @@ def post_chat_completion(
     endpoint = chat_completions_endpoint(base_url)
     last_error: Exception | None = None
     max_attempts = LLM_RETRIES + 1
+    failure_type = LLMRetriesExhausted
 
     for attempt in range(1, max_attempts + 1):
         started_at = time.monotonic()
@@ -680,6 +687,7 @@ def post_chat_completion(
             detail = exc.read().decode("utf-8", errors="replace")
             last_error = RuntimeError(f"LLM HTTP {exc.code}: {detail}")
             if exc.code not in {408, 409, 429, 500, 502, 503, 504}:
+                failure_type = TriageError
                 break
         except (
             KeyError,
@@ -703,7 +711,7 @@ def post_chat_completion(
         )
         if attempt < max_attempts:
             time.sleep(min(2**attempt, 10))
-    raise TriageError(
+    raise failure_type(
         f"LLM request failed after {attempt} attempt(s): "
         f"{type(last_error).__name__}: {last_error}"
     )
@@ -891,7 +899,9 @@ def send_stack_trace_to_llm(
     via PRINT_STACK_TRACE) so the crash output can be verified before it
     reaches the LLM. Request up to TRIAGE_REPETITIONS votes, stopping as soon
     as one verdict secures a majority. If the votes are tied at the limit,
-    one additional independent vote decides the majority.
+    one additional independent vote decides the majority. If a high-effort
+    vote exhausts its retries, retry it at the fallback effort and keep that
+    effort for this case's remaining votes. Completed votes are preserved.
     """
     if PRINT_STACK_TRACE:
         print_stack_trace(stack_trace)
@@ -904,13 +914,37 @@ def send_stack_trace_to_llm(
 
     votes_needed = TRIAGE_REPETITIONS // 2 + 1
     votes: list[str] = []
+    active_reasoning_effort = reasoning_effort
+
+    def request_vote_response() -> str:
+        nonlocal active_reasoning_effort
+        try:
+            return post_chat_completion(
+                prompt,
+                timeout_seconds=llm_timeout_seconds,
+                reasoning_effort=active_reasoning_effort,
+            )
+        except LLMRetriesExhausted:
+            if active_reasoning_effort != "high":
+                raise
+            active_reasoning_effort = LLM_FALLBACK_REASONING_EFFORT
+            print(
+                f"[+] Reasoning fallback for {benchmark_name}/{tool}: high -> "
+                f"{active_reasoning_effort} after retry exhaustion; retrying vote "
+                f"{len(votes) + 1} with {LLM_RETRIES + 1} attempts. "
+                f"Keeping {len(votes)} completed vote(s); using "
+                f"{active_reasoning_effort} for the rest of this case.",
+                flush=True,
+            )
+            return post_chat_completion(
+                prompt,
+                timeout_seconds=llm_timeout_seconds,
+                reasoning_effort=active_reasoning_effort,
+            )
+
     for index in range(1, TRIAGE_REPETITIONS + 1):
         print(f"[+] Requesting triage vote {index}/{TRIAGE_REPETITIONS}", flush=True)
-        response = post_chat_completion(
-            prompt,
-            timeout_seconds=llm_timeout_seconds,
-            reasoning_effort=reasoning_effort,
-        )
+        response = request_vote_response()
         vote = normalize_triage_result(response)
         votes.append(vote)
         print(f"[+] Triage vote {index}: {vote}")
@@ -933,11 +967,7 @@ def send_stack_trace_to_llm(
             f"requesting deciding vote {index}",
             flush=True,
         )
-        response = post_chat_completion(
-            prompt,
-            timeout_seconds=llm_timeout_seconds,
-            reasoning_effort=reasoning_effort,
-        )
+        response = request_vote_response()
         vote = normalize_triage_result(response)
         votes.append(vote)
         print(f"[+] Triage vote {index}: {vote}")
@@ -1045,9 +1075,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--llm-reasoning-effort",
-        choices=("low", "high", "max"),
+        choices=("low", "medium", "high", "max"),
         default=LLM_REASONING_EFFORT,
-        help=f"LLM reasoning effort (default: {LLM_REASONING_EFFORT}).",
+        help=(
+            f"Initial LLM reasoning effort (default: {LLM_REASONING_EFFORT}). "
+            f"High falls back to {LLM_FALLBACK_REASONING_EFFORT} for the current "
+            "case after exhausting retries."
+        ),
     )
     return parser
 

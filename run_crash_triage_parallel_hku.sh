@@ -5,7 +5,7 @@ set -euo pipefail
 # Change this to low, high, or max; it overrides the Python default.
 export HR_TRIAGE_REASONING_EFFORT=high
 # Run these tools sequentially for each benchmark.
-export HR_TRIAGE_TOOLS="none treereduce cdd"
+export HR_TRIAGE_TOOLS="none treereduce cdd wdd perses"
 
 HR_TRIAGE_JOBS=${1:-4}
 if [[ $# -gt 0 ]]; then shift; fi
