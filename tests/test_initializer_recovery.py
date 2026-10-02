@@ -9,6 +9,7 @@ from harnessreducer.api import PostReductionOutcome
 from harnessreducer.initializer_analysis import InitializationDiagnosis, analyze_uninitialized
 from harnessreducer import reducer_runner as runner
 from harnessreducer.reduction_profile import write_profile_summary
+from harnessreducer.reduction_engines import raw_reducer_output_path
 
 
 @pytest.fixture
@@ -85,16 +86,23 @@ def test_one_retry_and_pooled_metrics_preserve_first_attempt(work, monkeypatch, 
             assert source == str(work)
             result.write_text("void f(){int value; consume(value);}\n")
             profile(root, [event(0, 200_000_000), event(0, 9_000_000_000, False)], 2_000_000_000)
-            return PostReductionOutcome(str(result), validated=False, stage=stage)
+            raw_reducer_output_path(result).write_text("int first_raw;")
+            return PostReductionOutcome(str(result), validated=False, stage=stage,
+                                        raw_reduced_harness=str(raw_reducer_output_path(result)))
         assert source != str(work) and root != work.parent
         assert protection.restore(Path(source).read_text()) == source_before
         assert (root / "poc.out").read_bytes() == b"reference executable"
         assert (root / "crash_pattern.symbolize0").read_text() == "same-reference"
         result.write_text(source_before)
         profile(root, [event(4_000_000_000, 300_000_000) for _ in range(3)], 3_000_000_000)
-        return PostReductionOutcome(str(result), validated=retry_succeeds)
+        raw_reducer_output_path(result).write_text("int protected_raw;")
+        return PostReductionOutcome(str(result), validated=retry_succeeds,
+                                    raw_reduced_harness=str(raw_reducer_output_path(result)))
     result = invoke(work, attempt)
     assert result.validated is retry_succeeds
+    assert Path(result.raw_reduced_harness).read_text() == "int protected_raw;"
+    assert Path(result.raw_reduced_harness).parent != work.parent
+    assert (work.parent / "reduced.raw.cpp").read_text() == "int first_raw;"
     assert len(calls) == 2 and len(diagnosis_calls) == 1
     assert runner.get_work_dir() == str(work.parent)
     assert work.read_text() == source_before
@@ -139,9 +147,12 @@ def test_retry_exception_restores_work_dir_and_retains_profile(work, monkeypatch
         if protection is not None:
             raise RuntimeError("synthetic reducer failure")
         profile(work.parent, [event(0, 200)], 1_000_000_000)
-        return PostReductionOutcome(source, validated=False)
+        raw_reducer_output_path(source).write_text("int first_raw;")
+        return PostReductionOutcome(source, validated=False,
+                                    raw_reduced_harness=str(raw_reducer_output_path(source)))
     result = invoke(work, attempt)
     assert not result.validated
+    assert Path(result.raw_reduced_harness).read_text() == "int first_raw;"
     assert runner.get_work_dir() == str(work.parent)
     summary = json.loads((work.parent / "reduction_profile.json").read_text())
     assert summary["reducer"]["profiled_checks"] == 1
@@ -180,9 +191,17 @@ def test_analyzer_timeout_is_not_an_initialization_diagnostic(tmp_path, monkeypa
 @pytest.mark.parametrize("symbolize", [False, True])
 @pytest.mark.parametrize("mode,plugin", [("split", False), ("pch", True)])
 @pytest.mark.parametrize("retry_succeeds", [True, False])
-def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds):
+@pytest.mark.parametrize("capture_raw,fail_capture", [(False, False), (True, False), (True, True)])
+def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds, capture_raw, fail_capture):
     """Exercise API orchestration with a harmless synthetic source and no execution."""
     from harnessreducer import api
+    if fail_capture:
+        original_replace = Path.replace
+        def fail_raw_replace(path, target):
+            if str(target).endswith(".raw.cpp"):
+                raise OSError("synthetic capture failure")
+            return original_replace(path, target)
+        monkeypatch.setattr(Path, "replace", fail_raw_replace)
     source = tmp_path / "harness.cpp"
     original = (
         "#include <cstdint>\n#include <cstddef>\n"
@@ -220,6 +239,10 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
         else:
             assert "HR_KEEP_INIT_" in text
         output.write_text(text)
+        if capture_raw:
+            kwargs["raw_output_capture"].capture(output, output)
+        else:
+            assert "raw_output_capture" not in kwargs
         return str(output)
     monkeypatch.setattr(api, "run_treereducer", reduce)
     # The analyzer's command/diagnostic filtering is tested separately with Clang;
@@ -230,8 +253,15 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
         str(source), crash_input=str(seed), work_dir=str(tmp_path / "work"),
         tool="wdd", jobs=2, stable=True, symbolize=symbolize, phase3_mode=mode,
         amortize_link=plugin, protect_initializers=True,
+        capture_raw_output=capture_raw,
     ))
     assert result.success is retry_succeeds
+    if capture_raw and not fail_capture:
+        assert "attempt-2-protected" in result.raw_reduced_harness
+        assert "HR_KEEP_INIT_" in Path(result.raw_reduced_harness).read_text()
+    else:
+        assert result.raw_reduced_harness is None
+        assert not list((tmp_path / "work").rglob("*.raw.cpp"))
     assert len(reductions) == 2
     assert len(validations) == (3 if retry_succeeds else 4)
     assert all(trace is None for _, trace in validations)

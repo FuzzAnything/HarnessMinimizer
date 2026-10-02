@@ -1,183 +1,121 @@
 #!/usr/bin/env python3
-"""Run HarnessReducer performance sweeps for optimized and split-symbolize modes."""
-
+"""Evaluate both TSV datasets serially and generate reports for a fresh batch."""
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import datetime
-import json
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from harnessreducer.evaluation_metrics import (
+    EVALUATION_FORMAT, MEASUREMENT_STAGE, SOURCE_TOKEN_COUNT_METHOD,
+    finite_number, measure_run, read_json, write_json,
+)
 from harnessreducer.process_supervisor import run_supervised
 from harnessreducer.reduction_engines import TOOL_CHOICES
 
-DEFAULT_JOBS = (1, 2, 4, 8, 16, 32, 60)
-LATEST_MARKER_NAME = "latest_harnessreducer_perf_run.txt"
-TOOL_MARKER_TEMPLATE = "latest_harnessreducer_perf_run_{tool}.txt"
-SOURCE_TOKEN_COUNT_METHOD = "cpp_like_regex_v1"
-SOURCE_TOKEN_RE = re.compile(
-    r"""
-    //[^\n]*
-    | /\*.*?\*/
-    | "(?:\\.|[^"\\])*"
-    | '(?:\\.|[^'\\])*'
-    | [A-Za-z_]\w*
-    | 0[xX][0-9A-Fa-f]+
-    | \d+(?:\.\d*)?(?:[eE][+-]?\d+)?
-    | ::|->\*|->|\+\+|--|<<=|>>=|<=|>=|==|!=|&&|\|\||<<|>>|[+\-*/%&|^~!<>=?:;,.()[\]{}]
-    | \S
-    """,
-    re.DOTALL | re.VERBOSE,
-)
-
-
+ALL_TOOLS = ("treereduce", "perses", "wdd", "cdd")
+DATASETS = (("harness-bug", "harness_bug_cases.tsv"), ("library-bug", "library_bug_cases.tsv"))
 VARIANTS = (
-    {
-        "key": "optimized",
-        "directory": "optimized",
-        "label": "--pch --amortize-link, symbolize off",
-        "extra_args": ("--pch", "--amortize-link"),
-    },
-    {
-        "key": "split_symbolize",
-        "directory": "split-symbolize",
-        "label": "--split, no amortize-link, --symbolize",
-        "extra_args": ("--split", "--symbolize"),
-    },
+    ("optimized", ("--pch", "--amortize-link")),
+    ("split_symbolize", ("--split", "--symbolize")),
 )
+PLACEHOLDERS = re.compile(r"\$\(pwd\)|\$\{PWD\}|\$PWD\b|\{bench_dir\}")
 
 
-def parse_jobs(value: str) -> list[int]:
-    jobs: list[int] = []
-    for item in value.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            job = int(item)
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"invalid job count: {item!r}") from exc
-        if not 1 <= job <= 63:
-            raise argparse.ArgumentTypeError("job counts must be between 1 and 63")
-        if job not in jobs:
-            jobs.append(job)
-    if not jobs:
-        raise argparse.ArgumentTypeError("at least one job count is required")
-    return jobs
-
-
-def benchmark_dir(value: str) -> Path:
-    raw = Path(value).expanduser()
-    if raw.exists():
-        return raw.resolve()
-    candidate = PROJECT_ROOT / "benchmark" / "library-bug" / value
-    if candidate.exists():
-        return candidate.resolve()
-    raise SystemExit(
-        f"benchmark directory not found: {value!r} "
-        f"(also tried {candidate})"
-    )
+def repository_path(value: str | Path) -> Path:
+    return (PROJECT_ROOT / Path(value).expanduser()).resolve()
 
 
 def default_python() -> str:
-    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
-    if venv_python.is_file():
-        return str(venv_python)
+    for name in (".venv", ".venv-host"):
+        candidate = PROJECT_ROOT / name / "bin/python"
+        if candidate.is_file():
+            return str(candidate)
     return sys.executable
 
 
-def expand_benchmark_placeholders(value: str | None, bench_dir: Path) -> str | None:
-    if value is None:
-        return None
-    bench = str(bench_dir)
-    return (
-        value.replace("$(pwd)", bench)
-        .replace("${PWD}", bench)
-        .replace("$PWD", bench)
-        .replace("{bench_dir}", bench)
-    )
+def expand_benchmark_placeholders(value: str, bench_dir: Path) -> str:
+    # Parse quoting before substitution, then quote each expanded argument. This
+    # preserves paths containing spaces and treats shell syntax as ordinary text.
+    return shlex.join([
+        PLACEHOLDERS.sub(lambda _: str(bench_dir), token)
+        for token in shlex.split(value)
+    ])
 
 
-def shell_command(command: list[str]) -> str:
-    return shlex.join(command)
+def load_cases() -> list[dict]:
+    cases = []
+    for dataset, filename in DATASETS:
+        path = PROJECT_ROOT / filename
+        with path.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream, delimiter="\t")
+            if reader.fieldnames != ["benchmark", "compile_flags", "link_flags"]:
+                raise ValueError(f"{path}: expected benchmark, compile_flags, link_flags TSV columns")
+            seen = set()
+            for line, row in enumerate(reader, 2):
+                name = row["benchmark"]
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(f"{path}:{line}: expected three tab-separated fields")
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+                    raise ValueError(f"{path}:{line}: invalid benchmark name {name!r}")
+                if name in seen:
+                    raise ValueError(f"{path}:{line}: duplicate benchmark {name}")
+                seen.add(name)
+                bench = (PROJECT_ROOT / "benchmark" / dataset / name).resolve()
+                for required in ("harness.cpp", "crash-input"):
+                    if not (bench / required).is_file():
+                        raise ValueError(f"Missing benchmark input: {bench / required}")
+                cases.append({
+                    "dataset": dataset, "case": name, "benchmark_dir": str(bench),
+                    "harness": str(bench / "harness.cpp"),
+                    "crash_input": str(bench / "crash-input"),
+                    "compile_flags": expand_benchmark_placeholders(row["compile_flags"], bench),
+                    "link_flags": expand_benchmark_placeholders(row["link_flags"], bench),
+                })
+            if not seen:
+                raise ValueError(f"Empty evaluation dataset: {path}")
+    return cases
 
 
-def count_source_tokens(path: Path) -> int | None:
-    """Count source tokens with a lightweight C/C++-like tokenizer.
-
-    The count is intended for consistent before/after reduction comparisons,
-    not as a full replacement for a compiler lexer.
-    """
-    if not path.is_file():
-        return None
-    text = path.read_text(encoding="utf-8", errors="replace")
-    count = 0
-    for match in SOURCE_TOKEN_RE.finditer(text):
-        token = match.group(0)
-        if token.startswith("//") or token.startswith("/*"):
-            continue
-        count += 1
-    return count
-
-
-def token_reduction_percent(
-    original_tokens: int | None,
-    final_tokens: int | None,
-) -> float | None:
-    if original_tokens is None or final_tokens is None or original_tokens <= 0:
-        return None
-    return 100.0 * (1.0 - (final_tokens / original_tokens))
-
-
-def source_metrics(
-    original_path: Path,
-    reduced_path: Path,
-    pre_inline_path: Path | None = None,
-) -> dict[str, object]:
-    original_tokens = count_source_tokens(original_path)
-    counted_reduced_path = (
-        pre_inline_path
-        if pre_inline_path is not None and pre_inline_path.is_file()
-        else reduced_path
-    )
-    final_tokens = count_source_tokens(counted_reduced_path)
-    return {
-        "token_count_method": SOURCE_TOKEN_COUNT_METHOD,
-        "reduced_token_source": (
-            "pre_inline_reduced_harness"
-            if counted_reduced_path == pre_inline_path
-            else "final_output"
-        ),
-        "reduced_token_source_path": str(counted_reduced_path),
-        "original_tokens": original_tokens,
-        "final_tokens": final_tokens,
-        "token_reduction_percent": token_reduction_percent(
-            original_tokens,
-            final_tokens,
-        ),
-    }
-
-
-def profiled_checks(profile_path: Path) -> int | None:
-    if not profile_path.is_file():
-        return None
-    try:
-        summary = json.loads(profile_path.read_text(encoding="utf-8"))
-        reducer = summary.get("reducer", {})
-        if not isinstance(reducer, dict):
-            return None
-        return int(reducer.get("profiled_checks"))  # type: ignore[arg-type]
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+def plan_runs(cases: list[dict], tools: tuple[str, ...], root: Path, python: str) -> list[dict]:
+    runs = []
+    for case in cases:
+        case_dir = Path(case["dataset"]) / case["case"]
+        for tool in tools:
+            for configuration, flags in VARIANTS:
+                run_dir = case_dir / tool / configuration
+                output = run_dir / "reduced.cpp"
+                work = run_dir / "work"
+                command = [
+                    python, "-m", "harnessreducer.cli", case["harness"], "--tool", tool,
+                    f"--compile-flags={case['compile_flags']}", f"--link-flags={case['link_flags']}",
+                    "--crash-input", case["crash_input"], "--work-dir", str(root / work),
+                    *flags, "--stable", "--profile", "--capture-raw-output", "--protect-initializers", "--jobs", "1",
+                    "-o", str(root / output),
+                ]
+                runs.append({
+                    **case, "tool": tool, "configuration": configuration, "jobs": 1,
+                    "stable": True, "protect_initializers": True, "capture_raw_output": True,
+                    "status": "planned", "command": command, "returncode": None,
+                    "original_source": str(case_dir / "harness.original.cpp"),
+                    "directory": str(run_dir), "work_dir": str(work), "output": str(output),
+                    "raw_reduced_harness": str(run_dir / "reduced.raw.cpp"),
+                    "profile": str(run_dir / "reduction_profile.json"),
+                    "candidate_profile": str(run_dir / "candidate_profile.jsonl"),
+                    "log": str(run_dir / "command.log"),
+                    "run_info": str(run_dir / "run_info.json"),
+                })
+    return runs
 
 
 def reference_stability_wall_seconds(work_dir: Path) -> float:
@@ -185,339 +123,130 @@ def reference_stability_wall_seconds(work_dir: Path) -> float:
     if not path.is_file():
         return 0.0
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, json.JSONDecodeError):
+        value = finite_number(read_json(path).get("total_wall_seconds"))
+        return max(0.0, value or 0.0)
+    except (OSError, ValueError):
         return 0.0
-    try:
-        value = float(data.get("total_wall_seconds", 0.0))  # type: ignore[union-attr]
-    except (AttributeError, TypeError, ValueError):
-        return 0.0
-    return max(0.0, value)
 
 
-def run_case(
-    *,
-    python_executable: str,
-    bench_dir: Path,
-    harness_path: Path,
-    harness: str,
-    crash_input: str,
-    compile_flags: str,
-    link_flags: str,
-    variant: dict[str, object],
-    job: int,
-    job_dir: Path,
-    stable: bool,
-    tool: str = "treereduce",
-    auto_var_init_pattern: bool = False,
-) -> dict[str, object]:
-    work_dir = job_dir / "work"
-    output_path = job_dir / "reduced.cpp"
-    job_dir.mkdir(parents=True, exist_ok=False)
-
-    extra_args = [str(arg) for arg in variant["extra_args"]]  # type: ignore[index]
-    if stable:
-        extra_args.append("--stable")
-
-    command = [
-        python_executable,
-        "-m",
-        "harnessreducer.cli",
-        harness,
-        "--tool",
-        tool,
-        f"--compile-flags={compile_flags}",
-        f"--link-flags={link_flags}",
-        "--work-dir",
-        str(work_dir),
-        "--crash-input",
-        crash_input,
-        *extra_args,
-        "--protect-initializers",
-        *(["--auto-var-init-pattern"] if auto_var_init_pattern else []),
-        "--profile",
-        "--jobs",
-        str(job),
-        "-o",
-        str(output_path),
-    ]
-
+def run_case(root: Path, run: dict) -> None:
+    directory = root / run["directory"]
+    directory.mkdir(parents=True, exist_ok=False)
+    original = root / run["original_source"]
+    if not original.exists():
+        shutil.copyfile(run["harness"], original)
+    command_text = shlex.join(run["command"])
+    (directory / "command.txt").write_text(command_text + "\n", encoding="utf-8")
     env = os.environ.copy()
-    src_path = str(PROJECT_ROOT / "src")
-    env["PYTHONPATH"] = (
-        src_path
-        if not env.get("PYTHONPATH")
-        else src_path + os.pathsep + env["PYTHONPATH"]
-    )
-
-    command_text = shell_command(command)
-    (job_dir / "command.txt").write_text(command_text + "\n", encoding="utf-8")
-
-    start_time = datetime.now().astimezone()
-    start_ns = time.perf_counter_ns()
-    with (job_dir / "command.log").open("w", encoding="utf-8", errors="replace") as log:
-        log.write(command_text + "\n\n")
-        log.flush()
-        proc = run_supervised(
-            command,
-            cwd=bench_dir,
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            timeout=None,
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src") + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    run["started"] = datetime.now().astimezone().isoformat()
+    start = time.perf_counter()
+    errors = []
+    try:
+        with (root / run["log"]).open("w", encoding="utf-8") as log:
+            log.write(command_text + "\n\n")
+            log.flush()
+            result = run_supervised(
+                run["command"], cwd=Path(run["benchmark_dir"]), env=env,
+                stdout=log, stderr=subprocess.STDOUT, text=True, check=False, timeout=None,
+            )
+        run["returncode"] = result.returncode
+        if result.returncode != 0:
+            errors.append(f"Reduction exited with status {result.returncode}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        errors.append(f"Could not execute reduction: {exc}")
+    run["ended"] = datetime.now().astimezone().isoformat()
+    raw_wall = time.perf_counter() - start
+    excluded = reference_stability_wall_seconds(root / run["work_dir"])
+    run.update({
+        "raw_full_command_wall_seconds": raw_wall,
+        "profile_excluded_setup_wall_seconds": excluded,
+        "full_command_wall_seconds": max(0.0, raw_wall - excluded),
+    })
+    for key in ("raw_full_command_wall_seconds", "profile_excluded_setup_wall_seconds", "full_command_wall_seconds"):
+        (directory / f"{key}.txt").write_text(f"{run[key]:.9f}\n", encoding="utf-8")
+    metrics, measurement_errors = measure_run(root, run)
+    errors.extend(measurement_errors)
+    run["metrics"] = metrics
+    run["errors"] = errors
+    run["status"] = "failed" if run["returncode"] != 0 else ("incomplete" if errors else "success")
+    write_json(directory / "source_reduction_metrics.json", {
+        key: metrics[key] for key in (
+            "measurement_stage", "token_count_method", "original_tokens", "remaining_tokens",
+            "token_reduction_percent", "final_output_bytes",
         )
-    raw_full_wall_seconds = (time.perf_counter_ns() - start_ns) / 1_000_000_000.0
-    end_time = datetime.now().astimezone()
-    profile_excluded_setup_seconds = reference_stability_wall_seconds(work_dir)
-    full_wall_seconds = max(0.0, raw_full_wall_seconds - profile_excluded_setup_seconds)
-
-    (job_dir / "full_command_wall_seconds.txt").write_text(
-        f"{full_wall_seconds:.6f}\n",
-        encoding="utf-8",
-    )
-    (job_dir / "raw_full_command_wall_seconds.txt").write_text(
-        f"{raw_full_wall_seconds:.6f}\n",
-        encoding="utf-8",
-    )
-    (job_dir / "profile_excluded_setup_wall_seconds.txt").write_text(
-        f"{profile_excluded_setup_seconds:.6f}\n",
-        encoding="utf-8",
-    )
-
-    total_checks = profiled_checks(job_dir / "reduction_profile.json")
-    source_reduction = source_metrics(
-        harness_path,
-        output_path,
-        work_dir / "reduced_harness.cpp",
-    )
-    source_reduction_path = job_dir / "source_reduction_metrics.json"
-    source_reduction_path.write_text(
-        json.dumps(source_reduction, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    run_info = {
-        "tool": tool,
-        "protect_initializers": True,
-        "variant": variant["key"],
-        "variant_label": variant["label"],
-        "jobs": job,
-        "stable": stable,
-        "benchmark_dir": str(bench_dir),
-        "work_dir": str(work_dir),
-        "output": str(output_path),
-        "command": command,
-        "started": start_time.isoformat(),
-        "ended": end_time.isoformat(),
-        "full_command_wall_seconds": full_wall_seconds,
-        "raw_full_command_wall_seconds": raw_full_wall_seconds,
-        "profile_excluded_setup_wall_seconds": profile_excluded_setup_seconds,
-        "returncode": proc.returncode,
-        "total_checks": total_checks,
-        "source_reduction_metrics": source_reduction,
-    }
-    (job_dir / "run_info.json").write_text(
-        json.dumps(run_info, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return run_info
+    })
+    write_json(root / run["run_info"], run)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Run HarnessReducer with optimized PCH/amortized-link settings and "
-            "with split/symbolized settings across a worker sweep."
-        )
-    )
-    parser.add_argument(
-        "--dir",
-        required=True,
-        help=(
-            "Benchmark name under benchmark/library-bug, for example libaom-1, "
-            "or an explicit benchmark directory path."
-        ),
-    )
-    parser.add_argument("--compile-flags", required=True)
-    parser.add_argument("--link-flags", required=True)
-    parser.add_argument(
-        "--tool", choices=TOOL_CHOICES, default="treereduce",
-        help="Reduction engine for both configurations (default: treereduce). Vulcan has a known C++ limitation.",
-    )
-    parser.add_argument(
-        "--jobs",
-        type=parse_jobs,
-        default=list(DEFAULT_JOBS),
-        help="Comma-separated worker counts. Default: 1,2,4,8,16,32,60.",
-    )
-    parser.add_argument(
-        "--protect-initializers", action="store_true", default=True,
-        help="Accepted for compatibility; initializer recovery is always enabled in performance sweeps.",
-    )
-    parser.add_argument(
-        "--auto-var-init-pattern",
-        action="store_true",
-        help=(
-            "Compile reducer candidates with -ftrivial-auto-var-init=pattern "
-            "and retry final validation with the same flag after a normal validation failure."
-        ),
-    )
-    parser.add_argument(
-        "--harness",
-        default="harness.cpp",
-        help="Harness path relative to the benchmark directory. Default: harness.cpp.",
-    )
-    parser.add_argument(
-        "--crash-input",
-        default="crash-input",
-        help="Crash input path relative to the benchmark directory. Default: crash-input.",
-    )
-    parser.add_argument(
-        "--output-root",
-        default=None,
-        help=(
-            "Directory for all results. Default: "
-            "<benchmark>/harnessreducer-perf-comparison-<tool>-<timestamp>."
-        ),
-    )
-    parser.add_argument(
-        "--python",
-        default=default_python(),
-        help="Python executable used to run harnessreducer.cli.",
-    )
-    parser.add_argument(
-        "--no-stable",
-        action="store_true",
-        help="Do not pass --stable. By default --stable is used for comparability.",
-    )
-    parser.add_argument(
-        "--keep-going",
-        action="store_true",
-        help="Continue the remaining jobs if one command exits nonzero.",
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tool", required=True, choices=(*TOOL_CHOICES, "all"),
+                        help="all runs treereduce, perses, wdd and cdd")
+    parser.add_argument("--output-root", default="output/evaluation",
+                        help="Parent of a fresh timestamped batch (relative paths use the repository)")
+    parser.add_argument("--python", default=default_python(), help="Python executable for reductions")
+    parser.add_argument("--dry-run", action="store_true", help="Validate both TSVs and print commands without creating results")
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    bench_dir = benchmark_dir(args.dir)
-
-    harness_path = bench_dir / args.harness
-    crash_input_path = bench_dir / args.crash_input
-    if not harness_path.is_file():
-        raise SystemExit(f"harness not found: {harness_path}")
-    if not crash_input_path.is_file():
-        raise SystemExit(f"crash input not found: {crash_input_path}")
-
-    compile_flags = expand_benchmark_placeholders(args.compile_flags, bench_dir)
-    link_flags = expand_benchmark_placeholders(args.link_flags, bench_dir)
-    assert compile_flags is not None
-    assert link_flags is not None
-
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
-    output_root = (
-        Path(args.output_root).expanduser()
-        if args.output_root
-        else bench_dir / f"harnessreducer-perf-comparison-{args.tool}-{timestamp}"
-    ).resolve()
-    if output_root.exists():
-        raise SystemExit(f"output directory already exists: {output_root}")
-    output_root.mkdir(parents=True)
-
-    stable = not args.no_stable
-    manifest: dict[str, object] = {
-        "schema_version": 2,
-        "tool": args.tool,
-        "protect_initializers": True,
-        "auto_var_init_pattern": bool(args.auto_var_init_pattern),
-        "status": "running",
-        "created": datetime.now().astimezone().isoformat(),
-        "benchmark_dir": str(bench_dir),
-        "harness": args.harness,
-        "crash_input": args.crash_input,
-        "compile_flags": compile_flags,
-        "link_flags": link_flags,
-        "jobs": list(args.jobs),
-        "stable": stable,
-        "variants": {
-            str(variant["key"]): {
-                "directory": variant["directory"],
-                "label": variant["label"],
-                "extra_args": list(variant["extra_args"]),  # type: ignore[arg-type]
-            }
-            for variant in VARIANTS
-        },
-        "runs": [],
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        cases = load_cases()
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    # Preserve virtualenv executable symlinks: resolving them would select the
+    # base interpreter and lose the environment's installed dependencies.
+    python = shutil.which(args.python) if "/" not in args.python else str(PROJECT_ROOT / Path(args.python).expanduser())
+    if not python or not os.access(python, os.X_OK):
+        parser.error(f"Python executable not found: {args.python}")
+    tools = ALL_TOOLS if args.tool == "all" else (args.tool,)
+    root = repository_path(args.output_root) / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    runs = plan_runs(cases, tools, root, python)
+    print(f"{len(cases)} cases, {len(tools)} tools, 2 configurations: {len(runs)} reductions; --jobs 1, serial", flush=True)
+    reporter_command = [python, str(PROJECT_ROOT / "make_harnessreducer_perf_tables.py"), "--results-dir", str(root)]
+    if args.dry_run:
+        for run in runs:
+            print(f"[{run['dataset']}/{run['case']}/{run['tool']}/{run['configuration']}] cwd={shlex.quote(run['benchmark_dir'])}")
+            print(shlex.join(run["command"]))
+        print(shlex.join(reporter_command))
+        return 0
+    root.mkdir(parents=True, exist_ok=False)
+    manifest = {
+        "format": EVALUATION_FORMAT, "measurement_stage": MEASUREMENT_STAGE,
+        "token_count_method": SOURCE_TOKEN_COUNT_METHOD, "jobs": 1, "tools": list(tools),
+        "datasets": [{"dataset": name, "tsv": str(PROJECT_ROOT / filename)} for name, filename in DATASETS],
+        "created": datetime.now().astimezone().isoformat(), "status": "running", "runs": runs,
+        "report_command": reporter_command,
     }
-    manifest_path = output_root / "run_manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    # Publish at start, so a failed/interrupted newer run is not hidden by an
-    # older successful run. These pointers also locate custom --output-root paths.
-    for marker_name in (LATEST_MARKER_NAME, TOOL_MARKER_TEMPLATE.format(tool=args.tool)):
-        (bench_dir / marker_name).write_text(str(output_root) + "\n", encoding="utf-8")
-
-    print(f"Benchmark: {bench_dir}")
-    print(f"Tool:      {args.tool}")
-    print(f"Pattern auto-init: {'yes' if args.auto_var_init_pattern else 'no'}")
-    print(f"Results:   {output_root}")
-    print(f"Python:    {args.python}")
-    print(f"Jobs:      {','.join(str(job) for job in args.jobs)}")
-
-    failed = False
-    for variant in VARIANTS:
-        variant_dir = output_root / str(variant["directory"])
-        for job in args.jobs:
-            job_dir = variant_dir / f"jobs-{job}"
-            print(f"[run] {variant['key']} jobs={job}")
-            run_info = run_case(
-                python_executable=args.python,
-                bench_dir=bench_dir,
-                harness_path=harness_path,
-                harness=args.harness,
-                crash_input=args.crash_input,
-                compile_flags=compile_flags,
-                link_flags=link_flags,
-                variant=variant,
-                job=job,
-                job_dir=job_dir,
-                stable=stable,
-                tool=args.tool,
-                auto_var_init_pattern=args.auto_var_init_pattern,
-            )
-            manifest["runs"].append(run_info)  # type: ignore[index]
-            manifest_path.write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            print(
-                f"[done] {variant['key']} jobs={job} "
-                f"wall={run_info['full_command_wall_seconds']:.2f}s "
-                f"returncode={run_info['returncode']}"
-            )
-            if int(run_info["returncode"]) != 0:
-                failed = True
-                if not args.keep_going:
-                    print(f"Stopping after failure. See {job_dir / 'command.log'}")
-                    break
-        if failed and not args.keep_going:
-            break
-
+    manifest_path = root / "run_manifest.json"
+    write_json(manifest_path, manifest)
+    print(f"Results: {root}", flush=True)
+    for index, run in enumerate(runs, 1):
+        run["status"] = "running"
+        write_json(manifest_path, manifest)
+        try:
+            run_case(root, run)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            run.update(status="failed", errors=[str(exc)])
+        write_json(manifest_path, manifest)
+        print(f"[{index}/{len(runs)}] {run['dataset']}/{run['case']}/{run['tool']}/{run['configuration']}: {run['status']}", flush=True)
+    # Keep evaluation and report failures independent; reporting still writes
+    # partial results and never hides failed runs behind older successful data.
+    from make_harnessreducer_perf_tables import generate_reports
+    try:
+        manifest["report_returncode"] = generate_reports(root)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        manifest["report_returncode"] = 1
+        manifest["report_error"] = str(exc)
+        print(f"Reporting failed: {exc}", file=sys.stderr)
+    failed = manifest["report_returncode"] != 0 or any(run["status"] != "success" for run in runs)
     manifest["status"] = "failed" if failed else "completed"
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-    )
-    print(f"Latest-tool marker: {bench_dir / TOOL_MARKER_TEMPLATE.format(tool=args.tool)}")
-    print("Create the TXT and CSV tables with:")
-    print("  " + shell_command([
-        args.python, str(PROJECT_ROOT / "make_harnessreducer_perf_tables.py"),
-        "--dir", str(bench_dir), "--results-dir", str(output_root),
-    ]))
-    return 1 if failed else 0
+    manifest["ended"] = datetime.now().astimezone().isoformat()
+    write_json(manifest_path, manifest)
+    return int(failed)
 
 
 if __name__ == "__main__":

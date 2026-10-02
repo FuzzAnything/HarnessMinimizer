@@ -54,11 +54,11 @@ class CrashTriageHKUFallbackTests(unittest.TestCase):
             answer("library-bug"), answer("library-bug"), answer("library-bug"),
         ]
         self.assertEqual(self.request_votes(), "library-bug")
-        self.assertEqual(self.efforts(), ["high"] * 3 + ["medium"] * 3)
+        self.assertEqual(self.efforts(), ["high"] * 3 + ["low"] * 3)
         self.assertIn("Keeping 1 completed vote(s)", self.output.getvalue())
         self.assertIn("after 4 triages; stopping", self.output.getvalue())
         self.assertEqual(self.request_votes(benchmark="next-case"), "library-bug")
-        self.assertEqual(self.efforts(), ["high"] * 3 + ["medium"] * 3 + ["high"] * 3)
+        self.assertEqual(self.efforts(), ["high"] * 3 + ["low"] * 3 + ["high"] * 3)
         self.assertEqual(self.output.getvalue().count("Reasoning fallback"), 1)
         self.record.assert_not_called()
 
@@ -68,11 +68,11 @@ class CrashTriageHKUFallbackTests(unittest.TestCase):
         self.assertEqual(self.efforts(), ["high"] * 4)
         self.assertNotIn("Reasoning fallback", self.output.getvalue())
 
-    def test_medium_exhaustion_stops_without_another_fallback(self):
+    def test_low_exhaustion_stops_without_another_fallback(self):
         self.send.side_effect = lambda *args, **kwargs: answer("")
         with self.assertRaisesRegex(triage.LLMRetriesExhausted, "after 2 attempt"):
             self.request_votes()
-        self.assertEqual(self.efforts(), ["high", "high", "medium", "medium"])
+        self.assertEqual(self.efforts(), ["high", "high", "low", "low"])
         self.assertEqual(self.output.getvalue().count("Reasoning fallback"), 1)
 
     def test_deciding_vote_can_fall_back_without_repeating_audit_record(self):
@@ -81,7 +81,7 @@ class CrashTriageHKUFallbackTests(unittest.TestCase):
             + [answer(""), answer(""), answer("library-bug")]
         )
         self.assertEqual(self.request_votes(), "library-bug")
-        self.assertEqual(self.efforts(), ["high"] * 6 + ["medium"])
+        self.assertEqual(self.efforts(), ["high"] * 6 + ["low"])
         self.record.assert_called_once_with("test-case", "treereduce", 2, 2)
 
     def test_other_initial_efforts_do_not_fall_back(self):
@@ -132,7 +132,7 @@ class CrashTriageHKUFallbackTests(unittest.TestCase):
                     ["dir", "tool", "triage result"], ["case", "none", "library-bug"],
                 ])
             self.assertEqual(list(Path(directory).glob("*.csv")), [csv_path])
-        self.assertEqual(self.efforts(), ["high"] * 2 + ["medium"] * 3)
+        self.assertEqual(self.efforts(), ["high"] * 2 + ["low"] * 3)
 
 
 class CrashTriageHKUFallbackLauncherTests(unittest.TestCase):
@@ -141,7 +141,7 @@ class CrashTriageHKUFallbackLauncherTests(unittest.TestCase):
             root = Path(directory)
             launcher = root / "run_crash_triage_parallel_hku.sh"
             shutil.copyfile(ROOT / launcher.name, launcher)
-            (root / "crash_triage_cases.tsv").write_text(
+            (root / "harness_bug_cases.tsv").write_text(
                 "benchmark\tcompile_flags\tlink_flags\ncase\t-I$(pwd)/include\t-lunused\n"
             )
             worker = f'''
@@ -169,7 +169,7 @@ with (
 ):
     verdict = triage.send_stack_trace_to_llm("harness", None, "stack", benchmark_name=args.dir, tool=args.tool, reasoning_effort=args.llm_reasoning_effort)
     triage.append_csv_row(Path(args.csv), args.dir, args.tool, verdict)
-assert efforts == ["high", "high", "medium", "medium", "medium"], efforts
+assert efforts == ["high", "high", "low", "low", "low"], efforts
 '''
             (root / "crash_triage_new_hku.py").write_text(worker)
             env = {key: value for key, value in os.environ.items() if not key.startswith("HR_TRIAGE_")}
@@ -189,8 +189,8 @@ assert efforts == ["high", "high", "medium", "medium", "medium"], efforts
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(logs), len(rows))
             for log in logs:
-                self.assertIn("high -> medium", log.read_text())
-            self.assertFalse(list(root.rglob("*medium*")))
+                self.assertIn("high -> low", log.read_text())
+            self.assertFalse(list(root.rglob("*low*")))
 
 
 if __name__ == "__main__":

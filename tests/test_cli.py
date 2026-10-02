@@ -1,12 +1,53 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+import pytest
 
 from harnessreducer.api import ReductionResult
 
 from harnessreducer.cli import build_parser, main
 
 
+@pytest.mark.parametrize("success", [True, False])
+def test_profile_stages_selected_raw_output(tmp_path, success):
+    selected = tmp_path / "selected.cpp"
+    selected.write_text("int final;")
+    # This may be a snapshot or the protected recovery attempt; the CLI must
+    # use the API's selection instead of guessing work/reduced_harness.cpp.
+    raw = tmp_path / "attempt-2" / "snapshot.raw.cpp"
+    raw.parent.mkdir()
+    raw.write_text('#include "macro.h"\nint x;')
+    output = tmp_path / "profiled" / "reduced.cpp"
+    result = ReductionResult(str(selected), "tagged.cpp", None, success=success, raw_reduced_harness=str(raw))
+    with patch("harnessreducer.cli.reduce_with_config", return_value=result), \
+            patch("harnessreducer.cli._stage_profile"):
+        assert main(["h.cpp", "-o", str(output), "--profile", "--capture-raw-output"]) == (0 if success else 1)
+    if success:
+        assert output.read_text() == selected.read_text()
+    else:
+        assert not output.exists()
+    assert output.with_suffix(".raw.cpp").read_bytes() == raw.read_bytes()
+
+
+def test_profile_never_substitutes_final_output_for_missing_raw(tmp_path):
+    selected = tmp_path / "selected.cpp"
+    selected.write_text("int final;")
+    output = tmp_path / "profiled" / "reduced.cpp"
+    result = ReductionResult(str(selected), "tagged.cpp", None,
+                             raw_reduced_harness=str(tmp_path / "missing.raw.cpp"))
+    with patch("harnessreducer.cli.reduce_with_config", return_value=result), \
+            patch("harnessreducer.cli._stage_profile"):
+        assert main(["h.cpp", "-o", str(output), "--profile", "--capture-raw-output"]) == 0
+    assert not output.with_suffix(".raw.cpp").exists()
+
+
 class TestCliPhase3Mode(unittest.TestCase):
+    def test_raw_capture_requires_explicit_opt_in_even_with_profile(self):
+        parser = build_parser()
+        self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp"]).capture_raw_output)
+        self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp", "--profile"]).capture_raw_output)
+        self.assertTrue(parser.parse_args(["h.cpp", "-o", "r.cpp", "--capture-raw-output"]).capture_raw_output)
+
     def test_split_is_default_phase3_mode(self):
         args = build_parser().parse_args(["harness.cpp", "-o", "reduced.cpp"])
         self.assertEqual(args.phase3_mode, "split")
@@ -126,3 +167,38 @@ class TestCliPhase3Mode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_profile_alone_does_not_export_raw_artifacts(tmp_path):
+    selected = tmp_path / "selected.cpp"
+    selected.write_text("int final;")
+    raw = tmp_path / "existing.raw.cpp"
+    raw.write_text("int old_raw;")
+    output = tmp_path / "output/reduced.cpp"
+    result = ReductionResult(str(selected), "tagged.cpp", None, raw_reduced_harness=str(raw))
+    with patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce, \
+            patch("harnessreducer.cli._stage_profile"), \
+            patch("harnessreducer.cli.RawOutputCapture", side_effect=AssertionError("capture must be disabled")):
+        assert main(["h.cpp", "-o", str(output), "--profile"]) == 0
+    assert reduce.call_args.args[0].capture_raw_output is False
+    assert output.read_text() == "int final;"
+    assert not output.with_suffix(".raw.cpp").exists()
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_raw_export_failure_does_not_change_tool_status(tmp_path, capsys, success):
+    selected = tmp_path / "selected.cpp"
+    selected.write_text("int final;")
+    raw = tmp_path / "selected.raw.cpp"
+    raw.write_text("int raw;")
+    output = tmp_path / "output/reduced.cpp"
+    result = ReductionResult(str(selected), "tagged.cpp", None, success=success, raw_reduced_harness=str(raw))
+    with patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce, \
+            patch("harnessreducer.cli._stage_profile"), \
+            patch.object(Path, "replace", side_effect=OSError("synthetic raw export failure")):
+        assert main(["h.cpp", "-o", str(output), "--profile", "--capture-raw-output"]) == (0 if success else 1)
+    assert reduce.call_args.args[0].capture_raw_output is True
+    assert output.exists() is success
+    assert not output.with_suffix(".raw.cpp").exists()
+    assert not list(output.parent.glob(".raw-output-*"))
+    assert "synthetic raw export failure" in capsys.readouterr().err

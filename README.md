@@ -803,112 +803,82 @@ During reduction, the work directory may also contain artifacts such as:
 - If `--snapshot` is enabled and final validation of `reduced_harness.inline.cpp` fails, the tool retries preparation and validation from `last_interesting.cpp` when that snapshot differs from `reduced_harness.cpp`. If that retry also fails, it validates the cleaned non-inlined snapshot. Without an eligible snapshot, it validates the cleaned non-inlined reduced harness. A fallback that passes can be returned successfully. Otherwise, it remains a diagnostic artifact: the API returns `success=False`, and the CLI exits nonzero without copying it to `--output`. These existing fallback steps do not rerun reduction; the optional `--protect-initializers` recovery described above can do so afterward. By default, final validation first checks the `symbolize=0` crash pattern, then checks symbolized stack depth and the stored pre-harness stack trace. With `--symbolize`, it uses the symbolized crash pattern, symbolized stack depth, and recorded crash location. Both optimized and non-optimized reductions retain the existing standalone final-validation path. Direct-input embedding still requires an available crash-input file; missing input is reported explicitly rather than invented.
 - If LLM validation fails, the tool falls back to the non-LLM harness.
 
-## Performance sweeps and CSV collection
+## Evaluation and reports
 
-From the repository root, with the Python environment from installation active,
-run both compilation/execution configurations with the selected reduction engine:
-
-```bash
-python run_harnessreducer_perf_sweep.py \
-  --dir libaom-1 --tool wdd \
-  --compile-flags='-I{bench_dir}/build/sanitizer/include' \
-  --link-flags='-L{bench_dir}/build/sanitizer/lib -laom'
-```
-
-Replace `wdd` with `treereduce`, `perses`, `cdd`, or `sfc`. Omitting `--tool`
-uses treereduce. The sweep accepts the same engine choices as the main CLI,
-including Vulcan with its known limitation; selecting it does not fix that
-upstream issue. Build the selected engine before running a timed sweep.
-
-The script substitutes `{bench_dir}` with the benchmark's absolute path. It
-first runs `--pch --amortize-link` without symbolization, then `--split
---symbolize` without amortized linking. Each configuration uses workers
-`1,2,4,8,16,32,60`, with `--stable --profile` and a separate work directory for
-each case. Use `--jobs 1,2,4` for a smaller sweep. Results are saved under
-`benchmark/library-bug/<benchmark>/harnessreducer-perf-comparison-<tool>-<timestamp>`.
-The manifest and each job's metadata record the selected engine. The runner also
-writes `latest_harnessreducer_perf_run_<tool>.txt` under the benchmark directory,
-alongside the old global marker. These markers point to result directories,
-including custom `--output-root` locations; the existing directory layout does
-not change. Markers are written when a sweep starts. The manifest records
-`running`, then `completed` or `failed` when the sweep exits normally; an
-interrupted sweep may remain marked `running`.
-
-The sweep always passes `--protect-initializers` to both configurations, for every
-engine and job count. You do not need to add it to your sweep command; explicitly
-passing it is still accepted for compatibility. The standalone `harnessreducer`
-command and Python API remain opt-in. This enables failure-triggered recovery,
-not protection during every first reduction. The full-command timer includes any recovery.
-When this policy is present in saved profiles, the TXT report includes recovery
-status and attempt counts; the CSV adds `initializer_recovery` and
-`reduction_attempts` columns. A comparison cannot mix enabled and disabled policies,
-but can compare enabled runs where only some needed a retry. Reports for older or
-disabled runs retain their existing CSV columns. Token counts still compare the
-original harness with the final restored output, not the temporary macro source.
-
-Create TXT and CSV reports for the latest run of **each tool** for a benchmark:
+Build the selected engines and benchmark libraries first, then run:
 
 ```bash
-python make_harnessreducer_perf_tables.py --dir libaom-1 --all-tools
+./run_harnessreducer_evaluation.sh --tool all
+./run_harnessreducer_evaluation.sh --tool perses
+./run_harnessreducer_evaluation.sh --tool all --dry-run
 ```
 
-For just the latest WDD run, use `--tool wdd` instead of `--all-tools`. With
-neither option, the script retains single-report usage and selects the latest
-run overall. Repository-root `command.txt` contains a loop over benchmarks using
-`--all-tools`; it does not generate reports for every historical run.
+`--tool` is required. `all` selects **treereduce, perses, wdd, and cdd**.
+Individual `sfc` and `vulcan` runs are also supported; Vulcan retains the
+upstream limitation described in [REDUCTION_ENGINES.md](REDUCTION_ENGINES.md).
+The launcher uses `.venv`, `.venv-host`, or `python3`; set
+`HARNESSREDUCER_PYTHON` to choose its interpreter.
 
-The table script does not run a reducer. It reads the engine from saved
-manifest/job/profile metadata and rejects conflicting names. Old data without
-engine metadata is treated as treereduce, the old sweep's only engine. Latest
-runs are chosen by the manifest's recorded start time, with the timestamp in
-the directory name as the legacy fallback. Thus, generating a report in an
-older folder does not make that run newer. For old custom folders with neither
-timestamp, the manifest's modification time (or directory time if no manifest
-exists) is the last-resort ordering. Both old and new directory names are
-supported; stale pointers to missing directories are ignored.
+The runner reads `harness_bug_cases.tsv` for `benchmark/harness-bug`, followed
+by `library_bug_cases.tsv` for `benchmark/library-bug`. Both are tab-separated
+with columns `benchmark`, `compile_flags`, and `link_flags`. Paths resolve from
+the repository, including when the launcher is invoked from another directory.
+Flags support literal `$(pwd)`, `${PWD}`, `$PWD`, and `{bench_dir}` placeholders;
+substitution preserves argument quoting and never evaluates shell code.
 
-"Latest" means the newest run, not the newest successful run. A latest sweep
-that is incomplete or recorded as failed produces an error rather than silently
-substituting an older result. With `--all-tools`, other tools still get their
-reports, and the command exits nonzero if any selected run fails. Benchmarks
-without any saved sweeps are skipped. To explicitly report an older run, use
-`--results-dir /absolute/path/to/that/sweep`; an accompanying `--tool` checks its
-recorded identity. The runner also prints that exact-run report command.
+Every case/tool runs optimized `--pch --amortize-link` first, then baseline
+`--split --symbolize`. Every reduction uses `--jobs 1 --stable --profile
+--capture-raw-output --protect-initializers`, with only one reduction running
+at a time. Initializer recovery remains failure-triggered. The complete four-engine matrix has 1,600
+reductions (200 cases × 4 engines × 2 configurations). Dry runs validate the
+TSVs and input files, print commands, and create no result directories.
 
-Default reports include both engine and benchmark names, for example:
+Fresh batches live under `output/evaluation/<timestamp>/`; `--output-root`
+chooses a different parent directory. Runs are separated by dataset, case,
+tool, and configuration. The batch manifest records commands, status, timing,
+and artifact paths. Each run saves logs, profiles, final `reduced.cpp`, selected
+`reduced.raw.cpp`, and measurement metadata. Independent runs continue after a
+failure, and the launcher exits nonzero if evaluation or reporting fails.
 
-- `performance_tables_wdd_libaom-1.txt`
-- `performance_comparison_wdd_libaom-1.csv`
+**Remaining tokens count the raw reducer output**, captured before temporary
+macro headers, PCH prefixes, and protected initializers are restored, and before
+formatting or inlining. The API exposes this artifact as `raw_reduced_harness`;
+the CLI copies the selected result's raw artifact beside the evaluation output.
+Snapshot fallback and initializer recovery carry their own selected raw copy.
+This bookkeeping is enabled only by `--capture-raw-output`, which the evaluation
+runner adds automatically. Normal runs, including `--profile` alone, do not
+capture raw artifacts. Capture failures leave the evaluation incomplete without
+changing the tool's success status, validation, fallback, or recovery decisions.
+Temporary include directives count as written; their external header contents
+are never expanded. PCH raw output excludes its frozen prefix, while split
+output retains the includes kept by the reducer. No header normalization is
+applied between configurations.
 
-The CSV layout remains three rows per matched worker count: optimized,
-non-optimized, and speedup. The timing columns, total checks, original/final
-tokens, and token reduction percentage are unchanged. Time speedups are
-non-optimized / optimized; throughput speedup is optimized / non-optimized.
-Values below 1 are retained if an optimization was slower. Explicit `--output`
-and `--csv-output` paths still override the default report names for a single
-run; they cannot be combined with `--all-tools`.
+Original tokens come from a saved copy of the input harness. Both counts use
+the shared `cpp_like_regex_v1` tokenizer, and the metric stage is
+`raw_reducer_output`. Token reduction is
+`100 × (1 − remaining_tokens / original_tokens)`. Missing raw artifacts mark a
+run incomplete and leave its remaining-token metric empty. `final_output_bytes`
+measures the final output separately. Profiles preserve timing, throughput,
+checker outcomes, and initializer-recovery metrics; recovery timing includes
+both attempts. Full-command wall time excludes reference stack-depth stability
+setup; raw wall time and the excluded setup time are also recorded.
 
-Collect existing performance comparison CSV files from the entire
-`benchmark/library-bug` tree:
+The runner automatically generates per-case/tool TXT and CSV reports and one
+`evaluation_summary.csv` with a row for every planned reduction. Per-case
+reports include speedups only when both configurations succeed: baseline /
+optimized for times, optimized / baseline for checks per second. Failed and
+incomplete runs remain visible. Regenerate the reports without reductions:
 
 ```bash
-python collect_harnessreducer_perf_csvs.py
+python make_harnessreducer_perf_tables.py --results-dir "output/evaluation/<timestamp>"
 ```
 
-This copies regular files whose names start with
-`performance_comparison_` and end with `.csv` into repository-root `temp/`.
-Perses working CSVs and other internal CSV files are skipped. Source files are
-unchanged. Different contents with the same filename get `__2`, `__3`, etc.;
-identical copies are reused, so rerunning does not duplicate unchanged files.
-CSV symlinks and symlinked directories are not followed. Each invocation writes
-a unique `csv_collection_*.json` mapping source paths to collected names.
-`temp/` is ignored by Git. Use `--output-dir` to choose another destination
-outside the benchmark tree. Existing CSV contents/names are not rewritten to
-guess an engine; engine-bearing names come from the updated table generator.
-Selecting latest runs for report generation does not delete historical reports.
-The collector still collects **all existing performance comparison CSV files**,
-including older reports already on disk; it does not itself filter to the latest
-runs.
+Reporting uses only that batch's manifest and artifacts. Historical results
+remain on disk and are not migrated or used as replacement measurements.
+Reports are written directly into the batch directory; no separate CSV
+collection step is needed. `command.txt` contains the current evaluation and
+triage commands.
 
 ## Reducer throughput baseline
 

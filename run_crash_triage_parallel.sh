@@ -22,7 +22,7 @@ hr_emit_cases() {
 import csv
 import sys
 
-with open("crash_triage_cases.tsv", newline="", encoding="utf-8") as handle:
+with open("harness_bug_cases.tsv", newline="", encoding="utf-8") as handle:
     cases = list(csv.DictReader(handle, delimiter="\t"))
 arguments = [
     case[column]

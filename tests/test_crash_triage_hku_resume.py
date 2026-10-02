@@ -22,7 +22,7 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         shutil.copyfile(LAUNCHER, self.root / LAUNCHER.name)
         (self.root / "crash_triage_new_hku.py").write_text(FAKE_WORKER.format(root=str(ROOT)))
-        with (self.root / "crash_triage_cases.tsv").open("w", newline="") as handle:
+        with (self.root / "harness_bug_cases.tsv").open("w", newline="") as handle:
             writer = csv.writer(handle, delimiter="\t")
             writer.writerow(["benchmark", "compile_flags", "link_flags"])
             for index in range(6):
@@ -39,7 +39,7 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
         }
         self.all_pairs = {
             (f"case-{index}", tool)
-            for index in range(6) for tool in ("none", "treereduce")
+            for index in range(6) for tool in ("none", "treereduce", "cdd", "wdd", "perses")
         }
 
     def seed_results(self):
@@ -77,7 +77,7 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
         result = self.run_batch("--resume")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         state = json.loads((self.root / "state.json").read_text())
-        self.assertEqual(len(state["runs"]), 8)
+        self.assertEqual(len(state["runs"]), 26)
         self.assertEqual({(run["dir"], run["tool"]) for run in state["runs"]}, self.all_pairs - completed)
         self.assertEqual(state["active"], 0)
         self.assertGreater(state["maximum"], 1)
@@ -87,12 +87,12 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
             self.assertEqual(run["compile_flags"], "-I$(pwd)/build/sanitizer/include")
             self.assertEqual(run["link_flags"], "-L$(pwd)/build/sanitizer/lib -lsqlite3")
         self.assertTrue(self.csv.read_bytes().startswith(original))
-        self.assertIn("Skipping 4 completed example/tool pairs; 8 pairs remain", result.stderr)
+        self.assertIn("Skipping 4 completed example/tool pairs; 26 pairs remain", result.stderr)
         with self.csv.open(newline="") as handle:
             rows = list(csv.reader(handle))
         self.assertEqual(rows.count(["dir", "tool", "triage result"]), 1)
-        self.assertEqual(len(rows), 16)  # Header, seven original rows, eight new results.
-        self.assertEqual(len(list((self.root / "logs").glob("*.log"))), 8)
+        self.assertEqual(len(rows), 34)  # Header, seven original rows, 26 new results.
+        self.assertEqual(len(list((self.root / "logs").glob("*.log"))), 26)
         csv_after = self.csv.read_bytes()
         result = self.run_batch("--resume")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -106,7 +106,7 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
         for flags in (("--resume", "--dry-run"), ("--dry-run", "--resume")):
             with self.subTest(flags=flags):
                 commands = self.commands(self.run_batch(*flags))
-                self.assertEqual(len(commands), 8)
+                self.assertEqual(len(commands), 26)
                 self.assertEqual(self.pairs(commands), self.all_pairs - completed)
                 for args in commands:
                     self.assertEqual(args[:3], ["python3", "-u", "crash_triage_new_hku.py"])
@@ -123,14 +123,14 @@ class CrashTriageHKUResumeTests(unittest.TestCase):
                 if empty_file:
                     self.csv.touch()
                 commands = self.commands(self.run_batch("--resume", "--dry-run"))
-                self.assertEqual(len(commands), 12)
+                self.assertEqual(len(commands), 30)
                 self.assertEqual(self.pairs(commands), self.all_pairs)
                 self.assertEqual(self.csv.exists(), empty_file)
 
     def test_without_resume_all_pairs_are_still_scheduled(self):
         self.seed_results()
         commands = self.commands(self.run_batch("--dry-run"))
-        self.assertEqual(len(commands), 12)
+        self.assertEqual(len(commands), 30)
         self.assertEqual(self.pairs(commands), self.all_pairs)
 
     def test_unexpected_csv_header_stops_before_launching_any_jobs(self):

@@ -12,6 +12,7 @@ from pathlib import Path
 from harnessreducer.process_supervisor import (
     run_supervised,
 )
+from harnessreducer.reduction_engines import RawOutputCapture
 
 from harnessreducer.reducer_runner import (
     DEFAULT_EXEC_TIMEOUT_MS,
@@ -353,6 +354,7 @@ def run_treereducer_with_check(
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     tool: str = "treereduce",
     auto_var_init_pattern: bool = False,
+    raw_output_capture: RawOutputCapture | None = None,
 ) -> str:
     from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
 
@@ -643,7 +645,7 @@ def run_treereducer_with_check(
         proc = invocation.run(run_supervised)
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run {tool} reducer in check mode:\n{proc.stdout} {proc.stderr}")
-    invocation.publish_result()
+    invocation.publish_result(raw_output_capture)
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

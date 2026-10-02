@@ -22,6 +22,7 @@ from harnessreducer.crash_evidence import (
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessreducer.reduction_profile import write_profile_summary
+from harnessreducer.reduction_engines import RawOutputCapture
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -3654,6 +3655,7 @@ def run_treereducer(
     profile: bool = False,
     tool: str = "treereduce",
     auto_var_init_pattern: bool = False,
+    raw_output_capture: RawOutputCapture | None = None,
 ) -> str:
     from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
 
@@ -3882,7 +3884,7 @@ def run_treereducer(
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
-    invocation.publish_result()
+    invocation.publish_result(raw_output_capture)
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

@@ -4,6 +4,7 @@ import tempfile
 from unittest.mock import patch
 
 from harnessreducer.api import (
+    PostReductionOutcome,
     ReductionConfig,
     TaggedHarness,
     _prepare_fuzzer_entry_return,
@@ -169,6 +170,7 @@ class TestApiPipeline(unittest.TestCase):
             mock_extract.assert_called_once_with(
                 "seed.bin",
                 harness_path=prepared_path,
+                compile_flags=prepared_flags,
                 link_flags=None,
             )
 
@@ -291,6 +293,7 @@ class TestApiPipeline(unittest.TestCase):
             require_crash_pattern=False,
             jobs=60,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -330,7 +333,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
         mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_inline.return_value = PostReductionOutcome("/tmp/reduced.cpp", raw_reduced_harness="/tmp/selected.raw.cpp")
         mock_extract.return_value = "AddressSanitizer"
         self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
         mock_slice.return_value = "/tmp/sliced.cpp"
@@ -349,6 +352,7 @@ class TestApiPipeline(unittest.TestCase):
         result = reduce_with_config(config)
 
         self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        self.assertEqual(result.raw_reduced_harness, "/tmp/selected.raw.cpp")
         self.assertEqual(result.tagged_harness, "/tmp/tagged.cpp")
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
@@ -357,7 +361,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_reset_last_interesting_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
         mock_extract.assert_called_once_with(
-            "seed.bin", harness_path="a.cpp", link_flags="-lm"
+            "seed.bin", harness_path="a.cpp", compile_flags="-std=c++17", link_flags="-lm"
         )
         mock_check_pattern.assert_called_once_with(
             "a.cpp",
@@ -404,6 +408,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -418,6 +423,7 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             crash_pattern_symbolize_0="AddressSanitizer",
             symbolize=False,
+            auto_var_init_pattern_fallback=False,
         )
         mock_check.assert_called_once()
 
@@ -675,6 +681,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
 
     @patch("harnessreducer.api.validate_stack_trace")
@@ -789,6 +796,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.assert_called_once_with(
             "seed.bin",
             harness_path="a.cpp",
+            compile_flags=None,
             link_flags=None,
             record_symbolized_crash_location=True,
         )
@@ -818,6 +826,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
@@ -831,6 +840,7 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             crash_pattern_symbolize_0="FastPattern",
             symbolize=True,
+            auto_var_init_pattern_fallback=False,
         )
 
 

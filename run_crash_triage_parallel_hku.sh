@@ -38,7 +38,7 @@ import os
 from pathlib import Path
 import sys
 
-with open("crash_triage_cases.tsv", newline="", encoding="utf-8") as handle:
+with open("harness_bug_cases.tsv", newline="", encoding="utf-8") as handle:
     cases = list(csv.DictReader(handle, delimiter="\t"))
 tools = os.environ["HR_TRIAGE_TOOLS"].split()
 completed = set()

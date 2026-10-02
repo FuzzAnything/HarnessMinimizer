@@ -22,7 +22,7 @@ import urllib.request
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-BENCHMARK_ROOT = PROJECT_ROOT / "benchmark" / "bug"
+BENCHMARK_ROOT = PROJECT_ROOT / "benchmark" / "harness-bug"
 DEFAULT_CSV_PATH = PROJECT_ROOT / "crash_triage_results_new.csv"
 # Fixed audit file for cases whose initial votes require a deciding vote.
 FIFTH_VOTE_CSV_PATH = PROJECT_ROOT / "crash_triage_fifth_vote_cases.csv"
