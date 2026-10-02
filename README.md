@@ -880,6 +880,89 @@ Reports are written directly into the batch directory; no separate CSV
 collection step is needed. `command.txt` contains the current evaluation and
 triage commands.
 
+## Crash-triage evaluation
+
+The triage launcher reads both `harness_bug_cases.tsv` and
+`library_bug_cases.tsv`. It compiles each selected harness, captures the crash
+trace, and asks an LLM to classify the crash as `library-bug` or `harness-bug`.
+
+For first-time setup, copy the template and fill in all three settings:
+
+```bash
+cp .env-template .env
+```
+
+- `OPENAI_BASE_URL`: your API's base URL, supporting chat completions.
+- `LLM_API_KEY`: your API key.
+- `OPENAI_MODEL`: the model identifier accepted by that API.
+
+The launcher automatically loads `.env` from the repository. Exported
+environment variables take precedence, including explicitly empty values.
+Values may be quoted and are read literally, without shell execution or variable
+expansion. There are no built-in endpoint, key, or model defaults. `.env` is
+ignored by Git; keep credentials out of commands and tracked files. These
+settings configure the evaluation scripts; the tool's optional `--llm` stage
+has its own configuration described above.
+
+```bash
+./run_crash_triage_parallel.sh --tool all --jobs 1 --dry-run
+./run_crash_triage_parallel.sh --tool all --jobs 1
+./run_crash_triage_parallel.sh --tool all --jobs 4 --resume
+```
+
+`--tool` is required. Here `all` includes the original harness (`none`),
+**treereduce, perses, wdd, and cdd**, giving 1,000 triage items across the two
+datasets. Any individual engine, including `sfc` or `vulcan`, can be selected.
+`--jobs` is the number of concurrent benchmark cases and defaults to **1**;
+tools within each case always run sequentially. The launcher works from other
+directories and uses the same interpreter selection as performance evaluation.
+
+For reduced harnesses, run performance evaluation first. Triage automatically
+selects the newest timestamped batch containing `run_manifest.json` under
+`output/evaluation/`, once for the entire invocation. The TSVs identify the
+benchmark inputs and build flags; the selected manifest identifies their
+reduced outputs. Only successful **optimized final `reduced.cpp` outputs** and
+their accompanying generated headers are used. Raw outputs are token-measurement
+artifacts and are not triage inputs. Missing or unsuccessful reductions fail
+their triage items without substituting another batch or configuration.
+
+An explicit batch is optional, and also supports custom evaluation locations:
+
+```bash
+./run_crash_triage_parallel.sh --tool all --jobs 1 \
+  --results-dir "output/evaluation/<timestamp>"
+# Original-only triage needs no performance evaluation batch:
+./run_crash_triage_parallel.sh --tool none --jobs 1 \
+  --csv crash_triage_result_original.csv
+```
+
+Each item requests up to 20 independent votes and stops when either verdict
+receives 11 votes. A 10–10 tie is recorded in `crash_triage_tied_cases.csv`
+beside the result CSV before requesting a deciding 21st vote. That record
+survives a failed deciding request. Reasoning effort defaults to `high` and
+can be selected explicitly with `--llm-reasoning-effort low|high|max`. Requests
+retry transient failures up to five attempts with the same effort; effort is
+never automatically downgraded. `--timeout` controls the local harness run
+(60 seconds by default); `--llm-timeout` controls network I/O (3,600 seconds),
+so an active stream can run longer.
+
+The default result file is `crash_triage_result.csv`. It contains one row per
+dataset/case/tool, including status, verdict, vote counts, model, effort, source
+batch, artifact/log paths, and failure information. Planned rows save the batch
+and settings before work starts. `--resume` reuses that recorded batch, skips
+successful items, and retries failed or unfinished ones from the first vote.
+Conflicting batch, model, or effort settings are rejected. An existing result
+file requires `--resume` or a different `--csv` path. Independent items continue
+after failures; the launcher exits nonzero if any requested item fails.
+
+Results are atomically updated under locks and sorted by dataset, case, and
+tool. Per-item logs are under `triage-logs/`. Default results, tied-case CSVs,
+locks, and logs are ignored by Git; keep custom output paths private too.
+To sort a result file explicitly, run
+`python3 sort_triage_csv.py crash_triage_result.csv`.
+Dry runs validate inputs and print the plan without compiling, contacting the
+LLM, or creating results, locks, or log directories; credentials are not needed.
+
 ## Reducer throughput baseline
 
 `measure_treereduce.py` compares two direct

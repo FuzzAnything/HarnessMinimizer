@@ -60,4 +60,7 @@ unused-benchmark/
 benchmark-library-bug.tar.gz
 benchmark-harness-bug.tar.gz
 
-crash_triage_fifth_vote*
+crash_triage*.csv
+*.csv.lock
+*.csv.run.lock
+.*.csv.*.tmp
