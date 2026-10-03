@@ -9,6 +9,8 @@ output/
 reduced.cpp
 harness_values.h
 benchmark.tar.gz
+benchmark/*
+!benchmark/.gitkeep
 dummy_file
 dummy*
 
