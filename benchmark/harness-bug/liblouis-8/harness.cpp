@@ -2,7 +2,6 @@
 // Targets: loadTable (primary - 0% coverage, 1188 undiscovered branches)
 //          hyphenationEnabled, isLetter, toLowercase, toDotPattern
 // Note: printRule is excluded because TranslationTableRule is an internal type
-// Based on coverage guidance: /root/FuzzAgent/output/liblouis/coverage_guidance/harness_013_guidance.md
 // Uses FuzzedDataProvider for structured input processing
 // Follows pattern from tests/suggestChunks.c for extern declarations
 

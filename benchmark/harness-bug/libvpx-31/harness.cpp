@@ -1,7 +1,6 @@
 /*
  * Fuzzing harness for libvpx VP9 SVC configuration validation and speed feature exploration
  * 
- * Target: HarnessAgent
  * Goal: Address 623+ blocked branches identified in coverage analysis:
  *       1. vp9_pick_inter_mode (333 blocked branches) - test speed feature flags like 
  *          default_interp_filter == BILINEAR and SVC conditions (use_svc && spatial_layer_id > 0)

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2024, FuzzAgent Project. All rights reserved.
  *
  * Fuzzing harness for libaom decoder API.
  * This harness targets AV1 decoding functions with varied configurations.

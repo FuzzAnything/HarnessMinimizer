@@ -1,7 +1,6 @@
 /*
  * Fuzzing harness for libvpx - Advanced VP9 SVC with high-bitdepth and screen content encoding
  * 
- * Target: HarnessAgent
  * Goal: Address the 347 blocked branches in vp9_pick_inter_mode by combining:
  *       1. SVC with multiple spatial/temporal layers
  *       2. High-bitdepth encoding (VPX_BITS_10/12)

@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2024, FuzzAgent Project. All rights reserved.
  *
  * Fuzzing harness for AV1 encoder workflow with custom data buffer configuration.
  * This harness targets currently uncovered APIs:

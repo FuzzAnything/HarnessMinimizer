@@ -1,7 +1,6 @@
 /*
  * Fuzzing harness for libvpx - VP9 encoder configuration validation with 181 blocked branches
  * 
- * Target: HarnessAgent
  * Goal: Target validate_config function in VP9 encoder through specific configuration
  *       combinations using vpx_codec_enc_init_ver, vpx_codec_enc_config_set, and
  *       vpx_codec_encode APIs. Focus on exploring deep coverage of configuration

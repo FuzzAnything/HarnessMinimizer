@@ -3,7 +3,6 @@
  * Focus: Deep encoder functions vp9_pick_inter_mode (428 blocked branches), 
  *        vp9_rd_pick_inter_mode_sb (311 blocked branches), rd_pick_partition (264 blocked branches)
  * 
- * Target: HarnessAgent
  * Goal: Generate harness_022.cpp based on coverage guidance targeting deep encoder optimization logic
  *       through specific vpx_codec_control_ configurations to exercise advanced mode selection and
  *       rate-distortion optimization paths.
