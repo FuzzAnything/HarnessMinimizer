@@ -962,38 +962,3 @@ To sort a result file explicitly, run
 `python3 sort_triage_csv.py crash_triage_result.csv`.
 Dry runs validate inputs and print the plan without compiling, contacting the
 LLM, or creating results, locks, or log directories; credentials are not needed.
-
-## Reducer throughput baseline
-
-`measure_treereduce.py` compares two direct
-`treereduce-c` workloads using the dependency-free
-`benchmark/treereduce-throughput/compile_success.cpp`
-fixture:
-
-- `compile`: the normal documented workflow, with `clang++ @@.cpp -o /dev/null`
-  as the interestingness check; and
-- `grep`: a cheap stdin oracle that isolates reducer/process-launch overhead.
-
-Run a worker sweep with:
-
-```bash
-./measure_treereduce.py --checker both --jobs 1,2,4,8,16 --repetitions 3
-```
-
-The timestamped result directory contains `summary.txt`, `summary.json`, each
-reduced source, and failure tails. Add `--keep-logs` only when raw reducer traces
-are needed; debug JSON can become very large when high worker counts cause many
-retries. Retained logs are gzip-compressed.
-
-Use this baseline together with `measure_time.py`:
-
-- `measure_treereduce.py` answers how many real checks the reducer schedules,
-  how quickly they complete, and how worker count affects convergence;
-- `harnessreducer --profile` measures the same quantities in the real crash
-  oracle; and
-- `measure_time.py` decomposes unchanged-harness compile, link, load, execution,
-  fork, socket, and Python oracle costs without a reduction run.
-
-Compare total reduction wall time as well as checks per second: more workers
-can increase speculative or repeated checks, so higher throughput does not
-necessarily mean the harness finishes reducing sooner.

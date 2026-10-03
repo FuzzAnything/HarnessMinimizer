@@ -133,20 +133,15 @@ def test_cleanup_after_leader_exit_kills_stubborn_child(tmp_path, reap_orphans):
 
 
 @pytest.fixture(scope="module")
-def runner_binaries(tmp_path_factory):
+def runner_binary(tmp_path_factory):
     directory = tmp_path_factory.mktemp("runner-supervision")
-    from measure_time import TIMING_RUNNER_SOURCE
-    timing_source = directory / "timing.cpp"
-    timing_source.write_text(TIMING_RUNNER_SOURCE)
-    binaries = {}
-    for kind, source in (("production", ROOT / "src/harnessreducer/harness_runner.cpp"), ("timing", timing_source)):
-        binary = directory / kind
-        subprocess.run([
-            "clang++", "-std=c++17", "-O1", "-I" + str(ROOT / "src/harnessreducer"),
-            str(source), "-ldl", "-o", str(binary),
-        ], check=True, timeout=30)
-        binaries[kind] = binary
-    return binaries
+    source = ROOT / "src/harnessreducer/harness_runner.cpp"
+    binary = directory / "production"
+    subprocess.run([
+        "clang++", "-std=c++17", "-O1", "-I" + str(ROOT / "src/harnessreducer"),
+        str(source), "-ldl", "-o", str(binary),
+    ], check=True, timeout=30)
+    return binary
 
 
 def compile_plugin(tmp_path, body):
@@ -161,12 +156,9 @@ def compile_plugin(tmp_path, body):
 
 
 @contextmanager
-def running_runner(binary, tmp_path, kind, env=None):
+def running_runner(binary, tmp_path, env=None):
     sock = tmp_path / "runner.sock"
-    command = [str(binary), str(sock), ""]
-    if kind == "timing":
-        command.append(str(tmp_path / "startup.txt"))
-    command.append("1")
+    command = [str(binary), str(sock), "", "1"]
     process = subprocess.Popen(command, start_new_session=True, env=env)
     try:
         deadline = time.monotonic() + 3
@@ -179,24 +171,20 @@ def running_runner(binary, tmp_path, kind, env=None):
         terminate_process_group(process)
 
 
-@pytest.mark.parametrize("kind", ["production", "timing"])
 @pytest.mark.parametrize("body,status", [
     ("return 77;", 77),
     ("close(1);close(2);sleep(8);return 0;", 124),
     ("if(fork()==0){sleep(8);_exit(0);}sleep(8);return 0;", 124),
     ("if(fork()==0){sleep(8);_exit(0);}return 77;", 77),
 ])
-def test_runner_deadlines_and_descendant_cleanup(runner_binaries, tmp_path, kind, body, status):
+def test_runner_deadlines_and_descendant_cleanup(runner_binary, tmp_path, body, status):
     plugin = compile_plugin(tmp_path, body)
-    with running_runner(runner_binaries[kind], tmp_path, kind) as (process, sock):
+    with running_runner(runner_binary, tmp_path) as (process, sock):
         started = time.monotonic()
         header, _output = runner_request(sock, plugin, timeout=3)
         assert int(header[0]) == status
         assert time.monotonic() - started < 2.5
-        assert len(header) == (10 if kind == "timing" else 2)
-        if kind == "timing":
-            assert all(int(value) >= 0 for value in header[2:])
-            assert int(header[5]) >= 0  # dlsym and execution fields still present
+        assert len(header) == 2
         # Server ignores SIGCHLD, and each monitor reaps its own executor and
         # orphan descendants before returning. No monitors should accumulate.
         children = Path(f"/proc/{process.pid}/task/{process.pid}/children")
@@ -206,10 +194,10 @@ def test_runner_deadlines_and_descendant_cleanup(runner_binaries, tmp_path, kind
         assert not children.read_text().strip()
 
 
-def test_runner_disconnect_cancels_execution(runner_binaries, tmp_path):
+def test_runner_disconnect_cancels_execution(runner_binary, tmp_path):
     pidfile = tmp_path / "executor.pid"
     plugin = compile_plugin(tmp_path, f'FILE *f=fopen("{pidfile}","w");fprintf(f,"%d",getpid());fclose(f);sleep(8);return 0;')
-    with running_runner(runner_binaries["production"], tmp_path, "production") as (_, sock):
+    with running_runner(runner_binary, tmp_path) as (_, sock):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(str(sock))
             client.sendall(os.fsencode(plugin) + b"\n")
@@ -217,15 +205,11 @@ def test_runner_disconnect_cancels_execution(runner_binaries, tmp_path):
         assert_terminated(child)
 
 
-@pytest.mark.parametrize("kind", ["production", "timing"])
-def test_runner_owner_death_cleans_active_request(runner_binaries, tmp_path, reap_orphans, kind):
+def test_runner_owner_death_cleans_active_request(runner_binary, tmp_path, reap_orphans):
     pidfile = tmp_path / "executor.pid"
     plugin = compile_plugin(tmp_path, f'FILE *f=fopen("{pidfile}","w");fprintf(f,"%d",getpid());fclose(f);sleep(8);return 0;')
     sock = tmp_path / "runner.sock"
-    command = [str(runner_binaries[kind]), str(sock), ""]
-    if kind == "timing":
-        command.append(str(tmp_path / "startup.txt"))
-    command.append("8")
+    command = [str(runner_binary), str(sock), "", "8"]
     runner_pidfile = tmp_path / "runner.pid"
     code = (
         "import os,pathlib,subprocess\n"
@@ -259,10 +243,10 @@ def test_runner_owner_death_cleans_active_request(runner_binaries, tmp_path, rea
         terminate_process_group(owner)
 
 
-def test_runner_output_limit(runner_binaries, tmp_path):
+def test_runner_output_limit(runner_binary, tmp_path):
     plugin = compile_plugin(tmp_path, 'char data[8192]={};write(1,data,sizeof(data));sleep(8);return 0;')
     env = dict(os.environ, HARNESSREDUCER_MAX_OUTPUT_BYTES="1024")
-    with running_runner(runner_binaries["production"], tmp_path, "production", env) as (_, sock):
+    with running_runner(runner_binary, tmp_path, env) as (_, sock):
         header, output = runner_request(sock, plugin, timeout=3)
         assert int(header[0]) == 125
         assert b"output limit" in output
