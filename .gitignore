@@ -3,7 +3,7 @@
 .vscode/
 output/
 .env
-.venv-host/
+.venv/
 .tools/
 
 reduced.cpp
@@ -13,10 +13,6 @@ benchmark/*
 !benchmark/.gitkeep
 dummy_file
 dummy*
-
-harnessreducer-perf-comparison*/
-latest_harnessreducer_perf_run.txt
-latest_harnessreducer_perf_run_*.txt
 
 triage-logs*/
 crash_triage*.csv
