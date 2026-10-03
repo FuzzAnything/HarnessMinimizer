@@ -88,6 +88,8 @@ harnessreducer harness.cpp \
 
 Run these commands from the repository root with the benchmark data available under `benchmark/`.
 
+GitHub limits repository file sizes, so build the benchmark libraries locally. For each case, check out the library's Git commit SHA listed in [library_version.csv](library_version.csv), build its dynamic (`.so`) and static (`.a`) libraries, and place them in that case's `build/sanitizer/lib/` folder under `benchmark/harness-bug/` or `benchmark/library-bug/`. Don't forget to instrument the libraries with AddressSanitizer and UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`) when building them.
+
 ### Speedup Performance
 
 Run performance evaluation for all four engines across both datasets.
