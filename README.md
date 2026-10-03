@@ -88,11 +88,15 @@ harnessreducer harness.cpp \
 
 Run these commands from the repository root with the benchmark data available under `benchmark/`.
 
+### Speedup Performance
+
 Run performance evaluation for all four engines across both datasets.
 
 ```bash
 ./run_harnessreducer_evaluation.sh --tool all
 ```
+
+### Crash Triage
 
 Create the crash-triage configuration.
 
@@ -114,7 +118,9 @@ Retry failed or unfinished triage cases with n workers (timeout or LLM failing t
 ./run_crash_triage_parallel.sh --tool all --jobs n --resume
 ```
 
-Run the replay experiment across both datasets with 10 treereduce workers per reduction.
+### FDP Replay Function Evaluation
+
+Run the replay experiment across all cases with 10 treereduce workers per reduction. Note that `--jobs` here is not the same as `--jobs` in the crash triage evaluation. For crash triage, it means parallel requests to LLM. Here it means number of workers of the reduction engine. The same for crash oracle evaluation.
 
 ```bash
 ./run_replay_evaluation.sh --jobs 10
@@ -125,6 +131,8 @@ Resume replay evaluation, retrying failed or incomplete cases.
 ```bash
 ./run_replay_evaluation.sh --jobs 10 --resume
 ```
+
+### Crash Oracle Evaluation
 
 Run the oracle experiment across both datasets.
 
@@ -138,4 +146,4 @@ Resume oracle evaluation, retrying failed or incomplete cases.
 ./run_oracle_evaluation.sh --jobs 10 --resume
 ```
 
-For these experiments, `--jobs` defaults to 10 reducer workers; `--parallel` defaults to one concurrent case. Results are saved under `output/replay-evaluation/` and `output/oracle-evaluation/`; use `--results-root` to choose another location.
+For replay and oracle experiments, `--jobs` defaults to 10 reducer workers; `--parallel` defaults to one concurrent case, increase `--parallel` to run different cases in parallel. Results are saved under `output/replay-evaluation/` and `output/oracle-evaluation/`; use `--results-root` to choose another location.
