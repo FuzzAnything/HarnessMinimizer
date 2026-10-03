@@ -353,11 +353,13 @@ class ReducerInvocation:
 
 def prepare_reducer_invocation(
     *, tool: str, source: str, output: str, checker_command: list[str],
-    stable: bool, jobs: int,
+    stable: bool, jobs: int, candidate_timeout_seconds: int = 300,
 ) -> ReducerInvocation:
     validate_tool(tool)
     if not 1 <= jobs <= 63:
         raise ValueError("Reducer jobs must be between 1 and 63")
+    if candidate_timeout_seconds <= 0:
+        raise ValueError("The candidate timeout must be positive")
     destination = Path(output)
     # This is deliberately shared by every engine and runs after any PCH split.
     # Do not change the checker: the compiler reads the ordinary macro headers.
@@ -376,7 +378,7 @@ def prepare_reducer_invocation(
     if tool == "treereduce":
         command = [treereduce_binary(), "-j", str(jobs), "-s", prepared_source, "-o", output]
         command.extend(["--stable", "--min-reduction", "1"] if stable else ["--fast"])
-        command.extend(["--timeout", "300", "--interesting-exit-code", "77", "--", *checker_command])
+        command.extend(["--timeout", str(candidate_timeout_seconds), "--interesting-exit-code", "77", "--", *checker_command])
         return ReducerInvocation(
             command=command, result=destination, destination=destination,
             metadata={"tool": tool, "command": command, "macro_preparation": macros.metadata()},
@@ -393,7 +395,7 @@ def prepare_reducer_invocation(
     candidate = inputs / "candidate.cpp"
     shutil.copy2(prepared_source, candidate)
     script = inputs / "interesting.sh"
-    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd)
+    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd, timeout_seconds=candidate_timeout_seconds)
     output_dir = root / "output"
     flags = perses_flags(tool, stable=stable, jobs=jobs)
     command = [
@@ -403,7 +405,7 @@ def prepare_reducer_invocation(
     ]
     metadata = {
         "tool": tool, "command": command, "perses": runtime.metadata(),
-        "checker_command": checker_command, "candidate_timeout_seconds": 300,
+        "checker_command": checker_command, "candidate_timeout_seconds": candidate_timeout_seconds,
         "checker_working_directory": str(checker_cwd),
         "input_source": str(Path(source).resolve()), "engine_directory": str(root),
         "log": str(root / "reducer.log"),

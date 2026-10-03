@@ -223,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
         const="pch",
         help="Use Phase 3 precompiled-header mode and separate compile/link steps.",
     )
+    parser.add_argument("--no-fdp-replay", action="store_true", help="Disable FDP replay for the replay evaluation.")
+    parser.add_argument("--oracle-evaluation", help="Record oracle observations in an evaluation run directory.")
     return parser
 
 
@@ -262,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         protect_initializers=args.protect_initializers,
         auto_var_init_pattern=args.auto_var_init_pattern,
         capture_raw_output=args.capture_raw_output,
+        replay_enabled=not args.no_fdp_replay,
+        oracle_evaluation=args.oracle_evaluation,
     )
     try:
         result = reduce_with_config(config)

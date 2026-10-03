@@ -113,3 +113,29 @@ Retry failed or unfinished triage cases with n workers (timeout or LLM failing t
 ```bash
 ./run_crash_triage_parallel.sh --tool all --jobs n --resume
 ```
+
+Run the replay experiment across both datasets with 10 treereduce workers per reduction.
+
+```bash
+./run_replay_evaluation.sh --jobs 10
+```
+
+Resume replay evaluation, retrying failed or incomplete cases.
+
+```bash
+./run_replay_evaluation.sh --jobs 10 --resume
+```
+
+Run the oracle experiment across both datasets.
+
+```bash
+./run_oracle_evaluation.sh --jobs 10
+```
+
+Resume oracle evaluation, retrying failed or incomplete cases.
+
+```bash
+./run_oracle_evaluation.sh --jobs 10 --resume
+```
+
+For these experiments, `--jobs` defaults to 10 reducer workers; `--parallel` defaults to one concurrent case. Results are saved under `output/replay-evaluation/` and `output/oracle-evaluation/`; use `--results-root` to choose another location.

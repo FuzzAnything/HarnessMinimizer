@@ -131,6 +131,8 @@ class ReductionConfig:
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
     capture_raw_output: bool = False
+    replay_enabled: bool = True
+    oracle_evaluation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,9 +215,10 @@ def _prepend_additional_headers(harness_path: str) -> None:
     Path(harness_path).write_text(headers_block + content, encoding="utf-8")
 
 
-def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
+def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None) -> str:
     fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
+    cleaned_source, removed = (strip_injected_ids(fallback_source, start_id=start_id)
+                               if start_id is not None else (fallback_source, 0))
     if removed:
         Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
@@ -1265,6 +1268,9 @@ def _reduction_attempt(
         if config.snapshot:
             protection.restore_file(get_last_interesting_file())
     format_reduced_harness(reduced_harness)
+    if config.oracle_evaluation:
+        from harnessreducer.oracle_evaluation import record_reduction_completed
+        record_reduction_completed(reduced_harness)
     if config.debug:
         print(
             "[DEBUG] Recording direct post-reduction validation for the "
@@ -1314,7 +1320,7 @@ def _reduction_attempt(
         config.crash_input,
         compile_flags,
         config.link_flags,
-        config.start_id,
+        config.start_id if config.replay_enabled else None,
         phase3_mode=validation_phase3_mode,
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
@@ -1326,6 +1332,12 @@ def _reduction_attempt(
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    from harnessreducer.oracle_evaluation import reference_capture
+    with reference_capture(config.oracle_evaluation):
+        return _reduce_with_config(config)
+
+
+def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     validate_tool(config.tool)
     configure_work_dir(config.work_dir)
     if config.debug and config.check:
@@ -1401,6 +1413,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             success=False
         )
     recorded_symbolized_pattern = get_reference_crash_pattern_symbolize_1()
+    if config.oracle_evaluation:
+        from harnessreducer.oracle_evaluation import freeze_references
+        freeze_references(crash_pattern_symbolize_0, recorded_symbolized_pattern)
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
 
     print(f"[+] Extracted symbolize=0 crash pattern: {crash_pattern_symbolize_0}")
@@ -1471,11 +1486,14 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
     else:
         effective_harness_path = harness_path
-    tagged_harness = tag_harness_with_fdp_ids(
-        effective_harness_path,
-        start_id=config.start_id,
-        marker=config.marker,
-    )
+    if config.replay_enabled:
+        tagged_harness = tag_harness_with_fdp_ids(
+            effective_harness_path,
+            start_id=config.start_id,
+            marker=config.marker,
+        )
+    else:
+        tagged_harness = TaggedHarness(effective_harness_path, 0)
     tagged_harness_file = _tagged_harness_path(tagged_harness)
     fdp_callsite_count = _tagged_harness_fdp_count(tagged_harness)
     fdp_trace_file: str | None = None
