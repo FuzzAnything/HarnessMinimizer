@@ -83,9 +83,8 @@ class TestCliPhase3Mode(unittest.TestCase):
         parser = build_parser()
         self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp"]).protect_initializers)
         self.assertTrue(parser.parse_args(["h.cpp", "-o", "r.cpp", "--protect-initializers"]).protect_initializers)
-        for additional in ("--slice", "--llm"):
-            with self.assertRaises(SystemExit):
-                main(["h.cpp", "-o", "r.cpp", "--protect-initializers", additional])
+        with self.assertRaises(SystemExit):
+            main(["h.cpp", "-o", "r.cpp", "--protect-initializers", "--slice"])
 
     def test_auto_var_init_pattern_is_explicitly_opt_in(self):
         parser = build_parser()

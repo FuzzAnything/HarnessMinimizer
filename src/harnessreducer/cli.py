@@ -90,11 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a fixed working directory instead of creating a temporary directory.",
     )
     parser.add_argument(
-        "--llm",
-        action="store_true",
-        help="Use LLM to perform final semantic minimization of the harness.",
-    )
-    parser.add_argument(
         "-o",
         "--output",
         default=None,
@@ -237,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
     if args.profile and args.check:
         parser.error("--profile currently measures the normal oracle and cannot be combined with --check")
-    if args.protect_initializers and (args.slice or args.llm):
-        parser.error("--protect-initializers cannot currently be combined with --slice or --llm")
+    if args.protect_initializers and args.slice:
+        parser.error("--protect-initializers cannot currently be combined with --slice")
     if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
         parser.error(f"--jobs must be between 1 and {MAX_TREEREDUCE_JOBS}")
 
@@ -248,7 +243,6 @@ def main(argv: list[str] | None = None) -> int:
         link_flags=args.link_flags,
         crash_input=args.crash_input,
         work_dir=args.work_dir,
-        use_llm=args.llm,
         stable=args.stable,
         phase3_mode=args.phase3_mode,
         amortize_link=args.amortize_link,

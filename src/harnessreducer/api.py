@@ -115,7 +115,6 @@ class ReductionConfig:
     work_dir: str | None = None
     start_id: int = 100000
     marker: str = "FDP_ID"
-    use_llm: bool = False
     stable: bool = False
     phase3_mode: str = PHASE3_SPLIT
     statistics: bool = False
@@ -1344,10 +1343,10 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         raise ValueError("debug and check modes cannot be enabled together.")
     if config.profile and config.check:
         raise ValueError("profile and check modes cannot be enabled together.")
-    if config.protect_initializers and (config.slice_enabled or config.use_llm):
+    if config.protect_initializers and config.slice_enabled:
         raise ValueError(
-            "--protect-initializers cannot currently be combined with --slice or --llm; "
-            "these additional reduction stages are outside the protected recovery."
+            "--protect-initializers cannot currently be combined with --slice; "
+            "this additional reduction stage is outside the protected recovery."
         )
     configure_debug_logging(config.debug)
     if not 1 <= config.jobs <= MAX_TREEREDUCE_JOBS:
@@ -1535,24 +1534,8 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             fdp_trace=fdp_trace_file, generated_headers=generated_headers, success=False,
             raw_reduced_harness=getattr(outcome, "raw_reduced_harness", None),
         )
-    if config.use_llm:
-        from harnessreducer.llm_reducer import apply_llm_reduction
-        final_harness = apply_llm_reduction(
-            post_inline_harness,
-            crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
-            config.crash_input,
-            compile_flags,
-            config.link_flags,
-            fdp_trace_file,
-            phase3_mode=validation_phase3_mode,
-            symbolize=config.symbolize,
-            auto_var_init_pattern_fallback=config.auto_var_init_pattern,
-        )
-    else:
-        final_harness = post_inline_harness
-
     return ReductionResult(
-        reduced_harness=final_harness,
+        reduced_harness=post_inline_harness,
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
         generated_headers=generated_headers,
@@ -1568,7 +1551,6 @@ def process(
     crash_input: str | None = None,
     link_flags: str | None = None,
     work_dir: str | None = None,
-    use_llm: bool = False,
     phase3_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     slice_enabled: bool = False,
@@ -1589,7 +1571,6 @@ def process(
         link_flags=link_flags,
         crash_input=crash_input,
         work_dir=work_dir,
-        use_llm=use_llm,
         phase3_mode=phase3_mode,
         amortize_link=amortize_link,
         statistics=statistics,

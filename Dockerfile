@@ -102,7 +102,6 @@ RUN echo "alias ls='ls -F'" >> ~/.bashrc
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /root/.local/bin/uv python install 3.12 
 
-ENV PATH="/root/FuzzAgent/.venv/bin:${PATH}"
 ENV CMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
     
 

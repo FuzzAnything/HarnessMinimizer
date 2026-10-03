@@ -98,8 +98,8 @@ READ of size 4 at 0x602000000034 thread T0
     #1 0x5ea4dfc2cfe3 in av1_get_compressed_data /root/src/libaom/av1/encoder/encoder.c:5342:5
     #2 0x5ea4dfb42f7f in encoder_encode /root/src/libaom/av1/av1_cx_iface.c:3639:20
     #3 0x5ea4dfb36563 in aom_codec_encode /root/src/libaom/aom/src/aom_encoder.c:191:11
-    #4 0x5ea4dfb34b11 in LLVMFuzzerTestOneInput /root/FuzzAgent/output/libaom/crash_002/reduced_poc.cpp:33:3
-    #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/root/FuzzAgent/output/libaom/crash_002/fuzzer+0x46068f)
+    #4 0x5ea4dfb34b11 in LLVMFuzzerTestOneInput /tmp/case/reduced_poc.cpp:33:3
+    #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/tmp/case/fuzzer+0x46068f)
 SUMMARY: AddressSanitizer: heap-buffer-overflow /root/src/libaom/av1/encoder/svc_layercontext.c:444:18 in av1_one_pass_cbr_svc_start_layer
 """
 
@@ -492,7 +492,7 @@ SUMMARY: AddressSanitizer: negative-size-param
         self.assertIsNone(
             extract_harness_crash_location(
                 SAMPLE_ASAN_OUTPUT,
-                harness_path="/root/FuzzAgent/output/libaom/crash_002/reduced_poc.cpp",
+                harness_path="/tmp/case/reduced_poc.cpp",
             )
         )
 
