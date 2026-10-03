@@ -1,5 +1,68 @@
 # HarnessReducer
 
+## Start with Docker
+
+On a Linux x86-64 host with Docker installed and its local daemon accessible,
+run these commands from the repository root. Building the image and installing
+packages require network access.
+
+```bash
+# Run on the host from the repository root.
+./setup_docker.sh
+
+# Continue installation inside the container.
+docker exec -it harnessminimizer-eval bash
+cd HarnessMinimizer/
+```
+
+The script builds `harnessminimizer:latest` from the Dockerfile and creates
+`harnessminimizer-eval`. It derives the host workspace path automatically and
+bind-mounts it read-write at `/root/HarnessMinimizer`, which is also the
+container's working directory. Files changed there are shared with the host.
+The container stays running in the background until stopped.
+
+Continue with [Install the Python package](#1-install-the-python-package)
+inside the container, then install [Perses and its variants](#2a-install-perses-wdd-cdd-and-sfc)
+if needed. The Dockerfile already installs patched treereduce and sets
+`HARNESSREDUCER_TREEREDUCE`, so its installation can be skipped in this container.
+
+The image disables debuginfod lookups and sets both sanitizer symbolizers to
+`/usr/lib/llvm-21/bin/llvm-symbolizer`. The setup script also sets
+`LOUIS_TABLEPATH=/root/HarnessMinimizer/benchmark/library-bug/liblouis-1/build/sanitizer/share/liblouis/tables`
+in the container environment, including for noninteractive commands; no
+`.bashrc` change is needed.
+
+For the supplied benchmarks, the script installs `libzstd-dev`, `libjbig-dev`,
+`libjpeg-dev`, `libnl-genl-3-dev`, `libnl-3-dev`, `libdbus-1-dev`, and
+`libexpat1-dev` inside the container. These packages support the libmagic,
+libtiff, libpcap, and exiv2 cases. This installation is separate from the
+Dockerfile. Supply the benchmark data under `benchmark/` before evaluation,
+including the liblouis tables at the path above; the script does not download
+or unpack it. Install any dependencies for additional cases yourself.
+
+To use different image and container names:
+
+```bash
+./setup_docker.sh --image harnessminimizer:local --name harnessminimizer-local
+docker exec -it harnessminimizer-local bash
+```
+
+If the requested container name already exists, the script stops before
+building and leaves that container untouched. To reopen the existing container
+(starting it first if stopped):
+
+```bash
+docker start harnessminimizer-eval
+docker exec -it harnessminimizer-eval bash
+```
+
+Use a different `--name` to create a fresh container. Building a new image does
+not update an existing container. If setup fails after creating a container,
+it is kept for diagnosis; the script reports the failed step and exits nonzero.
+Run `./setup_docker.sh --help` for the available options.
+
+## Overview
+
 HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving the crash.
 It is designed for `FuzzedDataProvider`-based harnesses and combines:
 

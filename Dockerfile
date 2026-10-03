@@ -135,11 +135,11 @@ ENV PATH=$PATH:$GOPATH/bin
 
 RUN go install github.com/boyter/scc/v3@latest
 
-ENV DEBUGINFOD_URLS="" \
-    ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \
-    UBSAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer"
-
 # We Must mapping our source code to this path in the container (DEV Phase)
 WORKDIR /root
 
 #ENTRYPOINT ["python", "main.py"]
+
+ENV DEBUGINFOD_URLS="" \
+    ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \
+    UBSAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer"
