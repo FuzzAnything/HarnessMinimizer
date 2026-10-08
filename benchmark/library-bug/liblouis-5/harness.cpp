@@ -3,7 +3,6 @@
  * Targets: Hyphenation and table metadata functions
  * 
  * This harness exercises hyphenation, character conversion, and table metadata
- * functions that are currently uncovered. Based on CoverageAnalyzer guidance.
  * Sequence: table discovery -> table loading -> metadata examination -> 
  * hyphenation -> character conversion -> proper cleanup.
  * Ensures semantic diversity from harness_000 which focuses on translation.

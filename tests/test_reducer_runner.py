@@ -95,6 +95,43 @@ class TestReducerRunner(unittest.TestCase):
         self.assertNotIn("--last-interesting-file", cmd)
 
     @patch("harnessreducer.reducer_runner.run_supervised")
+    def test_normal_reduction_has_no_measurement_side_effects(self, mock_run):
+        from harnessreducer.oracle_evaluation import reference_capture
+
+        mock_run.return_value = _Proc(returncode=0)
+        with tempfile.TemporaryDirectory() as tmpdir, reference_capture(None):
+            root = Path(tmpdir)
+            reducer_runner.configure_work_dir(tmpdir)
+            source = root / "in.cpp"
+            source.write_text("int main() { return 0; }\n")
+            output = root / "reduced_harness.cpp"
+            output.write_text(source.read_text())
+            with patch("harnessreducer.reducer_runner.initialize_candidate_profile_events_file",
+                       side_effect=AssertionError("profiling is disabled")), \
+                    patch("harnessreducer.reducer_runner.write_profile_summary",
+                          side_effect=AssertionError("profiling is disabled")), \
+                    patch("harnessreducer.reduction_engines.RawOutputCapture.capture",
+                          side_effect=AssertionError("raw capture is disabled")), \
+                    patch("harnessreducer.oracle_paired_execution.comparison_mode",
+                          side_effect=AssertionError("oracle evaluation is disabled")):
+                self.assertEqual(
+                    reducer_runner.run_treereducer(
+                        str(source), None, "AddressSanitizer", None, None, None,
+                        jobs=1,
+                    ),
+                    str(output),
+                )
+            command = mock_run.call_args.args[0]
+            self.assertNotIn("--profile-file", command)
+            self.assertFalse(any(arg.startswith("--oracle-") for arg in command))
+            self.assertEqual(command[command.index("--timeout") + 1], "300")
+            for artifact in (
+                "candidate_profile.jsonl", "reduction_profile.json", "reduction_profile.txt",
+                "reduced_harness.raw.cpp", "paired_execution.json",
+            ):
+                self.assertFalse((root / artifact).exists(), artifact)
+
+    @patch("harnessreducer.reducer_runner.run_supervised")
     def test_run_treereducer_symbolize_uses_symbolized_oracle(self, mock_run):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         with tempfile.TemporaryDirectory() as tmpdir:

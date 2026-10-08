@@ -98,8 +98,8 @@ READ of size 4 at 0x602000000034 thread T0
     #1 0x5ea4dfc2cfe3 in av1_get_compressed_data /root/src/libaom/av1/encoder/encoder.c:5342:5
     #2 0x5ea4dfb42f7f in encoder_encode /root/src/libaom/av1/av1_cx_iface.c:3639:20
     #3 0x5ea4dfb36563 in aom_codec_encode /root/src/libaom/aom/src/aom_encoder.c:191:11
-    #4 0x5ea4dfb34b11 in LLVMFuzzerTestOneInput /root/FuzzAgent/output/libaom/crash_002/reduced_poc.cpp:33:3
-    #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/root/FuzzAgent/output/libaom/crash_002/fuzzer+0x46068f)
+    #4 0x5ea4dfb34b11 in LLVMFuzzerTestOneInput /tmp/case/reduced_poc.cpp:33:3
+    #5 0x5ea4dfa2f68f in fuzzer::Fuzzer::ExecuteCallback(unsigned char const*, unsigned long) (/tmp/case/fuzzer+0x46068f)
 SUMMARY: AddressSanitizer: heap-buffer-overflow /root/src/libaom/av1/encoder/svc_layercontext.c:444:18 in av1_one_pass_cbr_svc_start_layer
 """
 
@@ -434,9 +434,9 @@ SUMMARY: AddressSanitizer: negative-size-param
     def test_extract_symbolized_crash_location_skips_sanitizer_allocator_frames(self):
         output = """\
 ==12345==ERROR: AddressSanitizer: stack-overflow on address 0x7ffe3f448fd8
-    #0 0xaaa in UseImpl /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:33:35
-    #1 0xbbb in Use /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/../sanitizer_common/sanitizer_allocator_dlsym.h:27:43
-    #2 0xccc in malloc /home/lihaiying/build-llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:65:7
+    #0 0xaaa in UseImpl /opt/llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:33:35
+    #1 0xbbb in Use /opt/llvm/llvm-project/compiler-rt/lib/asan/../sanitizer_common/sanitizer_allocator_dlsym.h:27:43
+    #2 0xccc in malloc /opt/llvm/llvm-project/compiler-rt/lib/asan/asan_malloc_linux.cpp:65:7
     #3 0xddd in default_malloc /root/src/c-ares/src/lib/ares_library_init.c:52:10
     #4 0xeee in ares_malloc /root/src/c-ares/src/lib/ares_library_init.c:71:10
     #5 0xfff in LLVMFuzzerTestOneInput /tmp/harness.cpp:42:3
@@ -492,7 +492,7 @@ SUMMARY: AddressSanitizer: negative-size-param
         self.assertIsNone(
             extract_harness_crash_location(
                 SAMPLE_ASAN_OUTPUT,
-                harness_path="/root/FuzzAgent/output/libaom/crash_002/reduced_poc.cpp",
+                harness_path="/tmp/case/reduced_poc.cpp",
             )
         )
 

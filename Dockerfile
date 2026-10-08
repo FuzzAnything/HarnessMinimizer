@@ -102,7 +102,6 @@ RUN echo "alias ls='ls -F'" >> ~/.bashrc
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /root/.local/bin/uv python install 3.12 
 
-ENV PATH="/root/FuzzAgent/.venv/bin:${PATH}"
 ENV CMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
     
 
@@ -135,11 +134,11 @@ ENV PATH=$PATH:$GOPATH/bin
 
 RUN go install github.com/boyter/scc/v3@latest
 
-ENV DEBUGINFOD_URLS="" \
-    ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \
-    UBSAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer"
-
 # We Must mapping our source code to this path in the container (DEV Phase)
 WORKDIR /root
 
 #ENTRYPOINT ["python", "main.py"]
+
+ENV DEBUGINFOD_URLS="" \
+    ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \
+    UBSAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer"

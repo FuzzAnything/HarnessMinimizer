@@ -5,7 +5,7 @@ Perses script translates the result to the zero/nonzero contract of Perses.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import hashlib
 import json
@@ -254,6 +254,45 @@ def absolute_checker_paths(command: list[str]) -> list[str]:
     return result
 
 
+def raw_reducer_output_path(source: str | Path) -> Path:
+    """Sidecar containing the engine's bytes, never edited by post-processing."""
+    return Path(source).with_suffix(".raw.cpp")
+
+
+@dataclass
+class RawOutputCapture:
+    """Optional evaluation artifacts, never consulted by reduction decisions."""
+
+    _artifacts: dict[str, str] = field(default_factory=dict, init=False)
+
+    def capture(self, source: str | Path, destination: str | Path) -> None:
+        key = os.path.abspath(destination)
+        self._artifacts.pop(key, None)
+        raw = raw_reducer_output_path(destination)
+        temporary = None
+        try:
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(prefix=".raw-output-", dir=raw.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+            shutil.copyfile(source, temporary)
+            temporary.replace(raw)
+            self._artifacts[key] = str(raw)
+        except OSError as exc:
+            # An unavailable measurement must not abort restoration, validation,
+            # or recovery. Only the evaluation reporter treats it as incomplete.
+            print(f"[!] Could not capture raw evaluation output {raw}: {exc}", file=sys.stderr)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def for_source(self, source: str | Path) -> str | None:
+        # Use only captures from this attempt, even if an older sidecar exists.
+        return self._artifacts.get(os.path.abspath(source))
+
+
 @dataclass
 class ReducerInvocation:
     command: list[str]
@@ -293,9 +332,17 @@ class ReducerInvocation:
             )
         return result
 
-    def publish_result(self) -> None:
+    def publish_result(self, raw_output_capture: RawOutputCapture | None = None) -> None:
         if not self.result.is_file():
             raise RuntimeError(f"Reducer did not produce its expected result: {self.result}")
+        # Freeze the result and every selectable snapshot before expanding macro
+        # headers. PCH/initializer restoration and inlining happen further up
+        # the call stack and must never touch these measurement artifacts.
+        if raw_output_capture is not None:
+            raw_output_capture.capture(self.result, self.destination)
+            for path in self.snapshot_paths:
+                if path.is_file():
+                    raw_output_capture.capture(path, path)
         if self.result.resolve() != self.destination.resolve():
             shutil.copy2(self.result, self.destination)
         if self.macros is not None:
@@ -306,11 +353,13 @@ class ReducerInvocation:
 
 def prepare_reducer_invocation(
     *, tool: str, source: str, output: str, checker_command: list[str],
-    stable: bool, jobs: int,
+    stable: bool, jobs: int, candidate_timeout_seconds: int = 300,
 ) -> ReducerInvocation:
     validate_tool(tool)
     if not 1 <= jobs <= 63:
         raise ValueError("Reducer jobs must be between 1 and 63")
+    if candidate_timeout_seconds <= 0:
+        raise ValueError("The candidate timeout must be positive")
     destination = Path(output)
     # This is deliberately shared by every engine and runs after any PCH split.
     # Do not change the checker: the compiler reads the ordinary macro headers.
@@ -329,7 +378,7 @@ def prepare_reducer_invocation(
     if tool == "treereduce":
         command = [treereduce_binary(), "-j", str(jobs), "-s", prepared_source, "-o", output]
         command.extend(["--stable", "--min-reduction", "1"] if stable else ["--fast"])
-        command.extend(["--timeout", "300", "--interesting-exit-code", "77", "--", *checker_command])
+        command.extend(["--timeout", str(candidate_timeout_seconds), "--interesting-exit-code", "77", "--", *checker_command])
         return ReducerInvocation(
             command=command, result=destination, destination=destination,
             metadata={"tool": tool, "command": command, "macro_preparation": macros.metadata()},
@@ -346,7 +395,7 @@ def prepare_reducer_invocation(
     candidate = inputs / "candidate.cpp"
     shutil.copy2(prepared_source, candidate)
     script = inputs / "interesting.sh"
-    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd)
+    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd, timeout_seconds=candidate_timeout_seconds)
     output_dir = root / "output"
     flags = perses_flags(tool, stable=stable, jobs=jobs)
     command = [
@@ -356,7 +405,7 @@ def prepare_reducer_invocation(
     ]
     metadata = {
         "tool": tool, "command": command, "perses": runtime.metadata(),
-        "checker_command": checker_command, "candidate_timeout_seconds": 300,
+        "checker_command": checker_command, "candidate_timeout_seconds": candidate_timeout_seconds,
         "checker_working_directory": str(checker_cwd),
         "input_source": str(Path(source).resolve()), "engine_directory": str(root),
         "log": str(root / "reducer.log"),

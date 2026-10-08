@@ -11,9 +11,9 @@ import pytest
 
 from harnessreducer.macro_headers import prepare_macro_headers
 from harnessreducer.reduction_engines import (
-    PERSES_COMMIT, TOOL_CHOICES, PersesRuntime, prepare_reducer_invocation,
+    PERSES_COMMIT, TOOL_CHOICES, PersesRuntime, RawOutputCapture, prepare_reducer_invocation, raw_reducer_output_path,
 )
-from harnessreducer.reducer_runner import _split_source_for_pch
+from harnessreducer.reducer_runner import PchArtifacts, _split_source_for_pch, restore_pch_includes
 from harnessreducer.process_supervisor import run_supervised
 
 
@@ -85,30 +85,55 @@ def test_restore_uses_include_identity_not_positions_and_preserves_user_includes
 
 
 @pytest.mark.parametrize("tool", TOOL_CHOICES)
-def test_every_engine_restores_output_and_snapshot(tmp_path, tool):
+@pytest.mark.parametrize("mode", ["split", "pch"])
+@pytest.mark.parametrize("capture_raw", [False, True])
+def test_every_engine_restores_output_and_snapshot(tmp_path, tool, mode, capture_raw):
     original = tmp_path / "source.cpp"
-    source = '#include <cstddef>\n#define VALUE 7\nint value = VALUE;\n'
+    source = '#include <cstddef>\nint before;\n#define VALUE (7 + 8 + 9)\nint value = VALUE;\n'
     original.write_text(source)
+    prefix = ""
+    engine_input = original
+    if mode == "pch":
+        _, prefix, body = _split_source_for_pch(source, tmp_path)
+        engine_input = tmp_path / "body.cpp"
+        engine_input.write_text(body)
     destination = tmp_path / "reduced.cpp"
     snapshot = tmp_path / "snapshot.cpp"
     runtime = PersesRuntime(("java", "-jar", "/fake.jar"), "digest", "version", "java", PERSES_COMMIT)
     with patch("harnessreducer.reduction_engines.check_perses", return_value=runtime):
         invocation = prepare_reducer_invocation(
-            tool=tool, source=str(original), output=str(destination),
+            tool=tool, source=str(engine_input), output=str(destination),
             checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
             stable=True, jobs=2,
         )
     key = "-s" if tool == "treereduce" else "--input-file"
     engine_source = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
     assert "#define" not in engine_source
-    assert "#include <cstddef>" in engine_source
+    assert ("#include <cstddef>" in engine_source) == (mode == "split")
     assert invocation.metadata["macro_preparation"]["definition_count"] == 1
     invocation.result.parent.mkdir(exist_ok=True)
     invocation.result.write_text(engine_source)
-    snapshot.write_text(engine_source)
-    invocation.publish_result()
-    assert destination.read_text() == source
-    assert snapshot.read_text() == source
+    snapshot_source = engine_source + "int snapshot_only;\n"
+    snapshot.write_text(snapshot_source)
+    capture = RawOutputCapture() if capture_raw else None
+    invocation.publish_result(capture)
+    assert "#define VALUE" in destination.read_text()
+    if mode == "pch":
+        artifacts = PchArtifacts(str(engine_input), "prefix.h", "prefix.pch", prefix)
+        restore_pch_includes(str(destination), artifacts)
+        restore_pch_includes(str(snapshot), artifacts)
+    assert "#include <cstddef>" in destination.read_text()
+    assert "int snapshot_only;" in snapshot.read_text()
+    # Restoration must not modify either raw copy, even in the direct-output
+    # treereduce case where the result and destination are the same file.
+    if capture_raw:
+        assert raw_reducer_output_path(destination).read_text() == engine_source
+        assert raw_reducer_output_path(snapshot).read_text() == snapshot_source
+        from harnessreducer.evaluation_metrics import count_source_tokens
+        assert count_source_tokens(destination) != count_source_tokens(raw_reducer_output_path(destination))
+    else:
+        assert not raw_reducer_output_path(destination).exists()
+        assert not raw_reducer_output_path(snapshot).exists()
     assert original.read_text() == source
 
 
@@ -261,3 +286,42 @@ def test_real_engines_reduce_macros_and_export_compilable_source(tmp_path, tool,
     )
     assert run_supervised([str(binary)], timeout=5).returncode == 7
     assert (tmp_path / "original.cpp").read_text() == original
+
+
+@pytest.mark.parametrize("tool", TOOL_CHOICES)
+def test_raw_capture_failure_does_not_block_publication_or_restore_stale_measurements(tmp_path, monkeypatch, capsys, tool):
+    source = tmp_path / "source.cpp"
+    text = '#define VALUE (1 + 2)\nint value = VALUE;\n'
+    source.write_text(text)
+    destination, snapshot = tmp_path / "reduced.cpp", tmp_path / "snapshot.cpp"
+    runtime = PersesRuntime(("java", "-jar", "/fake.jar"), "digest", "version", "java", PERSES_COMMIT)
+    with patch("harnessreducer.reduction_engines.check_perses", return_value=runtime):
+        invocation = prepare_reducer_invocation(
+            tool=tool, source=str(source), output=str(destination),
+            checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
+            stable=True, jobs=1,
+        )
+    key = "-s" if tool == "treereduce" else "--input-file"
+    prepared = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
+    invocation.result.parent.mkdir(exist_ok=True)
+    invocation.result.write_text(prepared)
+    snapshot.write_text(prepared)
+    capture = RawOutputCapture()
+    # Even an old sidecar (or an earlier capture by this object) must not become
+    # the measurement for a result whose own capture failed.
+    for path in (destination, snapshot):
+        capture.capture(source, path)
+        assert capture.for_source(path) is not None
+    original_copy = shutil.copyfile
+    def fail_measurement_copy(source, destination, *args, **kwargs):
+        if Path(destination).name.startswith(".raw-output-"):
+            raise OSError("synthetic measurement failure")
+        return original_copy(source, destination, *args, **kwargs)
+    monkeypatch.setattr(shutil, "copyfile", fail_measurement_copy)
+    command = list(invocation.command)
+    invocation.publish_result(capture)
+    assert invocation.command == command
+    assert destination.read_text() == snapshot.read_text() == text
+    assert capture.for_source(destination) is capture.for_source(snapshot) is None
+    assert not list(tmp_path.glob(".raw-output-*"))
+    assert "synthetic measurement failure" in capsys.readouterr().err

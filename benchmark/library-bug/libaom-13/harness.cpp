@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2024, FuzzAgent Project. All rights reserved.
  *
  * Fuzzing harness for libaom AV1 encoder extreme configuration validation module.
  * This harness targets specific blocked branches in validate_config function:

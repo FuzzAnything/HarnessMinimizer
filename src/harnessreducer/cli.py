@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
-from harnessreducer.reduction_engines import TOOL_CHOICES
+from harnessreducer.reduction_engines import RawOutputCapture, TOOL_CHOICES
 from harnessreducer.reducer_runner import (
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
@@ -51,6 +51,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Reduce FDP-based harnesses while preserving crash behavior.",
     )
     parser.add_argument(
+        "--capture-raw-output",
+        action="store_true",
+        help="Save raw reducer output for evaluation; disabled by default and independent of --profile.",
+    )
+    parser.add_argument(
         "harness",
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
@@ -83,11 +88,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--work-dir",
         default=None,
         help="Use a fixed working directory instead of creating a temporary directory.",
-    )
-    parser.add_argument(
-        "--llm",
-        action="store_true",
-        help="Use LLM to perform final semantic minimization of the harness.",
     )
     parser.add_argument(
         "-o",
@@ -218,6 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
         const="pch",
         help="Use Phase 3 precompiled-header mode and separate compile/link steps.",
     )
+    parser.add_argument("--no-fdp-replay", action="store_true", help="Disable FDP replay for the replay evaluation.")
+    parser.add_argument("--oracle-evaluation", help="Record oracle observations in an evaluation run directory.")
     return parser
 
 
@@ -230,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
     if args.profile and args.check:
         parser.error("--profile currently measures the normal oracle and cannot be combined with --check")
-    if args.protect_initializers and (args.slice or args.llm):
-        parser.error("--protect-initializers cannot currently be combined with --slice or --llm")
+    if args.protect_initializers and args.slice:
+        parser.error("--protect-initializers cannot currently be combined with --slice")
     if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
         parser.error(f"--jobs must be between 1 and {MAX_TREEREDUCE_JOBS}")
 
@@ -241,7 +243,6 @@ def main(argv: list[str] | None = None) -> int:
         link_flags=args.link_flags,
         crash_input=args.crash_input,
         work_dir=args.work_dir,
-        use_llm=args.llm,
         stable=args.stable,
         phase3_mode=args.phase3_mode,
         amortize_link=args.amortize_link,
@@ -256,6 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         tool=args.tool,
         protect_initializers=args.protect_initializers,
         auto_var_init_pattern=args.auto_var_init_pattern,
+        capture_raw_output=args.capture_raw_output,
+        replay_enabled=not args.no_fdp_replay,
+        oracle_evaluation=args.oracle_evaluation,
     )
     try:
         result = reduce_with_config(config)
@@ -264,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
             _stage_debug_log(args.output)
         if args.profile:
             _stage_profile(args.output)
+    if args.capture_raw_output and args.output and result.raw_reduced_harness:
+        RawOutputCapture().capture(result.raw_reduced_harness, args.output)
     if not result.success:
         print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
         return 1

@@ -63,6 +63,12 @@ def _add_profile_duration(args: argparse.Namespace, field: str, started_ns: int)
     setattr(args, field, int(getattr(args, field, 0)) + elapsed_ns)
 
 
+def _observe_oracle(args, operation, *values):
+    if getattr(args, "oracle_evaluation", None):
+        from harnessreducer.oracle_evaluation import observe
+        observe(args, operation, *values)
+
+
 def _run_profiled_subprocess(
     args: argparse.Namespace,
     field: str,
@@ -70,6 +76,7 @@ def _run_profiled_subprocess(
     **kwargs,
 ) -> subprocess.CompletedProcess:
     started_ns = time.perf_counter_ns() if getattr(args, "profile_file", None) else None
+    _observe_oracle(args, "command", command)
     try:
         return run_supervised(command, **kwargs)
     except (subprocess.TimeoutExpired, OutputLimitExceeded) as exc:
@@ -262,6 +269,7 @@ def _update_statistics_file(statistics_file: str, result_code: int) -> None:
 
 
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
+    _observe_oracle(args, "finish", result_code)
     try:
         _append_profile_record(args, result_code)
     except Exception as exc:
@@ -817,6 +825,7 @@ def run_standalone_candidate(
         exec_timeout_ms=args.exec_timeout_ms,
     )
     args._debug_first_execution_return_code = status
+    _observe_oracle(args, "execution", status, run_log, exec_cmd[0], exec_time_ms, exec_cmd)
     args._debug_oom_retry_attempted = False
 
     if not _should_retry_without_rss_limit(args, run_log):
@@ -831,6 +840,7 @@ def run_standalone_candidate(
     )
     if retry_status == 77:
         print(f"{POC_RUNTIME_ARG_MARKER}-rss_limit_mb=0")
+    _observe_oracle(args, "execution", retry_status, retry_log, retry_cmd[0], retry_exec_time_ms, retry_cmd)
     return retry_status, retry_log, retry_exec_time_ms
 
 
@@ -893,6 +903,7 @@ def run_with_amortized_runner_maybe_fallback_timed(
         output_path,
         getattr(args, "exec_timeout_ms", None),
     )
+    _observe_oracle(args, "execution", status, run_log, output_path, exec_time_ms)
     fallback_link_flags = getattr(args, "amortized_plugin_fallback_link_flags", None)
     if (
         object_path
@@ -914,6 +925,7 @@ def run_with_amortized_runner_maybe_fallback_timed(
             output_path,
             getattr(args, "exec_timeout_ms", None),
         )
+        _observe_oracle(args, "execution", status, run_log, output_path, exec_time_ms)
     return status, run_log, exec_time_ms
 
 
@@ -1175,6 +1187,10 @@ def main() -> int:
     parser.add_argument("--debug-stage", type=str, default="unspecified", help=argparse.SUPPRESS)
     parser.add_argument("--profile-file", type=str, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--auto-var-init-pattern", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--oracle-evaluation", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--oracle-symbolized-runner-socket", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--oracle-symbolized-timeout-ms", type=int, default=10_000, help=argparse.SUPPRESS)
+    parser.add_argument("--oracle-prefix", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--retry-oom-without-rss-limit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--evidence-attempts",
@@ -1211,6 +1227,7 @@ def main() -> int:
     args._debug_first_stack_trace = None
     args._last_compile_error = None
     args._last_compile_cmd = None
+    _observe_oracle(args, "start")
     pid = os.getpid()
 
     with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as out_file:
@@ -1303,6 +1320,7 @@ def main() -> int:
         print("Crash behavior preserved.")
         return _finalize_result(args, 77)
     finally:
+        _observe_oracle(args, "finish", None)
         if object_path:
             try:
                 os.remove(object_path)

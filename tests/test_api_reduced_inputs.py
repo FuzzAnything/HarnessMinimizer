@@ -9,6 +9,7 @@ import pytest
 
 from harnessreducer import api
 from harnessreducer.process_supervisor import run_supervised
+from harnessreducer.reduction_engines import RawOutputCapture, raw_reducer_output_path
 
 
 def harness(parameters: str, body: str = "return 0;") -> str:
@@ -197,11 +198,20 @@ def test_unsupported_direct_signature_validates_unchanged(tmp_path: Path, capsys
 @pytest.mark.parametrize("fdp_trace", [False, True])
 @pytest.mark.parametrize("symbolize", [False, True])
 @pytest.mark.parametrize("snapshot_success", [False, True])
-def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, symbolize, snapshot_success):
+@pytest.mark.parametrize("capture_raw", [False, True])
+def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, symbolize, snapshot_success, capture_raw):
     reduced = tmp_path / "reduced.cpp"
     reduced.write_text(harness("const uint8_t *, size_t", "return 0;"))
     snapshot = tmp_path / "last_interesting.cpp"
     snapshot.write_text(harness("", "return 1;"))
+    raw_reducer_output_path(reduced).write_text("int raw_primary;")
+    raw_snapshot = raw_reducer_output_path(snapshot)
+    raw_snapshot.write_text('#include "temporary.h"\nint raw_snapshot;')
+    capture = RawOutputCapture() if capture_raw else None
+    if capture is not None:
+        capture.capture(reduced, reduced)
+        capture.capture(snapshot, snapshot)
+    raw_before = raw_snapshot.read_bytes()
     seed = tmp_path / "seed.bin"
     seed.write_bytes(b"x")
     trace = tmp_path / "trace.log"
@@ -212,10 +222,14 @@ def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, sym
             outcomes.append(False)
         selected, other = validators(stack, symbolize, iter(outcomes))
         stack.enter_context(patch.object(api, "get_last_interesting_file", return_value=str(snapshot)))
-        out, headers = api.inline_literals_in_reduced_harness(
+        outcome = api.inline_literals_in_reduced_harness(
             str(reduced), str(trace) if fdp_trace else None, "Pattern", str(seed), None, None,
             symbolize=symbolize, snapshot=True,
+            raw_output_capture=capture,
         )
+    out, headers = outcome
+    assert outcome.raw_reduced_harness == (str(raw_snapshot) if capture_raw else None)
+    assert raw_snapshot.read_bytes() == raw_before
     assert selected.call_count == (2 if snapshot_success else 3)
     other.assert_not_called()
     assert headers == ()

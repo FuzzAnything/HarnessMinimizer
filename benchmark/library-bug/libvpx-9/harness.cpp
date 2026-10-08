@@ -1,7 +1,6 @@
 /*
  * Fuzzing harness for libvpx - VP9 encoder configuration validation with 214 blocked branches
  * 
- * Target: HarnessAgent
  * Goal: Systematically test validate_config function error paths focusing on image validation,
  *       color space constraints, target level validation, and complex state transitions
  *       not covered by harness_011 (basic RANGE_CHECK) and harness_012 (complex interdependencies).

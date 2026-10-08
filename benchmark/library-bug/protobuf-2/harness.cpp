@@ -1,5 +1,4 @@
 // Protocol Buffers fuzzing harness for output stream aliasing operations
-// This harness targets the critical coverage gap identified by CoverageAnalyzerAgent:
 // 23+ undiscovered branches in protobuf output stream aliasing APIs.
 // Current API coverage: 29.94%
 // Target APIs: WriteStringWithSizeToArray, WriteAliasedRaw, WriteBytesMaybeAliased, EnableAliasing

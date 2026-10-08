@@ -29,33 +29,12 @@ uv sync
 
 3. Ensure `clang++` is available in `PATH`.
 
-## Complex FDP Example
-
-The repository contains a complex FDP-based harness example:
-
-- `examples/fdp_complex_crash_harness.cpp`
-
-This example intentionally includes:
-
-- Multiple parsing stages (`header`, `records`, `metrics`)
-- Rich FDP consumption APIs (`ConsumeBytesAsString`, `ConsumeIntegral`,
-	`ConsumeRandomLengthString`, `ConsumeBytes`, `ConsumeFloatingPoint`, `ConsumeBool`)
-- A deterministic crash gate to demonstrate crash-preserving reduction
-
-### Build The Example
-
-```bash
-clang++ -std=c++17 -Iinclude -gline-tables-only -O0 -Werror=uninitialized \
-	examples/fdp_complex_crash_harness.cpp \
-	-o /tmp/fdp_complex_demo.out
-```
-
 ## Testing
 
-Run automated tests (compiles and executes the example):
+Run automated tests:
 
 ```bash
-uv run python -m unittest tests/test_fdp_complex_example.py -v
+uv run python -m unittest discover -s tests -v
 ```
 
 ## CLI Usage
@@ -84,7 +63,7 @@ uv run python -m harnessreducer <harness.cpp> <crash_regex> [--extra-flags "..."
 from harnessreducer import ReductionConfig, reduce_with_config
 
 config = ReductionConfig(
-	harness_path="examples/fdp_complex_crash_harness.cpp",
+	harness_path="harness.cpp",
 	crash_pattern="AddressSanitizer|runtime error",
 	extra_flags="-std=c++17",
 	crash_input="seed.bin",

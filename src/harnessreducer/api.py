@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from harnessreducer.process_supervisor import termination_guard
-from harnessreducer.reduction_engines import check_perses, validate_tool
+from harnessreducer.reduction_engines import RawOutputCapture, check_perses, validate_tool
 from harnessreducer.check_mode import (
     emit_check_statistics_summary,
     record_check_reference,
@@ -115,7 +115,6 @@ class ReductionConfig:
     work_dir: str | None = None
     start_id: int = 100000
     marker: str = "FDP_ID"
-    use_llm: bool = False
     stable: bool = False
     phase3_mode: str = PHASE3_SPLIT
     statistics: bool = False
@@ -130,6 +129,9 @@ class ReductionConfig:
     tool: str = "treereduce"
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
+    capture_raw_output: bool = False
+    replay_enabled: bool = True
+    oracle_evaluation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ class ReductionResult:
     generated_headers: tuple[str, ...] = ()
     poc_runtime_args: tuple[str, ...] = ()
     success: bool = True
+    raw_reduced_harness: str | None = None
 
 
 class PostReductionOutcome(tuple):
@@ -148,11 +151,13 @@ class PostReductionOutcome(tuple):
     def __new__(
         cls, path: str, headers: tuple[str, ...] = (), *, validated: bool = True,
         stage: str = "final-output", log: str | None = None,
+        raw_reduced_harness: str | None = None,
     ):
         result = super().__new__(cls, (path, headers))
         result.validated = validated
         result.stage = stage
         result.log = log
+        result.raw_reduced_harness = raw_reduced_harness
         return result
 
 
@@ -209,9 +214,10 @@ def _prepend_additional_headers(harness_path: str) -> None:
     Path(harness_path).write_text(headers_block + content, encoding="utf-8")
 
 
-def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
+def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None) -> str:
     fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
+    cleaned_source, removed = (strip_injected_ids(fallback_source, start_id=start_id)
+                               if start_id is not None else (fallback_source, 0))
     if removed:
         Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
@@ -360,6 +366,7 @@ def _finalize_and_validate_fallback_harness(
     symbolize: bool,
     fallback_label: str,
     auto_var_init_pattern_fallback: bool = False,
+    raw_output_capture: RawOutputCapture | None = None,
 ) -> PostReductionOutcome:
     fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id)
     validation_log_path = f"{fallback_path}.fallback.validation.log"
@@ -392,6 +399,7 @@ def _finalize_and_validate_fallback_harness(
     return PostReductionOutcome(
         fallback_path, validated=crash_preserved, stage="cleaned-fallback",
         log=validation_log_path,
+        raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
     )
 
 
@@ -826,6 +834,7 @@ def _inline_direct_input_in_reduced_harness(
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
+    raw_output_capture: RawOutputCapture | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
@@ -835,6 +844,7 @@ def _inline_direct_input_in_reduced_harness(
         return PostReductionOutcome(
             _finalize_fallback_harness(reduced_harness_path, start_id),
             validated=False, stage="missing-input",
+            raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
         )
 
     crash_input_path = Path(crash_input)
@@ -846,6 +856,7 @@ def _inline_direct_input_in_reduced_harness(
         return PostReductionOutcome(
             _finalize_fallback_harness(reduced_harness_path, start_id),
             validated=False, stage="missing-input",
+            raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
         )
 
     crash_bytes = crash_input_path.read_bytes()
@@ -912,7 +923,10 @@ def _inline_direct_input_in_reduced_harness(
         )
         if crash_preserved:
             print("[+] Post-reduction validation preserved crash behavior.")
-            return PostReductionOutcome(inline_harness_path, generated_headers)
+            return PostReductionOutcome(
+                inline_harness_path, generated_headers,
+                raw_reduced_harness=raw_output_capture.for_source(base_harness_path) if raw_output_capture else None,
+            )
 
         print(
             f"[-] Post-reduction validation failed to preserve crash behavior for "
@@ -971,6 +985,7 @@ def _inline_direct_input_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+                raw_output_capture=raw_output_capture,
             )
 
     print(
@@ -988,6 +1003,7 @@ def _inline_direct_input_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+        raw_output_capture=raw_output_capture,
     )
 
 
@@ -1004,6 +1020,7 @@ def inline_literals_in_reduced_harness(
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
+    raw_output_capture: RawOutputCapture | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -1021,6 +1038,7 @@ def inline_literals_in_reduced_harness(
             fast_crash_pattern,
             symbolize,
             auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+            raw_output_capture=raw_output_capture,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -1125,7 +1143,10 @@ def inline_literals_in_reduced_harness(
         )
         if crash_preserved:
             print("[+] Final output preserved crash behavior.")
-            return PostReductionOutcome(inline_harness_path, tuple(generated_headers))
+            return PostReductionOutcome(
+                inline_harness_path, tuple(generated_headers),
+                raw_reduced_harness=raw_output_capture.for_source(base_harness_path) if raw_output_capture else None,
+            )
 
         print(
             f"[-] Final output validation failed to preserve crash behavior for the {attempt_label} harness. "
@@ -1170,6 +1191,7 @@ def inline_literals_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+                raw_output_capture=raw_output_capture,
             )
 
     print(
@@ -1187,6 +1209,7 @@ def inline_literals_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+        raw_output_capture=raw_output_capture,
     )
 
 
@@ -1195,6 +1218,7 @@ def _reduction_attempt(
     crash_pattern_symbolize_0: str, recorded_symbolized_pattern: str | None,
     compile_flags: str | None, protection=None,
 ) -> PostReductionOutcome:
+    raw_capture_args = {"raw_output_capture": RawOutputCapture()} if config.capture_raw_output else {}
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
     reduction_phase3_mode = config.phase3_mode
     validation_phase3_mode = PHASE3_DIRECT
@@ -1215,6 +1239,7 @@ def _reduction_attempt(
             jobs=config.jobs,
             tool=config.tool,
             auto_var_init_pattern=config.auto_var_init_pattern,
+            **raw_capture_args,
         )
         emit_check_statistics_summary()
     else:
@@ -1235,12 +1260,16 @@ def _reduction_attempt(
             profile=config.profile,
             tool=config.tool,
             auto_var_init_pattern=config.auto_var_init_pattern,
+            **raw_capture_args,
         )
     if protection is not None:
         protection.restore_file(reduced_harness)
         if config.snapshot:
             protection.restore_file(get_last_interesting_file())
     format_reduced_harness(reduced_harness)
+    if config.oracle_evaluation:
+        from harnessreducer.oracle_evaluation import record_reduction_completed
+        record_reduction_completed(reduced_harness)
     if config.debug:
         print(
             "[DEBUG] Recording direct post-reduction validation for the "
@@ -1290,27 +1319,34 @@ def _reduction_attempt(
         config.crash_input,
         compile_flags,
         config.link_flags,
-        config.start_id,
+        config.start_id if config.replay_enabled else None,
         phase3_mode=validation_phase3_mode,
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
         auto_var_init_pattern_fallback=config.auto_var_init_pattern,
+        **raw_capture_args,
     )
 
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    from harnessreducer.oracle_evaluation import reference_capture
+    with reference_capture(config.oracle_evaluation):
+        return _reduce_with_config(config)
+
+
+def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     validate_tool(config.tool)
     configure_work_dir(config.work_dir)
     if config.debug and config.check:
         raise ValueError("debug and check modes cannot be enabled together.")
     if config.profile and config.check:
         raise ValueError("profile and check modes cannot be enabled together.")
-    if config.protect_initializers and (config.slice_enabled or config.use_llm):
+    if config.protect_initializers and config.slice_enabled:
         raise ValueError(
-            "--protect-initializers cannot currently be combined with --slice or --llm; "
-            "these additional reduction stages are outside the protected recovery."
+            "--protect-initializers cannot currently be combined with --slice; "
+            "this additional reduction stage is outside the protected recovery."
         )
     configure_debug_logging(config.debug)
     if not 1 <= config.jobs <= MAX_TREEREDUCE_JOBS:
@@ -1376,6 +1412,9 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             success=False
         )
     recorded_symbolized_pattern = get_reference_crash_pattern_symbolize_1()
+    if config.oracle_evaluation:
+        from harnessreducer.oracle_evaluation import freeze_references
+        freeze_references(crash_pattern_symbolize_0, recorded_symbolized_pattern)
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
 
     print(f"[+] Extracted symbolize=0 crash pattern: {crash_pattern_symbolize_0}")
@@ -1446,11 +1485,14 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
     else:
         effective_harness_path = harness_path
-    tagged_harness = tag_harness_with_fdp_ids(
-        effective_harness_path,
-        start_id=config.start_id,
-        marker=config.marker,
-    )
+    if config.replay_enabled:
+        tagged_harness = tag_harness_with_fdp_ids(
+            effective_harness_path,
+            start_id=config.start_id,
+            marker=config.marker,
+        )
+    else:
+        tagged_harness = TaggedHarness(effective_harness_path, 0)
     tagged_harness_file = _tagged_harness_path(tagged_harness)
     fdp_callsite_count = _tagged_harness_fdp_count(tagged_harness)
     fdp_trace_file: str | None = None
@@ -1490,30 +1532,16 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         return ReductionResult(
             reduced_harness=post_inline_harness, tagged_harness=tagged_harness_file,
             fdp_trace=fdp_trace_file, generated_headers=generated_headers, success=False,
+            raw_reduced_harness=getattr(outcome, "raw_reduced_harness", None),
         )
-    if config.use_llm:
-        from harnessreducer.llm_reducer import apply_llm_reduction
-        final_harness = apply_llm_reduction(
-            post_inline_harness,
-            crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
-            config.crash_input,
-            compile_flags,
-            config.link_flags,
-            fdp_trace_file,
-            phase3_mode=validation_phase3_mode,
-            symbolize=config.symbolize,
-            auto_var_init_pattern_fallback=config.auto_var_init_pattern,
-        )
-    else:
-        final_harness = post_inline_harness
-
     return ReductionResult(
-        reduced_harness=final_harness,
+        reduced_harness=post_inline_harness,
         tagged_harness=tagged_harness_file,
         fdp_trace=fdp_trace_file,
         generated_headers=generated_headers,
         poc_runtime_args=get_poc_runtime_args(),
-        success=True
+        success=True,
+        raw_reduced_harness=getattr(outcome, "raw_reduced_harness", None),
     )
 
 
@@ -1523,7 +1551,6 @@ def process(
     crash_input: str | None = None,
     link_flags: str | None = None,
     work_dir: str | None = None,
-    use_llm: bool = False,
     phase3_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     slice_enabled: bool = False,
@@ -1544,7 +1571,6 @@ def process(
         link_flags=link_flags,
         crash_input=crash_input,
         work_dir=work_dir,
-        use_llm=use_llm,
         phase3_mode=phase3_mode,
         amortize_link=amortize_link,
         statistics=statistics,

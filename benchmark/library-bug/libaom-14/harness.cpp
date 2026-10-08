@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2024, FuzzAgent Project. All rights reserved.
  *
  * Fuzzing harness for AV1 encoder configuration validation targeting 230/372 
  * blocked branches (61.8%) in validate_config function in av1_cx_iface.c.

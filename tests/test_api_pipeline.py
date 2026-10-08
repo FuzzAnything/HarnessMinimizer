@@ -4,7 +4,9 @@ import tempfile
 from unittest.mock import patch
 
 from harnessreducer.api import (
+    PostReductionOutcome,
     ReductionConfig,
+    ReductionResult,
     TaggedHarness,
     _prepare_fuzzer_entry_return,
     process,
@@ -27,6 +29,43 @@ class TestApiPipeline(unittest.TestCase):
         )
         self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
         self.addCleanup(self.symbolized_pattern_patch.stop)
+
+    def test_oracle_capture_is_isolated_between_api_calls(self):
+        from harnessreducer import oracle_evaluation
+
+        for first_fails in (False, True):
+            with self.subTest(first_fails=first_fails), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "oracle"
+                observed = []
+                result = ReductionResult("reduced.cpp", "tagged.cpp", None)
+
+                def reduce(config):
+                    observed.append((oracle_evaluation.reference_root(), config))
+                    if len(observed) == 1 and first_fails:
+                        raise RuntimeError("synthetic reduction failure")
+                    return result
+
+                with patch.object(oracle_evaluation, "_REFERENCE_ROOT", None), \
+                        patch("harnessreducer.api._reduce_with_config", side_effect=reduce):
+                    experiment = ReductionConfig(
+                        "h.cpp", profile=True, capture_raw_output=True,
+                        oracle_evaluation=str(root), replay_enabled=False,
+                    )
+                    if first_fails:
+                        with self.assertRaisesRegex(RuntimeError, "synthetic reduction failure"):
+                            reduce_with_config(experiment)
+                    else:
+                        self.assertIs(reduce_with_config(experiment), result)
+                    self.assertIsNone(oracle_evaluation.reference_root())
+                    normal = ReductionConfig("h.cpp")
+                    self.assertIs(reduce_with_config(normal), result)
+                    self.assertIsNone(oracle_evaluation.reference_root())
+
+                self.assertEqual([entry[0] for entry in observed], [root.resolve(), None])
+                self.assertFalse(normal.profile)
+                self.assertFalse(normal.capture_raw_output)
+                self.assertIsNone(normal.oracle_evaluation)
+                self.assertTrue(normal.replay_enabled)
 
     def test_amortize_link_rejects_direct_mode(self):
         with self.assertRaisesRegex(ValueError, "requires split or PCH"):
@@ -169,6 +208,7 @@ class TestApiPipeline(unittest.TestCase):
             mock_extract.assert_called_once_with(
                 "seed.bin",
                 harness_path=prepared_path,
+                compile_flags=prepared_flags,
                 link_flags=None,
             )
 
@@ -291,6 +331,7 @@ class TestApiPipeline(unittest.TestCase):
             require_crash_pattern=False,
             jobs=60,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_run_normal.assert_not_called()
         mock_emit_check_summary.assert_called_once_with()
@@ -330,7 +371,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
         mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_inline.return_value = PostReductionOutcome("/tmp/reduced.cpp", raw_reduced_harness="/tmp/selected.raw.cpp")
         mock_extract.return_value = "AddressSanitizer"
         self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
         mock_slice.return_value = "/tmp/sliced.cpp"
@@ -349,6 +390,7 @@ class TestApiPipeline(unittest.TestCase):
         result = reduce_with_config(config)
 
         self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        self.assertEqual(result.raw_reduced_harness, "/tmp/selected.raw.cpp")
         self.assertEqual(result.tagged_harness, "/tmp/tagged.cpp")
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
@@ -357,7 +399,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_reset_last_interesting_state.assert_called_once_with()
         mock_check_compile.assert_called_once_with("a.cpp", "-std=c++17", "-lm")
         mock_extract.assert_called_once_with(
-            "seed.bin", harness_path="a.cpp", link_flags="-lm"
+            "seed.bin", harness_path="a.cpp", compile_flags="-std=c++17", link_flags="-lm"
         )
         mock_check_pattern.assert_called_once_with(
             "a.cpp",
@@ -404,6 +446,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -418,6 +461,7 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             crash_pattern_symbolize_0="AddressSanitizer",
             symbolize=False,
+            auto_var_init_pattern_fallback=False,
         )
         mock_check.assert_called_once()
 
@@ -675,6 +719,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
 
     @patch("harnessreducer.api.validate_stack_trace")
@@ -789,6 +834,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.assert_called_once_with(
             "seed.bin",
             harness_path="a.cpp",
+            compile_flags=None,
             link_flags=None,
             record_symbolized_crash_location=True,
         )
@@ -818,6 +864,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             tool="treereduce",
+            auto_var_init_pattern=False,
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
@@ -831,6 +878,7 @@ class TestApiPipeline(unittest.TestCase):
             snapshot=False,
             crash_pattern_symbolize_0="FastPattern",
             symbolize=True,
+            auto_var_init_pattern_fallback=False,
         )
 
 
