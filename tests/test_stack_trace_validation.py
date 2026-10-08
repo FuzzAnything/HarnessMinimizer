@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from harnessreducer.reducer_runner import (
+from harnessminimizer.reducer_runner import (
     _extract_crash_signature_from_output,
     _probe_reference_stack_depth_stability,
     DynamicCrashSite,
@@ -736,8 +736,8 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
         finally:
             os.unlink(trace_file)
 
-    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_records_reference_stack_depth(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -776,8 +776,8 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 ],
             )
 
-    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_records_distinct_symbolized_pattern(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -808,8 +808,8 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
             self.assertIsNotNone(re.search(symbolized_pattern, symbolized_output.replace("value -1", "value -390")))
             self.assertIsNone(re.search(symbolized_pattern, symbolized_output.replace(":1142:", ":1143:")))
 
-    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_records_symbolized_crash_location_when_requested(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -839,8 +839,8 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
                 ["--crash-location-pattern", expected_pattern],
             )
 
-    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_does_not_record_crash_location_by_default(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -862,8 +862,8 @@ class TestCrashTesterCompileDiagnostics(unittest.TestCase):
             self.assertIsNone(get_symbolized_reference_crash_location_pattern())
             self.assertFalse(os.path.exists(get_symbolized_crash_location_file()))
 
-    @patch("harnessreducer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner._probe_reference_stack_depth_stability", return_value=False)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_stops_on_harness_crash(self, mock_run, mock_probe):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -930,7 +930,7 @@ class TestStackTraceStateManagement(unittest.TestCase):
             self.assertEqual(stack_depth_tester_args(symbolized=False), [])
             self.assertEqual(stack_depth_tester_args(symbolized=True), [])
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_extract_crash_pattern_without_trace_clears_stale_pattern(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1027,8 +1027,8 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertFalse(ct_stack_depth_is_advisory(args, use_symbolize=False))
         self.assertFalse(ct_stack_depth_is_advisory(args, use_symbolize=True))
 
-    @patch("harnessreducer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_stack_depth_stability_probe_records_stable_result(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1068,8 +1068,8 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertTrue(mode["stable"])
             self.assertEqual(mode["depths"], [2, 2, 2])
 
-    @patch("harnessreducer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.STACK_DEPTH_STABILITY_RUNS", 3)
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_stack_depth_stability_probe_rejects_varying_depths(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1119,13 +1119,13 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertFalse(mode["stable"])
             self.assertEqual(mode["depths"], [1, 2, 1])
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_records_verified_poc_runtime_args(self, mock_run):
         reset_stack_trace_state()
         reset_poc_runtime_args()
         mock_run.return_value = SimpleNamespace(
             returncode=77,
-            stdout="HARNESSREDUCER_POC_RUNTIME_ARG=-rss_limit_mb=0\n",
+            stdout="HARNESSMINIMIZER_POC_RUNTIME_ARG=-rss_limit_mb=0\n",
             stderr="",
         )
 
@@ -1141,7 +1141,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(get_poc_runtime_args(), ("-rss_limit_mb=0",))
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_retries_text_miss_with_dynamic_anchor(self, mock_run):
         reset_stack_trace_state()
         set_dynamic_reference_crash_site(
@@ -1175,7 +1175,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(mock_run.call_count, 2)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_uses_custom_evidence_attempts(self, mock_run):
         reset_stack_trace_state()
         set_dynamic_reference_crash_site(
@@ -1212,7 +1212,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertIn("--evidence-attempts", cmd)
         self.assertIn("5", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_passes_auto_var_init_pattern_flag(self, mock_run):
         reset_stack_trace_state()
         mock_run.return_value = SimpleNamespace(returncode=77, stdout="", stderr="")
@@ -1230,7 +1230,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--auto-var-init-pattern", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_does_not_retry_text_miss_without_dynamic_anchor(self, mock_run):
         reset_stack_trace_state()
         mock_run.return_value = SimpleNamespace(
@@ -1253,7 +1253,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(mock_run.call_count, 1)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_stack_trace_passes_separate_cli_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1293,7 +1293,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             broken_arg = "--compile-flags=-O2--link-flags=-lm--symbolize"
             self.assertNotIn(broken_arg, cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_symbolized_crash_location_oracle_passes_expected_args(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1333,7 +1333,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertNotIn("--dynamic-crash-site-library", cmd)
             self.assertNotIn("--dynamic-crash-site-offset", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_symbolized_validation_retries_text_miss_with_crash_location_anchor(self, mock_run):
         reset_stack_trace_state()
         set_symbolized_reference_stack_depth(6)
@@ -1364,7 +1364,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(mock_run.call_count, 2)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_symbolized_validation_uses_custom_evidence_attempts(self, mock_run):
         reset_stack_trace_state()
         set_symbolized_reference_stack_depth(6)
@@ -1398,7 +1398,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertIn("--evidence-attempts", cmd)
         self.assertIn("5", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_symbolized_validation_does_not_retry_other_failures(self, mock_run):
         reset_stack_trace_state()
         set_symbolized_reference_stack_depth(6)
@@ -1422,7 +1422,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(mock_run.call_count, 1)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_stack_trace_without_stored_pattern_still_runs(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1446,7 +1446,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--stack-depth", cmd)
             self.assertNotIn("--stack-trace-file", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_stack_trace_writes_failure_log_when_requested(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1472,7 +1472,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("oops stdout", log_text)
             self.assertIn("oops stderr", log_text)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_stack_trace_can_skip_symbolized_crash_pattern(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)
@@ -1496,7 +1496,7 @@ class TestValidateStackTraceInvocation(unittest.TestCase):
             self.assertIn("--skip-crash-pattern", cmd)
             self.assertIn(".*", cmd)
 
-    @patch("harnessreducer.reducer_runner.run_command")
+    @patch("harnessminimizer.reducer_runner.run_command")
     def test_validate_crash_pattern_and_stack_trace_decouples_patterns(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             configure_work_dir(tmpdir)

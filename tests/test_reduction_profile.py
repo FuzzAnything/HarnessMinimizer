@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harnessreducer.reduction_profile import (
+from harnessminimizer.reduction_profile import (
     build_profile_summary,
     read_profile_events,
     render_profile_text,

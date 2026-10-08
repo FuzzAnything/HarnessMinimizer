@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harnessreducer import reducer_runner
-from harnessreducer.api import tag_harness_with_fdp_ids
+from harnessminimizer import reducer_runner
+from harnessminimizer.api import tag_harness_with_fdp_ids
 
 
 class TestHarnessTagging(unittest.TestCase):

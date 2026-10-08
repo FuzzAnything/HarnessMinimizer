@@ -133,7 +133,7 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
         "licensing; the upstream Cargo manifests describe upstream code only.\n\n"
         "From this extracted directory, with Rust/Cargo and a C/C++ toolchain:\n"
         "cargo install --frozen --path crates/treereduce-c --root /chosen/prefix --jobs 2 --force\n"
-        "/chosen/prefix/bin/treereduce-c --harnessreducer-supervisor-version\n\n"
+        "/chosen/prefix/bin/treereduce-c --harnessminimizer-supervisor-version\n\n"
         "Cargo uses the included vendor/ directory and needs no registry access.\n"
         "Keep notices/ and this source archive with any redistributed executable.\n"
         "harnessminimizer/tools/treereduce contains the original installer and patch.\n"
@@ -161,7 +161,7 @@ def main(argv=None):
     for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES", "tools/treereduce/licenses/sources.json"):
         if not (PROJECT / relative).exists():
             raise SystemExit(f"Missing licensing input: {relative}")
-    with tempfile.TemporaryDirectory(prefix="harnessreducer-treereduce-build-") as work:
+    with tempfile.TemporaryDirectory(prefix="harnessminimizer-treereduce-build-") as work:
         work = Path(work)
         archive = args.archive
         if archive is None:
@@ -193,7 +193,7 @@ def main(argv=None):
         source_dir = install_root / "share" / "treereduce"
         source_dir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_archive, source_dir / source_archive.name)
-        subprocess.run([str(install_root / "bin/treereduce-c"), "--harnessreducer-supervisor-version"], check=True)
+        subprocess.run([str(install_root / "bin/treereduce-c"), "--harnessminimizer-supervisor-version"], check=True)
 
 
 if __name__ == "__main__":

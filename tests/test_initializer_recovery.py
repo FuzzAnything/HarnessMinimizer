@@ -4,11 +4,11 @@ import subprocess
 
 import pytest
 
-from harnessreducer import initializer_recovery as recovery
-from harnessreducer.api import PostReductionOutcome
-from harnessreducer.initializer_analysis import InitializationDiagnosis, analyze_uninitialized
-from harnessreducer import reducer_runner as runner
-from harnessreducer.reduction_profile import write_profile_summary
+from harnessminimizer import initializer_recovery as recovery
+from harnessminimizer.api import PostReductionOutcome
+from harnessminimizer.initializer_analysis import InitializationDiagnosis, analyze_uninitialized
+from harnessminimizer import reducer_runner as runner
+from harnessminimizer.reduction_profile import write_profile_summary
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ def test_retry_exception_restores_work_dir_and_retains_profile(work, monkeypatch
 @pytest.mark.parametrize("library_diagnostic,description", [(True, "uninitialized value"), (False, "Value stored is never read")])
 def test_analyzer_filters_library_and_unrelated_diagnostics(tmp_path, monkeypatch, library_diagnostic, description):
     import plistlib
-    from harnessreducer import initializer_analysis as analysis
+    from harnessminimizer import initializer_analysis as analysis
     source = tmp_path / "source.cpp"
     source.write_text("void f(){}")
     def run(command, **kwargs):
@@ -174,7 +174,7 @@ def test_analyzer_filters_library_and_unrelated_diagnostics(tmp_path, monkeypatc
 
 
 def test_analyzer_timeout_is_not_an_initialization_diagnostic(tmp_path, monkeypatch):
-    from harnessreducer import initializer_analysis as analysis
+    from harnessminimizer import initializer_analysis as analysis
     def timeout(command, **kwargs):
         assert kwargs["timeout"] == 60
         raise subprocess.TimeoutExpired(command, 60)
@@ -188,7 +188,7 @@ def test_analyzer_timeout_is_not_an_initialization_diagnostic(tmp_path, monkeypa
 @pytest.mark.parametrize("retry_succeeds", [True, False])
 def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds):
     """Exercise API orchestration with a harmless synthetic source and no execution."""
-    from harnessreducer import api
+    from harnessminimizer import api
     source = tmp_path / "harness.cpp"
     original = (
         "#include <cstdint>\n#include <cstddef>\n"
@@ -224,7 +224,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
         if len(reductions) == 1:
             text = text.replace("Point p = {2,3};", "Point p;")
         else:
-            assert "HR_KEEP_INIT_" in text
+            assert "HM_KEEP_INIT_" in text
         output.write_text(text)
         return str(output)
     monkeypatch.setattr(api, "run_treereducer", reduce)
@@ -242,7 +242,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     assert len(reductions) == 2
     assert len(validations) == (3 if retry_succeeds else 4)
     assert all(trace is None for _, trace in validations)
-    assert "HR_KEEP_INIT_" not in Path(result.reduced_harness).read_text()
+    assert "HM_KEEP_INIT_" not in Path(result.reduced_harness).read_text()
     assert "initializer_definitions.h" not in Path(result.reduced_harness).read_text()
     assert source.read_text() == original
     assert "Point p = {2,3};" in Path(result.tagged_harness).read_text()
@@ -250,8 +250,8 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
 
 @pytest.mark.parametrize("symbolize", [False, True])
 def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, symbolize):
-    from harnessreducer import api
-    from harnessreducer.initializer_protection import prepare_initializer_protection
+    from harnessminimizer import api
+    from harnessminimizer.initializer_protection import prepare_initializer_protection
     original = "void f(){int n=fdp.ConsumeIntegral<int>(100001); consume(n);}\n"
     work.write_text(original)
     protection = prepare_initializer_protection(work, work.parent / "protected")

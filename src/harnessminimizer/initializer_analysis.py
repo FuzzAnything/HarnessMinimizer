@@ -9,8 +9,8 @@ import re
 import subprocess
 import time
 
-from harnessreducer.initializer_protection import phase_flags
-from harnessreducer.process_supervisor import run_supervised
+from harnessminimizer.initializer_protection import phase_flags
+from harnessminimizer.process_supervisor import run_supervised
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ import tempfile
 import textwrap
 import unittest
 
-from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
+from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 
 
 class TestDynamicSlicer(unittest.TestCase):

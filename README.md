@@ -30,7 +30,7 @@ Install and select patched treereduce.
 
 ```bash
 python tools/treereduce/install.py
-export HARNESSREDUCER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
+export HARNESSMINIMIZER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
 ```
 
 ## Reduce a harness
@@ -43,7 +43,7 @@ using relative paths, run from the working directory those paths require.
 Optimized pipeline:
 
 ```bash
-harnessreducer /path/to/harness.cpp \
+harnessminimizer /path/to/harness.cpp \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -54,7 +54,7 @@ harnessreducer /path/to/harness.cpp \
 Unoptimized pipeline:
 
 ```bash
-harnessreducer /path/to/harness.cpp \
+harnessminimizer /path/to/harness.cpp \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -63,7 +63,7 @@ harnessreducer /path/to/harness.cpp \
 ```
 
 The default is the **unoptimized configuration**: **split compilation** with
-**symbolization on**, **PCH off**, and **amortized linking off**. HarnessReducer
+**symbolization on**, **PCH off**, and **amortized linking off**. HarnessMinimizer
 uses **treereduce** as its sole reduction engine and **60 workers** by default.
 Profiling and stable mode are **off** unless explicitly enabled.
 
@@ -86,7 +86,7 @@ Profiling and stable mode are **off** unless explicitly enabled.
 Choose only one of `--direct`, `--split`, and `--pch`. `--amortize-link` requires
 split or PCH mode and shared or static target libraries in the link flags.
 Use the `--compile-flags="..."` and `--link-flags="..."` spelling shown above for
-values beginning with `-`. See `harnessreducer --help` for the full option list.
+values beginning with `-`. See `harnessminimizer --help` for the full option list.
 The CLI copies any required generated header files beside the output harness.
 
 ### Python API
@@ -94,7 +94,7 @@ The CLI copies any required generated header files beside the output harness.
 Run the same reduction from Python and check that it succeeded before using the result.
 
 ```python
-from harnessreducer import ReductionConfig, reduce_with_config
+from harnessminimizer import ReductionConfig, reduce_with_config
 
 result = reduce_with_config(ReductionConfig(
     harness_path="/path/to/harness.cpp",

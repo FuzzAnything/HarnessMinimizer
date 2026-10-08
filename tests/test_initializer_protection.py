@@ -7,18 +7,18 @@ import subprocess
 
 import pytest
 
-from harnessreducer.initializer_protection import (
+from harnessminimizer.initializer_protection import (
     prepare_initializer_protection, preparation_compile_flags, source_tokens, verify_preparation,
 )
-from harnessreducer.initializer_analysis import analyze_uninitialized
-from harnessreducer.macro_headers import prepare_macro_headers
-from harnessreducer.reducer_runner import _split_source_for_pch
+from harnessminimizer.initializer_analysis import analyze_uninitialized
+from harnessminimizer.macro_headers import prepare_macro_headers
+from harnessminimizer.reducer_runner import _split_source_for_pch
 
 
 @pytest.mark.parametrize("declaration", [
     "int a = 1;", "Point p{2, 3};", "Point p(2, 3);", "int xs[3] = {1, 2, 3};",
     "int a = 1, b;", "int a = next(), b = a + 1;",
-    'const char *str = "HR_KEEP_INIT_fake";',
+    'const char *str = "HM_KEEP_INIT_fake";',
     "auto value = fdp.ConsumeIntegral<int>(/*FDP_ID:100001*/100001);",
     "Point p = make_point(\n  2, /* comment */\n  3);",
     "double value = 1.25e+3;",
@@ -151,7 +151,7 @@ def test_compile_paths_preserve_scope_side_effects_and_portable_export(tmp_path,
     else:
         run([str(binary)])
     restored = preparation.restore(restore_prefix + compiler_source.read_text())
-    assert "HR_KEEP_INIT_" not in restored
+    assert "HM_KEEP_INIT_" not in restored
     assert "initializer_definitions.h" not in restored
     assert restored.count("int a=next(n), b=a+1;") == 1
     final = root / "final.cpp"

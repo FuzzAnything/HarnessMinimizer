@@ -1,7 +1,7 @@
 from collections import defaultdict, deque
 from decimal import Decimal
 
-from harnessreducer.fdp_transform import (
+from harnessminimizer.fdp_transform import (
     MAX_INLINE_BUFFER_BYTES,
     count_fdp_calls,
     inline_source,
@@ -82,7 +82,7 @@ void f(uint8_t* data, int size, size_t length) {
     assert result.replaced == 1
     assert result.loop_replaced == 1
     assert result.header_replaced == 1
-    assert "auto bytes = harnessreducer_inline_detail::copy_bytes<uint8_t>(fuzz_values_100003[fuzz_index_100003++]);" in result.source
+    assert "auto bytes = harnessminimizer_inline_detail::copy_bytes<uint8_t>(fuzz_values_100003[fuzz_index_100003++]);" in result.source
     assert "static const std::vector<unsigned char> fuzz_values_100003[]" in result.header_source
     assert "std::vector<unsigned char>{0x01, 0x02}" in result.header_source
 
@@ -299,7 +299,7 @@ void f(uint8_t* data, int size) {
     assert result.replaced == 1
     assert result.large_buffer_replaced == 1
     assert result.header_replaced == 1
-    assert "harnessreducer_inline_detail::copy_bytes<uint8_t>(fuzz_bytes_100005, fuzz_bytes_100005_size)" in result.source
+    assert "harnessminimizer_inline_detail::copy_bytes<uint8_t>(fuzz_bytes_100005, fuzz_bytes_100005_size)" in result.source
     assert "static const unsigned char fuzz_bytes_100005[]" in result.header_source
     assert "static const size_t fuzz_bytes_100005_size" in result.header_source
     assert "0x40" in result.header_source

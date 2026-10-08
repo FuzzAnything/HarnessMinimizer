@@ -17,7 +17,7 @@ License source: https://llvm.org/LICENSE.txt
 
 Applicable local files:
 - include/fuzzer/FuzzedDataProvider.h contains the modified upstream header.
-- src/harnessreducer/fdp_replay_runtime.cpp contains adapted Native* consumption
+- src/harnessminimizer/fdp_replay_runtime.cpp contains adapted Native* consumption
   helpers, including byte/string consumption, integral and floating-point
   consumption, byte-pointer advancement, and unsigned-to-signed conversion.
 

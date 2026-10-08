@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Usage: ./setup_docker.sh [--image IMAGE] [--name CONTAINER]
 
-Build the Docker image and create a container for using HarnessReducer directly,
+Build the Docker image and create a container for using HarnessMinimizer directly,
 with this repository mounted at /root/HarnessMinimizer.
 Requires Linux x86-64 and access to a local Docker daemon.
 

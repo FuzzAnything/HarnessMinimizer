@@ -8,12 +8,12 @@ import sys
 
 import pytest
 
-from harnessreducer.macro_headers import prepare_macro_headers
-from harnessreducer.reduction_engines import (
+from harnessminimizer.macro_headers import prepare_macro_headers
+from harnessminimizer.reduction_engines import (
     prepare_reducer_invocation,
 )
-from harnessreducer.reducer_runner import PchArtifacts, _split_source_for_pch, restore_pch_includes
-from harnessreducer.process_supervisor import run_supervised
+from harnessminimizer.reducer_runner import PchArtifacts, _split_source_for_pch, restore_pch_includes
+from harnessminimizer.process_supervisor import run_supervised
 
 
 @pytest.mark.parametrize("source,count", [
@@ -203,7 +203,7 @@ def test_repeated_inclusion_does_not_add_implicit_include_guards(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_TREEREDUCE") != "1", reason="opt-in real reducer test")
+@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_TREEREDUCE") != "1", reason="opt-in real reducer test")
 @pytest.mark.parametrize("mode", ["split", "pch"])
 def test_real_treereduce_reduces_macros_and_exports_compilable_source(tmp_path, mode):
     source = tmp_path / "original.cpp"
@@ -233,7 +233,7 @@ def test_real_treereduce_reduces_macros_and_exports_compilable_source(tmp_path, 
     checker.write_text(
         f'#!{sys.executable}\n'
         'import subprocess,sys,tempfile\nfrom pathlib import Path\n'
-        'from harnessreducer.process_supervisor import run_supervised\n'
+        'from harnessminimizer.process_supervisor import run_supervised\n'
         'with tempfile.TemporaryDirectory() as build:\n'
         '  obj = str(Path(build)/"candidate.o")\n'
         '  exe = str(Path(build)/"program")\n'

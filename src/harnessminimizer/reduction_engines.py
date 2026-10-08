@@ -6,8 +6,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from harnessreducer.process_supervisor import run_supervised, treereduce_binary
-from harnessreducer.macro_headers import MacroPreparation, prepare_macro_headers
+from harnessminimizer.process_supervisor import run_supervised, treereduce_binary
+from harnessminimizer.macro_headers import MacroPreparation, prepare_macro_headers
 
 
 @dataclass

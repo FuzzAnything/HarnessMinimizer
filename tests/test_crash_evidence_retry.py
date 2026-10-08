@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from harnessreducer import reducer_runner as runner
+from harnessminimizer import reducer_runner as runner
 from tests import crash_tester as tester
 
 
@@ -57,7 +57,7 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
             stack.enter_context(patch.object(tester, "_enable_amortized_fallback_first"))
             fallback = stack.enter_context(patch.object(tester, "link_amortized_plugin", return_value=0))
             stack.enter_context(patch.object(sys, "argv", argv))
-            stack.enter_context(patch.dict(os.environ, {"HARNESSREDUCER_TMPDIR": tmp}))
+            stack.enter_context(patch.dict(os.environ, {"HARNESSMINIMIZER_TMPDIR": tmp}))
             stack.enter_context(patch.object(tester, "runtime_library_env", return_value={}))
             ticks = [0]
             stack.enter_context(patch.object(tester.time, "perf_counter_ns", side_effect=lambda: ticks[0]))
@@ -108,7 +108,7 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
                     )
                     self.assertEqual((result, attempts), (77, 2))
                     self.assertIn("attempt 1/3; retrying", log)
-                    self.assertIn("HARNESSREDUCER_EXEC_TIME_MS=8", log)
+                    self.assertIn("HARNESSMINIMIZER_EXEC_TIME_MS=8", log)
 
     def test_stable_path_executes_once(self):
         for symbolize, good in ((False, FAST), (True, SYMBOLIZED)):

@@ -2,7 +2,7 @@
 
 The bundled launchers exec the user's selected symbolizer in the same process.
 They restore only LD_LIBRARY_PATH, preserving the environment that existed
-before HarnessReducer added target libraries. No probes or temporary files are
+before HarnessMinimizer added target libraries. No probes or temporary files are
 needed, and nested runtime environments reuse the original selection.
 """
 from __future__ import annotations
@@ -14,8 +14,8 @@ import shutil
 
 
 _LAUNCHERS = Path(__file__).resolve().parent / "symbolizers"
-_LD_PRESENT = "HARNESSREDUCER_SYMBOLIZER_LD_LIBRARY_PATH_SET"
-_LD_VALUE = "HARNESSREDUCER_SYMBOLIZER_LD_LIBRARY_PATH"
+_LD_PRESENT = "HARNESSMINIMIZER_SYMBOLIZER_LD_LIBRARY_PATH_SET"
+_LD_VALUE = "HARNESSMINIMIZER_SYMBOLIZER_LD_LIBRARY_PATH"
 
 
 @lru_cache(maxsize=32)
@@ -41,7 +41,7 @@ def isolate_symbolizer_environment(env: dict[str, str]) -> None:
     cwd = os.getcwd()
     for sanitizer in ("ASAN", "UBSAN"):
         variable = f"{sanitizer}_SYMBOLIZER_PATH"
-        real_variable = f"HARNESSREDUCER_REAL_{sanitizer}_SYMBOLIZER"
+        real_variable = f"HARNESSMINIMIZER_REAL_{sanitizer}_SYMBOLIZER"
         launcher = str(_LAUNCHERS / sanitizer.lower() / "llvm-symbolizer")
         configured = env.get(variable)
         if configured == launcher and env.get(real_variable):

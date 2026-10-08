@@ -1,0 +1,8 @@
+#!/bin/sh
+# Keep the caller's LLVM dependencies, without HarnessMinimizer's target paths.
+if [ "${HARNESSMINIMIZER_SYMBOLIZER_LD_LIBRARY_PATH_SET:-0}" = 1 ]; then
+    export LD_LIBRARY_PATH="$HARNESSMINIMIZER_SYMBOLIZER_LD_LIBRARY_PATH"
+else
+    unset LD_LIBRARY_PATH
+fi
+exec "$HARNESSMINIMIZER_REAL_UBSAN_SYMBOLIZER" "$@"

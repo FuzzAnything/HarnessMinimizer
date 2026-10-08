@@ -6,13 +6,13 @@ import sys
 
 import pytest
 
-from harnessreducer.initializer_protection import prepare_initializer_protection
-from harnessreducer.process_supervisor import run_supervised
-from harnessreducer.reduction_engines import prepare_reducer_invocation
-from harnessreducer.reducer_runner import _split_source_for_pch
+from harnessminimizer.initializer_protection import prepare_initializer_protection
+from harnessminimizer.process_supervisor import run_supervised
+from harnessminimizer.reduction_engines import prepare_reducer_invocation
+from harnessminimizer.reducer_runner import _split_source_for_pch
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_TREEREDUCE") != "1",
+@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_TREEREDUCE") != "1",
                     reason="opt-in harmless real-engine integration")
 @pytest.mark.parametrize("mode,jobs", [("split", 1), ("pch", 2)])
 def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
@@ -40,7 +40,7 @@ def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
     checker.write_text(
         f"#!{sys.executable}\n"
         "import subprocess,sys,tempfile\nfrom pathlib import Path\n"
-        "from harnessreducer.process_supervisor import run_supervised\n"
+        "from harnessminimizer.process_supervisor import run_supervised\n"
         "with tempfile.TemporaryDirectory() as build:\n"
         "  obj=str(Path(build)/'candidate.o')\n"
         "  exe=str(Path(build)/'candidate')\n"
@@ -59,7 +59,7 @@ def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
         checker_command=[str(checker), "@@.cpp"], stable=True, jobs=jobs,
     )
     # Keep a finite test deadline without altering reducer options.
-    deadline = float(os.environ.get("HARNESSREDUCER_TEST_ENGINE_TIMEOUT", "300"))
+    deadline = float(os.environ.get("HARNESSMINIMIZER_TEST_ENGINE_TIMEOUT", "300"))
     def bounded(command, **kwargs):
         return run_supervised(command, **{**kwargs, "timeout": deadline})
     try:
@@ -71,7 +71,7 @@ def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
     assert result.returncode == 0, result.stdout
     invocation.publish_result()
     restored = preparation.restore(prefix + output.read_text())
-    assert "HR_KEEP_INIT_" not in restored
+    assert "HM_KEEP_INIT_" not in restored
     assert "initializer_definitions.h" not in restored
     output.write_text(restored)
     exe = tmp_path / "final"

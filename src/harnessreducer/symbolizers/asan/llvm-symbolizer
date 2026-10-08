@@ -1,8 +1,0 @@
-#!/bin/sh
-# Keep the caller's LLVM dependencies, without HarnessReducer's target paths.
-if [ "${HARNESSREDUCER_SYMBOLIZER_LD_LIBRARY_PATH_SET:-0}" = 1 ]; then
-    export LD_LIBRARY_PATH="$HARNESSREDUCER_SYMBOLIZER_LD_LIBRARY_PATH"
-else
-    unset LD_LIBRARY_PATH
-fi
-exec "$HARNESSREDUCER_REAL_ASAN_SYMBOLIZER" "$@"

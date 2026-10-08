@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "harnessreducer"
+name = "harnessminimizer"
 version = "0.1.0"
 description = "Minimize crashing C/C++ fuzz harnesses while preserving crash behavior"
 readme = "README.md"
@@ -19,14 +19,14 @@ dependencies = [
 ]
 
 [project.scripts]
-harnessreducer = "harnessreducer.cli:main"
+harnessminimizer = "harnessminimizer.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harnessreducer"]
+packages = ["src/harnessminimizer"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/src/harnessreducer",
+    "/src/harnessminimizer",
     "/tests",
     "/include",
     "/README.md",

@@ -21,9 +21,9 @@ import time
 
 
 DEFAULT_COMMAND_TIMEOUT = 300.0
-MAX_OUTPUT_BYTES = int(os.environ.get("HARNESSREDUCER_MAX_OUTPUT_BYTES", 64 * 1024 * 1024))
+MAX_OUTPUT_BYTES = int(os.environ.get("HARNESSMINIMIZER_MAX_OUTPUT_BYTES", 64 * 1024 * 1024))
 if MAX_OUTPUT_BYTES <= 0:
-    raise ValueError("HARNESSREDUCER_MAX_OUTPUT_BYTES must be positive")
+    raise ValueError("HARNESSMINIMIZER_MAX_OUTPUT_BYTES must be positive")
 
 
 class OutputLimitExceeded(subprocess.SubprocessError):
@@ -105,7 +105,7 @@ def terminate_process_group(process: subprocess.Popen, grace: float = 1.0) -> No
 
 
 def treereduce_binary() -> str:
-    override = os.environ.get("HARNESSREDUCER_TREEREDUCE")
+    override = os.environ.get("HARNESSMINIMIZER_TREEREDUCE")
     if override:
         return override
     local = Path(__file__).resolve().parents[2] / ".tools/bin/treereduce-c"
@@ -166,9 +166,9 @@ def run_supervised(
     stderr limits apply only to PIPEs, not inherited output or caller files.
     """
     if private_tmpdir:
-        with tempfile.TemporaryDirectory(prefix="harnessreducer_checks_") as tmp:
+        with tempfile.TemporaryDirectory(prefix="harnessminimizer_checks_") as tmp:
             child_env = dict(os.environ if env is None else env)
-            child_env.update(TMPDIR=tmp, HARNESSREDUCER_TMPDIR=tmp)
+            child_env.update(TMPDIR=tmp, HARNESSMINIMIZER_TMPDIR=tmp)
             return run_supervised(
                 args, stdout=stdout, stderr=stderr, text=text, env=child_env,
                 cwd=cwd, check=check, timeout=timeout,

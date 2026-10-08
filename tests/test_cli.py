@@ -2,9 +2,16 @@ import unittest
 from unittest.mock import patch
 import pytest
 
-from harnessreducer.api import ReductionResult
+from harnessminimizer.api import ReductionResult
 
-from harnessreducer.cli import build_parser, main
+from harnessminimizer.cli import build_parser, main
+
+
+def test_help_uses_public_command_name(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--help"])
+    assert error.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: harnessminimizer ")
 
 
 @pytest.mark.parametrize("flags,mode", [
@@ -17,7 +24,7 @@ from harnessreducer.cli import build_parser, main
 ])
 def test_cli_forwards_compilation_mode_and_symbolization(flags, mode, symbolization, expected):
     result = ReductionResult("unused.cpp", "tagged.cpp", None, success=False)
-    with patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce:
+    with patch("harnessminimizer.cli.reduce_with_config", return_value=result) as reduce:
         assert main(["h.cpp", "-o", "r.cpp", *flags, *symbolization]) == 1
     config = reduce.call_args.args[0]
     assert config.compilation_mode == mode
@@ -31,7 +38,7 @@ def test_cli_forwards_compilation_mode_and_symbolization(flags, mode, symbolizat
     ["--symbolize", "--no-symbolize"], ["--no-symbolize", "--symbolize"],
 ])
 def test_conflicting_symbolization_flags_are_rejected(flags):
-    with patch("harnessreducer.cli.reduce_with_config") as reduce:
+    with patch("harnessminimizer.cli.reduce_with_config") as reduce:
         with pytest.raises(SystemExit) as error:
             main(["h.cpp", "-o", "r.cpp", *flags])
     assert error.value.code == 2
@@ -49,8 +56,8 @@ def test_output_staging_without_profile(tmp_path, success):
         str(selected), "tagged.cpp", None, success=success,
         generated_headers=(str(header),),
     )
-    with patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce, \
-            patch("harnessreducer.cli._stage_profile", side_effect=AssertionError("profiling is disabled")):
+    with patch("harnessminimizer.cli.reduce_with_config", return_value=result) as reduce, \
+            patch("harnessminimizer.cli._stage_profile", side_effect=AssertionError("profiling is disabled")):
         assert main(["h.cpp", "-o", str(output)]) == (0 if success else 1)
     assert reduce.call_args.args[0].profile is False
     assert output.exists() is success
@@ -116,8 +123,8 @@ class TestCliCompilationMode(unittest.TestCase):
 
     def test_unvalidated_result_is_not_copied_or_reported_as_success(self):
         result = ReductionResult("failed.cpp", "tagged.cpp", None, success=False)
-        with patch("harnessreducer.cli.reduce_with_config", return_value=result), \
-                patch("harnessreducer.cli.shutil.copy2") as copy:
+        with patch("harnessminimizer.cli.reduce_with_config", return_value=result), \
+                patch("harnessminimizer.cli.shutil.copy2") as copy:
             self.assertEqual(main(["h.cpp", "-o", "result.cpp"]), 1)
             copy.assert_not_called()
 
@@ -169,7 +176,7 @@ if __name__ == "__main__":
     ["--capture-raw-output"], ["--no-fdp-replay"], ["--oracle-evaluation", "unused"],
 ])
 def test_removed_options_are_rejected_before_execution(flags):
-    with patch("harnessreducer.cli.reduce_with_config") as reduce:
+    with patch("harnessminimizer.cli.reduce_with_config") as reduce:
         with pytest.raises(SystemExit) as error:
             main(["h.cpp", "-o", "r.cpp", *flags])
     assert error.value.code == 2
@@ -178,7 +185,7 @@ def test_removed_options_are_rejected_before_execution(flags):
 
 @pytest.mark.parametrize("success", [True, False])
 def test_profile_stages_diagnostics_on_success_and_failure(tmp_path, success):
-    from harnessreducer import reducer_runner as runner
+    from harnessminimizer import reducer_runner as runner
     work = tmp_path / "work"
     work.mkdir()
     selected = work / "selected.cpp"
@@ -189,7 +196,7 @@ def test_profile_stages_diagnostics_on_success_and_failure(tmp_path, success):
     output = tmp_path / "output" / "reduced.cpp"
     result = ReductionResult(str(selected), "tagged.cpp", None, success=success)
     with patch.object(runner, "TREEDUCER_DIR", str(work)), \
-            patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce:
+            patch("harnessminimizer.cli.reduce_with_config", return_value=result) as reduce:
         assert main(["h.cpp", "-o", str(output), "--profile"]) == (0 if success else 1)
     assert reduce.call_args.args[0].profile is True
     assert output.exists() is success

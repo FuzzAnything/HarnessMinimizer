@@ -1,4 +1,4 @@
-from harnessreducer.fdp_transform import strip_injected_ids
+from harnessminimizer.fdp_transform import strip_injected_ids
 
 
 def test_strip_injected_ids_removes_marker_and_numeric_id() -> None:

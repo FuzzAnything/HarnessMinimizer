@@ -1,5 +1,5 @@
-#ifndef HARNESSREDUCER_PROCESS_SUPERVISOR_H
-#define HARNESSREDUCER_PROCESS_SUPERVISOR_H
+#ifndef HARNESSMINIMIZER_PROCESS_SUPERVISOR_H
+#define HARNESSMINIMIZER_PROCESS_SUPERVISOR_H
 
 // Shared by the production and measurement runners. The existing monitor
 // blocks in ppoll: no watcher process/thread and no periodic wakeups.
@@ -17,7 +17,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace hrprocess {
+namespace hmprocess {
 inline volatile sig_atomic_t Stopping = 0;
 inline sigset_t WaitMask;
 inline uint64_t NowNs() {
@@ -28,7 +28,7 @@ inline void Stop(int) { Stopping = 1; }
 inline void ChildExited(int) {}
 
 inline bool FollowOwner() {
-  const char *owner = std::getenv("HARNESSREDUCER_RUNNER_PARENT_PID");
+  const char *owner = std::getenv("HARNESSMINIMIZER_RUNNER_PARENT_PID");
   if (!owner) return true; // Also support directly launched standalone runners.
   pid_t expected = static_cast<pid_t>(std::strtol(owner, nullptr, 10));
   return expected > 0 && prctl(PR_SET_PDEATHSIG, SIGKILL) == 0 && getppid() == expected;
@@ -74,7 +74,7 @@ inline void PrepareExecutor(pid_t monitor) {
 }
 
 inline size_t OutputLimit() {
-  const char *value = std::getenv("HARNESSREDUCER_MAX_OUTPUT_BYTES");
+  const char *value = std::getenv("HARNESSMINIMIZER_MAX_OUTPUT_BYTES");
   if (value && *value) {
     char *end = nullptr;
     unsigned long long limit = std::strtoull(value, &end, 10);
@@ -248,5 +248,5 @@ inline Result Supervise(pid_t child, int output_fd, int connection,
   result.output_pipe_ns = output_end > auxiliary_end && auxiliary_end ? output_end - auxiliary_end : 0;
   return result;
 }
-} // namespace hrprocess
+} // namespace hmprocess
 #endif

@@ -106,7 +106,7 @@ class TestCrashTester(unittest.TestCase):
         retry_cmd = mock_run.call_args_list[1].args[0]
         self.assertEqual(retry_cmd, ["/tmp/poc.out", "-rss_limit_mb=0", "seed.bin"])
         mock_print.assert_called_once_with(
-            "HARNESSREDUCER_POC_RUNTIME_ARG=-rss_limit_mb=0"
+            "HARNESSMINIMIZER_POC_RUNTIME_ARG=-rss_limit_mb=0"
         )
 
     def test_run_standalone_candidate_does_not_retry_when_disabled(self):

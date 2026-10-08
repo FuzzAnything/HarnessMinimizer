@@ -22,14 +22,14 @@ __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
 
-from harnessreducer.process_supervisor import (
+from harnessminimizer.process_supervisor import (
     run_supervised, termination_guard, runner_request, OutputLimitExceeded,
 )
-from harnessreducer.crash_evidence import (
+from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
 
-from harnessreducer.reducer_runner import (
+from harnessminimizer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
     AUTO_VAR_INIT_PATTERN_FLAG,
     PHASE3_DIRECT_OPT_FLAGS,
@@ -54,7 +54,7 @@ AMORTIZED_UNDEFINED_SYMBOL_LOAD_PATTERN = re.compile(
     r"dlopen candidate failed: .*undefined symbol:"
 )
 LIBFUZZER_OOM_PATTERN = re.compile(r"ERROR:\s*libFuzzer:\s*out-of-memory\b")
-POC_RUNTIME_ARG_MARKER = "HARNESSREDUCER_POC_RUNTIME_ARG="
+POC_RUNTIME_ARG_MARKER = "HARNESSMINIMIZER_POC_RUNTIME_ARG="
 AMORTIZED_FALLBACK_FAST_PROBE_INTERVAL = 1000
 
 
@@ -219,7 +219,7 @@ def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
         print(f"[DEBUG] Failed to append candidate record: {exc}", file=sys.stderr)
     exec_time_ms = getattr(args, "_last_exec_time_ms", None)
     if getattr(args, "print_exec_time_ms", False) and exec_time_ms is not None:
-        print(f"HARNESSREDUCER_EXEC_TIME_MS={exec_time_ms}")
+        print(f"HARNESSMINIMIZER_EXEC_TIME_MS={exec_time_ms}")
     return result_code
 
 
@@ -438,7 +438,7 @@ def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str
 def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     _reset_compile_failure_state(args)
     pid = os.getpid()
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as obj_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSMINIMIZER_TMPDIR", "/tmp")) as obj_file:
         object_path = obj_file.name
 
     compile_cmd = [
@@ -513,7 +513,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         return -1, None
 
     pid = os.getpid()
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as obj_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSMINIMIZER_TMPDIR", "/tmp")) as obj_file:
         object_path = obj_file.name
 
     sanitizer_flags = (
@@ -597,7 +597,7 @@ def compile_amortized_plugin(
     args._amortized_plugin_fallback_linked = False
     pid = os.getpid()
     with tempfile.NamedTemporaryFile(
-        prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")
+        prefix=f"poc_{pid}_", suffix=".o", delete=False, dir=os.environ.get("HARNESSMINIMIZER_TMPDIR", "/tmp")
     ) as obj_file:
         object_path = obj_file.name
 
@@ -1157,7 +1157,7 @@ def main() -> int:
     args._last_compile_cmd = None
     pid = os.getpid()
 
-    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir=os.environ.get("HARNESSREDUCER_TMPDIR", "/tmp")) as out_file:
+    with tempfile.NamedTemporaryFile(prefix=f"poc_{pid}_", suffix=".out", delete=False, dir=os.environ.get("HARNESSMINIMIZER_TMPDIR", "/tmp")) as out_file:
         output_path = out_file.name
     object_path = None
     args._profile_build_started_ns = time.perf_counter_ns()

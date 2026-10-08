@@ -10,9 +10,9 @@ import sys
 
 import pytest
 
-from harnessreducer import reducer_runner as rr
-from harnessreducer import symbolizer
-from harnessreducer.process_supervisor import run_supervised
+from harnessminimizer import reducer_runner as rr
+from harnessminimizer import symbolizer
+from harnessminimizer.process_supervisor import run_supervised
 
 
 def run(command, **kwargs):
@@ -66,7 +66,7 @@ def test_default_path_selection_survives_changed_working_directory(tmp_path, mon
     result = run([env["ASAN_SYMBOLIZER_PATH"]], env=env)
     assert result.returncode == 23
     assert json.loads(result.stdout)["label"] == "default"
-    assert env["HARNESSREDUCER_REAL_ASAN_SYMBOLIZER"] == str(actual)
+    assert env["HARNESSMINIMIZER_REAL_ASAN_SYMBOLIZER"] == str(actual)
 
 
 @pytest.mark.parametrize("selection", ["", "/missing/llvm-symbolizer", "/usr/bin/addr2line"])
@@ -74,7 +74,7 @@ def test_explicit_disabled_missing_and_other_backends_are_not_replaced(selection
     original = {"ASAN_SYMBOLIZER_PATH": selection, "UBSAN_SYMBOLIZER_PATH": selection}
     env = rr.runtime_library_env("-L/target", original)
     assert env["ASAN_SYMBOLIZER_PATH"] == env["UBSAN_SYMBOLIZER_PATH"] == selection
-    assert not any(key.startswith("HARNESSREDUCER_REAL_") for key in env)
+    assert not any(key.startswith("HARNESSMINIMIZER_REAL_") for key in env)
 
 
 def test_fast_path_does_not_prepare_or_probe_symbolizers(monkeypatch):
@@ -128,10 +128,10 @@ def test_real_crash_checker_retains_symbolized_oracle_and_profile(tmp_path):
     # This selected symbolizer refuses target LD_LIBRARY_PATH. A real ASan
     # report must pass through the bundled launcher to reach the real LLVM.
     selected = tmp_path / "llvm-symbolizer"
-    selected.write_text('#!/bin/sh\ncase "$LD_LIBRARY_PATH" in *hr_target*) exit 90;; esac\n'
+    selected.write_text('#!/bin/sh\ncase "$LD_LIBRARY_PATH" in *hm_target*) exit 90;; esac\n'
                         'exec ' + shlex.quote(real) + ' "$@"\n')
     selected.chmod(0o755)
-    lib_dir = tmp_path / "hr_target"
+    lib_dir = tmp_path / "hm_target"
     lib_dir.mkdir()
     source = tmp_path / "target.cpp"
     source.write_text('extern "C" int crash(){volatile int *p=new int[1];int x=p[2];delete[]p;return x;}\n')

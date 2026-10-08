@@ -4,8 +4,8 @@ import argparse
 import shutil
 from pathlib import Path
 
-from harnessreducer.api import ReductionConfig, reduce_with_config
-from harnessreducer.reducer_runner import (
+from harnessminimizer.api import ReductionConfig, reduce_with_config
+from harnessminimizer.reducer_runner import (
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
     get_candidate_profile_events_file,
@@ -46,7 +46,7 @@ def _stage_profile(output: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="harnessreducer",
+        prog="harnessminimizer",
         description="Reduce FDP-based harnesses while preserving crash behavior.",
     )
     parser.add_argument(

@@ -11,9 +11,9 @@ import tempfile
 import time
 import uuid
 
-from harnessreducer.fdp_transform import PARSER, _iter_nodes
-from harnessreducer.macro_headers import _directives
-from harnessreducer.process_supervisor import run_supervised
+from harnessminimizer.fdp_transform import PARSER, _iter_nodes
+from harnessminimizer.macro_headers import _directives
+from harnessminimizer.process_supervisor import run_supervised
 
 
 POLICY = "whole-local-declaration-v1"
@@ -130,7 +130,7 @@ def prepare_initializer_protection(source: Path, directory: Path) -> Initializer
     directory.mkdir(parents=True, exist_ok=True)
     original = source.read_bytes()
     tree = PARSER.parse(original)
-    prefix = "HR_KEEP_INIT_" + uuid.uuid4().hex + "_"
+    prefix = "HM_KEEP_INIT_" + uuid.uuid4().hex + "_"
     header = directory / "initializer_definitions.h"
     declarations = []
     skipped = []
@@ -213,13 +213,13 @@ def preparation_compile_flags(flags: str | None, original: Path, directory: Path
     its interpretation of user flags, including quotes in -D string values.
     The durable copy allows replaying commands after the temporary alias ends.
     """
-    from harnessreducer.reducer_runner import _split_flags
+    from harnessminimizer.reducer_runner import _split_flags
     contents = "\n".join(
         json.dumps(arg, ensure_ascii=False)
         for arg in ["-iquote", str(original.resolve().parent), *_split_flags(flags)]
     ) + "\n"
     (directory / "compile_flags.rsp").write_text(contents, encoding="utf-8")
-    # HarnessReducer runs on Linux; /tmp gives this legacy parser a whitespace-
+    # HarnessMinimizer runs on Linux; /tmp gives this legacy parser a whitespace-
     # free alias even when the user's work directory or TMPDIR contains spaces.
     with tempfile.TemporaryDirectory(prefix="hr-initializer-flags-", dir="/tmp") as tmp:
         response = Path(tmp) / "flags.rsp"
@@ -228,7 +228,7 @@ def preparation_compile_flags(flags: str | None, original: Path, directory: Path
 
 
 def phase_flags(compile_flags: str | None, *, replay: bool, plugin: bool = False) -> list[str]:
-    from harnessreducer.reducer_runner import (
+    from harnessminimizer.reducer_runner import (
         PHASE3_SANITIZER_FLAGS, PHASE3_PLUGIN_SANITIZER_FLAGS,
         PHASE3_SPLIT_OPT_FLAGS, PHASE3_WARNING_FLAGS, _phase3_replay_flags,
         _split_flags,

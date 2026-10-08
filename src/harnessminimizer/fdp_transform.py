@@ -487,7 +487,7 @@ def _vector_element_type_for_call(call: CallSite) -> str:
 # Byte headers store exactly the trace bytes. Element types (including local
 # aliases and template parameters) are only named at the original call site.
 # The normal arithmetic path uses the same range construction as FDP replay.
-_BYTE_COPY_HELPER = """namespace harnessreducer_inline_detail {
+_BYTE_COPY_HELPER = """namespace harnessminimizer_inline_detail {
 template <typename T>
 std::vector<T> copy_bytes(const unsigned char *data, size_t size) {
     if (size == 0)
@@ -505,10 +505,10 @@ template <typename T>
 std::vector<T> copy_bytes(const std::vector<unsigned char>& data) {
     return copy_bytes<T>(data.data(), data.size());
 }
-} // namespace harnessreducer_inline_detail"""
+} // namespace harnessminimizer_inline_detail"""
 
 
-_VALUE_COPY_HELPER = """namespace harnessreducer_inline_detail {
+_VALUE_COPY_HELPER = """namespace harnessminimizer_inline_detail {
 template <typename T, typename Source>
 std::vector<T> copy_values(const Source *data, size_t size) {
     std::vector<T> result;
@@ -521,7 +521,7 @@ template <typename T, typename Source>
 std::vector<T> copy_values(const std::vector<Source>& data) {
     return copy_values<T>(data.data(), data.size());
 }
-} // namespace harnessreducer_inline_detail"""
+} // namespace harnessminimizer_inline_detail"""
 
 
 def _vector_type_includes(element_type: str) -> tuple[str, ...]:
@@ -1015,7 +1015,7 @@ def _large_single_record_replacement_for_call(
         element_type = _vector_element_type_for_call(call)
         values_name, size_name = _byte_buffer_names(matched_key)
         replacement = (
-            f"harnessreducer_inline_detail::copy_values<{element_type}>"
+            f"harnessminimizer_inline_detail::copy_values<{element_type}>"
             f"({values_name}, {size_name})"
         )
         return replacement, _make_large_wide_vector_header_entry(
@@ -1034,7 +1034,7 @@ def _large_single_record_replacement_for_call(
         element_type = _vector_element_type_for_call(call)
         values_name, size_name = _byte_buffer_names(matched_key)
         replacement = (
-            f"harnessreducer_inline_detail::copy_bytes<{element_type}>"
+            f"harnessminimizer_inline_detail::copy_bytes<{element_type}>"
             f"({values_name}, {size_name})"
         )
         return replacement, _make_large_byte_header_entry(matched_key, call.method, value)
@@ -1091,13 +1091,13 @@ def _repeated_replacement_for_call(
         element_type = _vector_element_type_for_call(call)
         wide_values = _extract_wide_vector_traces(records)
         if wide_values is not None:
-            replacement = f"harnessreducer_inline_detail::copy_values<{element_type}>({indexed_value})"
+            replacement = f"harnessminimizer_inline_detail::copy_values<{element_type}>({indexed_value})"
             return replacement, _make_wide_vector_header_entry(matched_key, call.method, wide_values)
 
         byte_values = _extract_record_values(records, "B")
         if byte_values is None:
             return None
-        replacement = f"harnessreducer_inline_detail::copy_bytes<{element_type}>({indexed_value})"
+        replacement = f"harnessminimizer_inline_detail::copy_bytes<{element_type}>({indexed_value})"
         return replacement, _make_vector_header_entry(matched_key, call.method, byte_values)
 
     if call.method == "ConsumeData":

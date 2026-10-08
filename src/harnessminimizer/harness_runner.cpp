@@ -82,11 +82,11 @@ void HandleRequest(int connection, int listen_fd,
                    const std::vector<uint8_t> &crash_data,
                    int exec_timeout_seconds) {
   close(listen_fd);
-  const uint64_t deadline = hrprocess::NowNs() + uint64_t(exec_timeout_seconds) * 1000000000;
-  const std::string plugin_path = hrprocess::ReadRequest(connection, deadline);
+  const uint64_t deadline = hmprocess::NowNs() + uint64_t(exec_timeout_seconds) * 1000000000;
+  const std::string plugin_path = hmprocess::ReadRequest(connection, deadline);
   if (plugin_path.empty()) {
     const std::string response = "1 0\n";
-    hrprocess::Send(connection, response, deadline);
+    hmprocess::Send(connection, response, deadline);
     close(connection);
     _exit(0);
   }
@@ -95,8 +95,8 @@ void HandleRequest(int connection, int listen_fd,
   if (pipe(output_pipe) != 0) {
     const std::string message = std::string("pipe failed: ") + strerror(errno) + "\n";
     const std::string header = "1 " + std::to_string(message.size()) + "\n";
-    hrprocess::Send(connection, header, deadline);
-    hrprocess::Send(connection, message, deadline);
+    hmprocess::Send(connection, header, deadline);
+    hmprocess::Send(connection, message, deadline);
     close(connection);
     _exit(0);
   }
@@ -106,7 +106,7 @@ void HandleRequest(int connection, int listen_fd,
   const pid_t monitor = getpid();
   const pid_t child = fork();
   if (child == 0) {
-    hrprocess::PrepareExecutor(monitor);
+    hmprocess::PrepareExecutor(monitor);
     close(output_pipe[0]);
     dup2(output_pipe[1], STDOUT_FILENO);
     dup2(output_pipe[1], STDERR_FILENO);
@@ -132,12 +132,12 @@ void HandleRequest(int connection, int listen_fd,
   }
 
   close(output_pipe[1]);
-  auto result = hrprocess::Supervise(child, output_pipe[0], connection, deadline);
+  auto result = hmprocess::Supervise(child, output_pipe[0], connection, deadline);
   const std::string header = std::to_string(result.status) + " " +
                              std::to_string(result.output.size()) + "\n";
-  const uint64_t reply_deadline = hrprocess::NowNs() + 1000000000;
-  hrprocess::Send(connection, header, reply_deadline);
-  hrprocess::Send(connection, result.output, reply_deadline);
+  const uint64_t reply_deadline = hmprocess::NowNs() + 1000000000;
+  hmprocess::Send(connection, header, reply_deadline);
+  hmprocess::Send(connection, result.output, reply_deadline);
   close(connection);
   _exit(0);
 }
@@ -145,7 +145,7 @@ void HandleRequest(int connection, int listen_fd,
 } // namespace
 
 int main(int argc, char **argv) {
-  if (!hrprocess::FollowOwner()) return 125;
+  if (!hmprocess::FollowOwner()) return 125;
   if (argc < 4) {
     std::fprintf(stderr,
                  "usage: harness_runner SOCKET CRASH_INPUT EXEC_TIMEOUT_SECS "
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
     }
     const pid_t monitor = fork();
     if (monitor == 0) {
-      if (!hrprocess::PrepareMonitor(server)) _exit(125);
+      if (!hmprocess::PrepareMonitor(server)) _exit(125);
       HandleRequest(connection, listen_fd, crash_data, exec_timeout_seconds);
     }
     close(connection);

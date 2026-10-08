@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from harnessreducer.fdp_transform import inject_ids, inline_source_with_report, load_trace
+from harnessminimizer.fdp_transform import inject_ids, inline_source_with_report, load_trace
 
 
 @pytest.fixture(scope="module")
@@ -240,7 +240,7 @@ int main() {
     runtime_source = (
         Path(__file__).resolve().parents[1]
         / "src"
-        / "harnessreducer"
+        / "harnessminimizer"
         / "fdp_replay_runtime.cpp"
     )
     external_replay = compile_program(
@@ -386,7 +386,7 @@ int main() {
     header_replay = compile_program(compiler, source, "-DFDP_MIN_MODE_REPLAY")
     assert run_program(header_replay, trace) == expected
 
-    runtime_source = Path(__file__).resolve().parents[1] / "src" / "harnessreducer" / "fdp_replay_runtime.cpp"
+    runtime_source = Path(__file__).resolve().parents[1] / "src" / "harnessminimizer" / "fdp_replay_runtime.cpp"
     external_replay = compile_program(
         compiler,
         source,

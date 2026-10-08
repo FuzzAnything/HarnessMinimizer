@@ -202,7 +202,7 @@ def render_profile_text(summary: dict[str, object]) -> str:
     assert isinstance(timing, dict)
 
     lines = [
-        "HARNESSREDUCER TREE-REDUCTION PROFILE",
+        "HARNESSMINIMIZER TREE-REDUCTION PROFILE",
         "=====================================",
         "",
         "Reducer throughput",

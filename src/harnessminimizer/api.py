@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from harnessreducer.process_supervisor import termination_guard
-from harnessreducer.fdp_transform import (
+from harnessminimizer.process_supervisor import termination_guard
+from harnessminimizer.fdp_transform import (
     PARSER,
     VALUES_HEADER_NAME,
     count_fdp_calls,
@@ -16,7 +16,7 @@ from harnessreducer.fdp_transform import (
     load_trace,
     strip_injected_ids,
 )
-from harnessreducer.reducer_runner import (
+from harnessminimizer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_SPLIT,
     DEFAULT_TREEREDUCE_JOBS,
@@ -221,13 +221,13 @@ def _append_validation_summary(
     auto_init_text = "pattern" if auto_var_init_pattern else "disabled"
     with Path(validation_log_path).open("a", encoding="utf-8") as handle:
         handle.write(
-            "\n===== HarnessReducer post-reduction validation =====\n"
+            "\n===== HarnessMinimizer post-reduction validation =====\n"
             f"stage: {validation_label}\n"
             f"harness: {harness_path}\n"
             f"fdp_trace_file: {trace_text}\n"
             f"auto_var_init: {auto_init_text}\n"
             f"result: {result_text}\n"
-            "===== end HarnessReducer post-reduction validation =====\n"
+            "===== end HarnessMinimizer post-reduction validation =====\n"
         )
 
 
@@ -1422,7 +1422,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
 
     if config.protect_initializers:
-        from harnessreducer.initializer_recovery import reduce_with_initializer_recovery
+        from harnessminimizer.initializer_recovery import reduce_with_initializer_recovery
         outcome = reduce_with_initializer_recovery(
             attempt, tagged_harness_file, compile_flags,
             replay=fdp_trace_file is not None, plugin=config.amortize_link,

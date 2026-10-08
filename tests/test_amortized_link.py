@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from harnessreducer import reducer_runner
+from harnessminimizer import reducer_runner
 
 
 def _compile_shared_alias_fixture(directory: Path, name: str, *, soname: bool = False) -> Path:

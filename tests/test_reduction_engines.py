@@ -4,8 +4,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from harnessreducer import api
-from harnessreducer.reduction_engines import ReducerInvocation, prepare_reducer_invocation
+from harnessminimizer import api
+from harnessminimizer.reduction_engines import ReducerInvocation, prepare_reducer_invocation
 
 
 @pytest.mark.parametrize("stable", [False, True])
@@ -15,7 +15,7 @@ def test_treereduce_command_preserves_checker_arguments(tmp_path, stable, jobs):
     source.write_text("int main() { return 7; }\n")
     output = tmp_path / "reduced.cpp"
     checker = ["checker.py", "@@.cpp", "--compile-flags=-I/path with spaces", "$(literal)"]
-    with patch("harnessreducer.reduction_engines.treereduce_binary", return_value="/tools/treereduce-c"):
+    with patch("harnessminimizer.reduction_engines.treereduce_binary", return_value="/tools/treereduce-c"):
         invocation = prepare_reducer_invocation(
            source=str(source), output=str(output), checker_command=checker,
             stable=stable, jobs=jobs,

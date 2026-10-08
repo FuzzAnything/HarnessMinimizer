@@ -1,4 +1,4 @@
-from harnessreducer.fdp_transform import inject_ids
+from harnessminimizer.fdp_transform import inject_ids
 
 
 def test_inject_ids_handles_nested_fdp_calls_without_breaking_syntax() -> None:

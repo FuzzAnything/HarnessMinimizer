@@ -9,12 +9,12 @@ import subprocess
 import tempfile
 import time
 
-from harnessreducer.initializer_analysis import analyze_uninitialized
-from harnessreducer.initializer_protection import (
+from harnessminimizer.initializer_analysis import analyze_uninitialized
+from harnessminimizer.initializer_protection import (
     prepare_initializer_protection, preparation_compile_flags, verify_preparation,
 )
-from harnessreducer.reduction_profile import combine_attempt_profiles
-from harnessreducer.reducer_runner import get_work_dir, isolated_attempt_work_dir, reset_poc_runtime_args
+from harnessminimizer.reduction_profile import combine_attempt_profiles
+from harnessminimizer.reducer_runner import get_work_dir, isolated_attempt_work_dir, reset_poc_runtime_args
 
 
 _PROFILE_FILES = ("candidate_profile.jsonl", "reduction_profile.json", "reduction_profile.txt")
@@ -45,7 +45,7 @@ def reduce_with_initializer_recovery(
         if profile:
             summary_path = root / "reduction_profile.json"
             if summary_path.is_file():
-                from harnessreducer.reduction_profile import render_profile_text
+                from harnessminimizer.reduction_profile import render_profile_text
                 summary = json.loads(summary_path.read_text())
                 summary["configuration"]["initializer_recovery"] = metadata
                 summary_path.write_text(json.dumps(summary, indent=2) + "\n")

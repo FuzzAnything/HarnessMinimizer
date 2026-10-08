@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from harnessreducer.api import (
+from harnessminimizer.api import (
     PostReductionOutcome,
     ReductionConfig,
     ReductionResult,
@@ -12,7 +12,7 @@ from harnessreducer.api import (
     process,
     reduce_with_config,
 )
-from harnessreducer.reducer_runner import HarnessCrashDetected
+from harnessminimizer.reducer_runner import HarnessCrashDetected
 
 
 class TestApiPipeline(unittest.TestCase):
@@ -27,13 +27,13 @@ class TestApiPipeline(unittest.TestCase):
 
     def setUp(self):
         self.check_symbolized_patch = patch(
-            "harnessreducer.api.check_reducer_symbolized_crash_pattern"
+            "harnessminimizer.api.check_reducer_symbolized_crash_pattern"
         )
         self.mock_check_symbolized_pattern = self.check_symbolized_patch.start()
         self.addCleanup(self.check_symbolized_patch.stop)
 
         self.symbolized_pattern_patch = patch(
-            "harnessreducer.api.get_reference_crash_pattern_symbolize_1",
+            "harnessminimizer.api.get_reference_crash_pattern_symbolize_1",
             return_value=None,
         )
         self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
@@ -131,9 +131,9 @@ class TestApiPipeline(unittest.TestCase):
             self.assertEqual(prepared.path, str(harness))
             self.assertEqual(prepared.compile_flags, "-std=c++17")
 
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_uses_prepared_missing_return_harness(
         self,
         mock_check_tree,
@@ -186,13 +186,13 @@ class TestApiPipeline(unittest.TestCase):
                 link_flags=None,
             )
 
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
-    @patch("harnessreducer.api.resolve_amortized_link_inputs")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.resolve_amortized_link_inputs")
     def test_pch_amortized_link_stops_before_reduction_for_harness_crash(
         self,
         mock_resolve_amortized,
@@ -227,20 +227,20 @@ class TestApiPipeline(unittest.TestCase):
         mock_reduce.assert_not_called()
 
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.apply_coverage_guided_slice")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.apply_coverage_guided_slice")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_returns_result(
         self,
         mock_check,
@@ -354,19 +354,19 @@ class TestApiPipeline(unittest.TestCase):
         )
         mock_check.assert_called_once()
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_passes_snapshot_when_enabled(
         self,
         mock_check,
@@ -403,20 +403,20 @@ class TestApiPipeline(unittest.TestCase):
         self.assertTrue(mock_reduce.call_args.kwargs["snapshot"])
         self.assertTrue(mock_inline.call_args.kwargs["snapshot"])
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.apply_coverage_guided_slice")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.apply_coverage_guided_slice")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_pch_mode_is_used_only_for_tree_reduction(
         self,
         mock_check,
@@ -472,7 +472,7 @@ class TestApiPipeline(unittest.TestCase):
             "direct",
         )
 
-    @patch("harnessreducer.api.reduce_with_config")
+    @patch("harnessminimizer.api.reduce_with_config")
     def test_process_compat_wrapper(self, mock_reduce_with_config):
         cfg = ReductionConfig(
             harness_path="a.cpp",
@@ -499,7 +499,7 @@ class TestApiPipeline(unittest.TestCase):
         )
         self.assertTrue(mock_reduce_with_config.call_args.args[0].symbolize)
 
-    @patch("harnessreducer.api.reduce_with_config")
+    @patch("harnessminimizer.api.reduce_with_config")
     def test_process_forwards_compilation_mode_and_symbolize_override(self, reduce):
         reduce.return_value = ReductionResult("reduced.cpp", "tagged.cpp", None)
         for mode in ("direct", "split", "pch"):
@@ -513,20 +513,20 @@ class TestApiPipeline(unittest.TestCase):
                     self.assertEqual(config.compilation_mode, mode)
                     self.assertEqual(config.symbolize, symbolize)
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.apply_coverage_guided_slice")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.apply_coverage_guided_slice")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_skips_dynamic_slicing_by_default(
         self,
         mock_check,
@@ -565,19 +565,19 @@ class TestApiPipeline(unittest.TestCase):
         mock_slice.assert_not_called()
         mock_tag.assert_called_once_with("a.cpp", start_id=100000, marker="FDP_ID")
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_skips_fdp_dump_for_direct_input_harness(
         self,
         mock_check,
@@ -628,21 +628,21 @@ class TestApiPipeline(unittest.TestCase):
             auto_var_init_pattern=False,
         )
 
-    @patch("harnessreducer.api.validate_stack_trace")
-    @patch("harnessreducer.api.validate_crash_pattern")
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.validate_stack_trace")
+    @patch("harnessminimizer.api.validate_crash_pattern")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.dump_fdp_trace")
+    @patch("harnessminimizer.api.compile_dump_mode_harness")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_debug_tree_validation_enables_oom_retry(
         self,
         mock_check_tree,
@@ -695,18 +695,18 @@ class TestApiPipeline(unittest.TestCase):
         )
         mock_inline.assert_called_once()
 
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_symbolized_reduction_oracle")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
+    @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
+    @patch("harnessminimizer.api.format_reduced_harness")
+    @patch("harnessminimizer.api.run_treereducer")
+    @patch("harnessminimizer.api.reset_last_interesting_state")
+    @patch("harnessminimizer.api.reset_stack_trace_state")
+    @patch("harnessminimizer.api.configure_work_dir")
+    @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
+    @patch("harnessminimizer.api.check_reducer_symbolized_reduction_oracle")
+    @patch("harnessminimizer.api.check_reducer_crash_pattern")
+    @patch("harnessminimizer.api.extract_crash_pattern_from_output")
+    @patch("harnessminimizer.api.check_harness_compilation")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_defaults_to_symbolized_reduction_oracle(
         self,
         mock_check_tree,

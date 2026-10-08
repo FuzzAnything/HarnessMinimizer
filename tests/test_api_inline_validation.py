@@ -1,9 +1,9 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from harnessreducer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
-from harnessreducer.fdp_transform import InlineResult, InlineSkip
-from harnessreducer.reducer_runner import POST_REDUCTION_VALIDATION_ATTEMPTS
+from harnessminimizer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
+from harnessminimizer.fdp_transform import InlineResult, InlineSkip
+from harnessminimizer.reducer_runner import POST_REDUCTION_VALIDATION_ATTEMPTS
 
 
 def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path) -> None:
@@ -12,10 +12,10 @@ def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int y = 1;\n", replaced=1),
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True):
 
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
@@ -42,11 +42,11 @@ def test_inline_literals_retries_final_validation_with_auto_var_init_pattern(
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int y = 1;\n", replaced=1),
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         side_effect=[False, True],
     ) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
@@ -74,11 +74,11 @@ def test_inline_literals_uses_fast_pattern_when_symbolized_pattern_is_missing(
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int y = 1;\n", replaced=1),
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         return_value=True,
     ) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
@@ -117,7 +117,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     seed = tmp_path / "seed.bin"
     seed.write_bytes(bytes([0x41, 0x42, 0x00]))
 
-    with patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
+    with patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             None,
@@ -162,7 +162,7 @@ extern "C" int LLVMFuzzerTestOneInput(int *data, int size) {
     seed = tmp_path / "seed.bin"
     seed.write_bytes(bytes([0x41, 0x42, 0x00]))
 
-    with patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+    with patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True):
         out, _generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             None,
@@ -186,10 +186,10 @@ def test_inline_literals_falls_back_when_crash_not_preserved(tmp_path: Path) -> 
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=False):
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=False):
 
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
@@ -230,10 +230,10 @@ def test_inline_literals_reports_repeated_ids_preserved_for_replay(
         ),
     )
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True):
 
         inline_literals_in_reduced_harness(
             str(reduced),
@@ -274,10 +274,10 @@ def test_inline_literals_validates_unreplayed_repeated_calls_and_cleans_ids(
         ),
     )
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
@@ -320,7 +320,7 @@ extern "C" int LLVMFuzzerTestOneInput(uint8_t *data, int size) {
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("S 100004 4\n", encoding="utf-8")
 
-    with patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
+    with patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
@@ -370,10 +370,10 @@ def test_inline_literals_reports_missing_record_without_injected_id(
         ),
     )
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True):
         inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
@@ -412,10 +412,10 @@ def test_inline_literals_reports_unsupported_record_format(
         ),
     )
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=inline_result,
-    ), patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=True):
+    ), patch("harnessminimizer.api.validate_crash_pattern_and_stack_trace", return_value=True):
         inline_literals_in_reduced_harness(
             str(reduced),
             str(trace),
@@ -453,11 +453,11 @@ def test_inline_literals_rejects_replay_success_when_final_output_fails(
         ),
     )
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=inline_result,
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         side_effect=[True, False, False],
     ) as mock_validate:
         out, generated_headers = inline_literals_in_reduced_harness(
@@ -496,11 +496,11 @@ def test_inline_literals_persists_validation_failure_log(tmp_path: Path, capsys)
         )
         return False
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         side_effect=_write_failure_log,
     ):
 
@@ -535,17 +535,17 @@ def test_inline_literals_retries_last_interesting_snapshot_when_primary_inline_f
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}) as mock_load_trace, patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}) as mock_load_trace, patch(
+        "harnessminimizer.api.inline_source_with_report",
         side_effect=[
             InlineResult(source="int broken = 1;\n", replaced=1),
             InlineResult(source="int fixed = 1;\n", replaced=1),
         ],
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         side_effect=[False, True],
     ), patch(
-        "harnessreducer.api.get_last_interesting_file",
+        "harnessminimizer.api.get_last_interesting_file",
         return_value=str(snapshot),
     ):
         out, _headers = inline_literals_in_reduced_harness(
@@ -576,17 +576,17 @@ def test_inline_literals_falls_back_to_snapshot_base_when_snapshot_inline_fails(
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}), patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}), patch(
+        "harnessminimizer.api.inline_source_with_report",
         side_effect=[
             InlineResult(source="int broken = 1;\n", replaced=1),
             InlineResult(source="int also_broken = 1;\n", replaced=1),
         ],
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         side_effect=[False, False, False],
     ), patch(
-        "harnessreducer.api.get_last_interesting_file",
+        "harnessminimizer.api.get_last_interesting_file",
         return_value=str(snapshot),
     ):
         out, _headers = inline_literals_in_reduced_harness(
@@ -614,14 +614,14 @@ def test_inline_literals_does_not_use_snapshot_unless_enabled(
     trace = tmp_path / "fdp_trace.log"
     trace.write_text("", encoding="utf-8")
 
-    with patch("harnessreducer.api.load_trace", return_value={}) as mock_load_trace, patch(
-        "harnessreducer.api.inline_source_with_report",
+    with patch("harnessminimizer.api.load_trace", return_value={}) as mock_load_trace, patch(
+        "harnessminimizer.api.inline_source_with_report",
         return_value=InlineResult(source="int broken = 1;\n", replaced=1),
     ), patch(
-        "harnessreducer.api.validate_crash_pattern_and_stack_trace",
+        "harnessminimizer.api.validate_crash_pattern_and_stack_trace",
         return_value=False,
     ), patch(
-        "harnessreducer.api.get_last_interesting_file",
+        "harnessminimizer.api.get_last_interesting_file",
         return_value=str(snapshot),
     ):
         out, _headers = inline_literals_in_reduced_harness(

@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from harnessreducer import api
-from harnessreducer.process_supervisor import run_supervised
+from harnessminimizer import api
+from harnessminimizer.process_supervisor import run_supervised
 
 
 def harness(parameters: str, body: str = "return 0;") -> str:

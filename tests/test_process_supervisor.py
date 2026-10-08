@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from harnessreducer.process_supervisor import (
+from harnessminimizer.process_supervisor import (
     OutputLimitExceeded, run_supervised, runner_request, terminate_process_group,
 )
 
@@ -65,6 +65,14 @@ def assert_terminated(pid):
                 return
         time.sleep(0.01)
     raise AssertionError(f"process {pid} survived or was not reaped")
+
+
+def test_treereduce_override_uses_project_environment_variable(tmp_path, monkeypatch):
+    from harnessminimizer.process_supervisor import treereduce_binary
+
+    binary = tmp_path / "engine with spaces" / "treereduce-c"
+    monkeypatch.setenv("HARNESSMINIMIZER_TREEREDUCE", str(binary))
+    assert treereduce_binary() == str(binary)
 
 
 def test_run_preserves_output_and_exit_status():
@@ -135,10 +143,10 @@ def test_cleanup_after_leader_exit_kills_stubborn_child(tmp_path, reap_orphans):
 @pytest.fixture(scope="module")
 def runner_binary(tmp_path_factory):
     directory = tmp_path_factory.mktemp("runner-supervision")
-    source = ROOT / "src/harnessreducer/harness_runner.cpp"
+    source = ROOT / "src/harnessminimizer/harness_runner.cpp"
     binary = directory / "production"
     subprocess.run([
-        "clang++", "-std=c++17", "-O1", "-I" + str(ROOT / "src/harnessreducer"),
+        "clang++", "-std=c++17", "-O1", "-I" + str(ROOT / "src/harnessminimizer"),
         str(source), "-ldl", "-o", str(binary),
     ], check=True, timeout=30)
     return binary
@@ -214,7 +222,7 @@ def test_runner_owner_death_cleans_active_request(runner_binary, tmp_path, reap_
     code = (
         "import os,pathlib,subprocess\n"
         f"runner=subprocess.Popen({command!r},start_new_session=True,"
-        "env=dict(os.environ,HARNESSREDUCER_RUNNER_PARENT_PID=str(os.getpid())))\n"
+        "env=dict(os.environ,HARNESSMINIMIZER_RUNNER_PARENT_PID=str(os.getpid())))\n"
         f"pathlib.Path({str(runner_pidfile)!r}).write_text(str(runner.pid))\n"
         "runner.wait(timeout=10)\n"
     )
@@ -245,7 +253,7 @@ def test_runner_owner_death_cleans_active_request(runner_binary, tmp_path, reap_
 
 def test_runner_output_limit(runner_binary, tmp_path):
     plugin = compile_plugin(tmp_path, 'char data[8192]={};write(1,data,sizeof(data));sleep(8);return 0;')
-    env = dict(os.environ, HARNESSREDUCER_MAX_OUTPUT_BYTES="1024")
+    env = dict(os.environ, HARNESSMINIMIZER_MAX_OUTPUT_BYTES="1024")
     with running_runner(runner_binary, tmp_path, env) as (_, sock):
         header, output = runner_request(sock, plugin, timeout=3)
         assert int(header[0]) == 125
@@ -278,9 +286,9 @@ def test_real_checker_preserves_profile_fields_and_crash(tmp_path):
 
 
 def test_patched_treereduce_reaps_timed_out_checkers(tmp_path, reap_orphans):
-    from harnessreducer.process_supervisor import treereduce_binary
+    from harnessminimizer.process_supervisor import treereduce_binary
     binary = treereduce_binary()
-    probe = subprocess.run([binary, "--harnessreducer-supervisor-version"], capture_output=True)
+    probe = subprocess.run([binary, "--harnessminimizer-supervisor-version"], capture_output=True)
     if probe.returncode != 0:
         pytest.skip("install the pinned treereduce patch to run its integration regression")
     source = tmp_path / "source.cpp"
@@ -328,7 +336,7 @@ def test_sigterm_unwinds_python_supervisor(tmp_path, reap_orphans):
     script.write_text(
         "import sys\n"
         f"sys.path.insert(0,{str(ROOT / 'src')!r})\n"
-        "from harnessreducer.process_supervisor import run_supervised\n"
+        "from harnessminimizer.process_supervisor import run_supervised\n"
         "import subprocess\n"
         f"code=\"import pathlib,os,time;pathlib.Path({str(pidfile)!r}).write_text(str(os.getpid()));time.sleep(8)\"\n"
         "run_supervised([sys.executable,'-c',code],stdout=subprocess.PIPE)\n"
