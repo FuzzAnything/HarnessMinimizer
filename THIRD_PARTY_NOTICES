@@ -48,8 +48,9 @@ Applicable local files and installed component:
 The patch adds process-group cleanup for timeouts/cancellation and a supervisor
 version probe. HarnessMinimizer-authored patch additions and the installer are
 covered by LICENSE; the upstream code retains its MIT copyright and permission
-notice. The installer preserves the verified source's upstream license at
-<installation-root>/share/licenses/treereduce/LICENSE, including when installed
-under /usr/local in Docker.
+notice. The patched executable is not distributed under MIT alone: its
+HarnessMinimizer-authored additions are subject to LICENSE (AGPL-3.0-only or a
+separately negotiated commercial license). Upstream Cargo license fields describe
+the upstream code, not the additional HarnessMinimizer patch.
 
 Separately installed dependencies retain their own licenses and notices.

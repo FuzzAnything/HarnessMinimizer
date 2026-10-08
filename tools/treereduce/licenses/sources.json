@@ -1,0 +1,42 @@
+{
+  "tree-sitter-0.25.10": {
+    "file": "tree-sitter-0.25.10.txt",
+    "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/da6fe9beb4f7f67beb75914ca8e0d48ae48d6406/LICENSE",
+    "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147"
+  },
+  "tree-sitter-java-0.23.5": {
+    "file": "tree-sitter-java-0.23.5.txt",
+    "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/94703d5a6bed02b98e438d7cad1136c01a60ba2c/LICENSE",
+    "sha256": "52ed137b039cd9c46409bc22e89938af911c95b157feae2d040b51e6084369a7"
+  },
+  "tree-sitter-language-0.1.5": {
+    "file": "tree-sitter-language-0.1.5.txt",
+    "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/8b5c63bffae4c1948106eb0a8d722bf2a9141ce5/LICENSE",
+    "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147"
+  },
+  "tree-sitter-lua-0.2.0": {
+    "file": "tree-sitter-lua-0.2.0.txt",
+    "source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-lua/99fc677e6971c425e8d407f59c77ab897e585c92/LICENSE.md",
+    "sha256": "9a32b02e4c917b1ce6b5e79d8ea81e25cefd7f27d89c7235f2afb262c06cf32e"
+  },
+  "tree-sitter-rust-0.24.0": {
+    "file": "tree-sitter-rust-0.24.0.txt",
+    "source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-rust/18b0515fca567f5a10aee9978c6d2640e878671a/LICENSE",
+    "sha256": "31d5b6f4243d5c7c6e1c4ebbbb9f6407bd1457a08bcc4f706521710341acba36"
+  },
+  "tree-sitter-souffle-0.5.0": {
+    "file": "tree-sitter-souffle-0.5.0.txt",
+    "source": "https://raw.githubusercontent.com/langston-barrett/tree-sitter-souffle/0ca94fad4422bc9a391f81418b5716e3af00ed2f/LICENSE",
+    "sha256": "6b277f6ba866046abb28339537ca6c55a4942ed55a73ad3db8ddc568b2b27b54"
+  },
+  "tree-sitter-swift-0.7.1": {
+    "file": "tree-sitter-swift-0.7.1.txt",
+    "source": "https://raw.githubusercontent.com/alex-pinkus/tree-sitter-swift/41824f66157ad02f70ba26cd12c8c0c86d9e23a8/LICENSE",
+    "sha256": "3533cec129bb4bba015c0d61d86dd7c3b7e82110e4d2ff7837a01eff5bad5ccc"
+  },
+  "valuable-0.1.0": {
+    "file": "valuable-0.1.0.txt",
+    "source": "https://raw.githubusercontent.com/tokio-rs/valuable/e89de8805f524aefafdbcc1fcd1b20ecfd0d22b6/LICENSE",
+    "sha256": "ed60d479b8fd1f64e9cbc3de449a16a53ac1b3d1b6aeb9bf9d190a8e93061b44"
+  }
+}
