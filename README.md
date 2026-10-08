@@ -1,12 +1,12 @@
-# HarnessReducer
+# HarnessMinimizer
 
-HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving the crash.
+HarnessMinimizer minimizes crashing C/C++ fuzz harnesses while preserving the crash.
 It can be used through a command-line interface
 (CLI) and a Python API.
 
 ## Installation
 
-For direct use of HarnessReducer, run this on the host from the repository root
+For direct use of HarnessMinimizer, run this on the host from the repository root
 to build the image and create the `harnessminimizer` container.
 
 ```bash
@@ -15,17 +15,8 @@ docker exec -it harnessminimizer bash
 cd /root/HarnessMinimizer
 ```
 
-For the evaluation scripts below, use this alternative on the host to create
-`harnessminimizer-eval` with the benchmark dependencies and liblouis table path.
-
-```bash
-./setup_docker_eval.sh
-docker exec -it harnessminimizer-eval bash
-cd /root/HarnessMinimizer
-```
-
-Both scripts mount the repository at `/root/HarnessMinimizer` and default to the
-`harnessminimizer:latest` image; use `--image` or `--name` to override the names.
+The script mounts the repository at `/root/HarnessMinimizer` and defaults to the
+`harnessminimizer:latest` image. Use `--image` or `--name` to override the names of the image or the container.
 Run the remaining installation commands inside the chosen container.
 
 Install the Python package and activate its environment using uv.
@@ -33,33 +24,6 @@ Install the Python package and activate its environment using uv.
 ```bash
 uv sync
 source .venv/bin/activate
-```
-
-Install the prerequisites for Perses, WDD, CDD.
-
-```bash
-apt-get update
-apt-get install -y openjdk-17-jdk-headless coreutils unzip zip
-```
-
-Install Bazelisk to build the Perses engines.
-
-```bash
-mkdir -p .tools/bin
-curl -fL --retry 3 \
-  https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64 \
-  -o .tools/bin/bazelisk
-chmod +x .tools/bin/bazelisk
-export PATH="$(pwd)/.tools/bin:$PATH"
-```
-
-Build and install the pinned Perses revision.
-
-```bash
-mkdir -p .tools/perses
-git clone https://github.com/uw-pluverse/perses.git .tools/perses/source
-git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2
-python tools/perses/install.py --source .tools/perses/source --jobs 2
 ```
 
 Install and select patched treereduce.
@@ -151,72 +115,8 @@ print(result.reduced_harness)
 The API uses the same defaults as the CLI. If you move the returned harness, copy
 the files in `result.generated_headers` alongside it.
 
-## Evaluation
+## Reference
 
-Run these commands from the repository root with the benchmark data available under `benchmark/`.
+This tool integrates the reduction engine Treereduce:
 
-GitHub limits repository file sizes, so build the benchmark libraries locally. For each case, check out the library's Git commit SHA listed in [library_version.csv](library_version.csv), build its dynamic (`.so`) and static (`.a`) libraries, and place them in that case's `build/sanitizer/lib/` folder under `benchmark/harness-bug/` or `benchmark/library-bug/`. Don't forget to instrument the libraries with AddressSanitizer and UndefinedBehaviorSanitizer (`-fsanitize=address,undefined`) when building them.
-
-### Speedup Performance
-
-Run performance evaluation for all four engines across both datasets.
-
-```bash
-./run_harnessreducer_evaluation.sh --tool all
-```
-
-### Crash Triage
-
-Create the crash-triage configuration.
-
-```bash
-cp .env-template .env
-```
-
-Fill in `OPENAI_BASE_URL`, `LLM_API_KEY`, and `OPENAI_MODEL` in `.env`.
-
-Run crash triage using the latest performance evaluation batch. Replace `n` with
-the number of concurrent benchmark cases; tools within each case run sequentially.
-
-```bash
-./run_crash_triage_parallel.sh --tool all --jobs n
-```
-
-Retry failed or unfinished triage cases with `n` workers.
-
-```bash
-./run_crash_triage_parallel.sh --tool all --jobs n --resume
-```
-
-### FDP Replay Function Evaluation
-
-Run the replay experiment across all cases with 10 treereduce workers per reduction.
-
-```bash
-./run_replay_evaluation.sh --jobs 10
-```
-
-Resume replay evaluation, retrying failed or incomplete cases.
-
-```bash
-./run_replay_evaluation.sh --jobs 10 --resume
-```
-
-### Crash Oracle Evaluation
-
-Run the oracle experiment across both datasets.
-
-```bash
-./run_oracle_evaluation.sh --jobs 10
-```
-
-Resume oracle evaluation, retrying failed or incomplete cases.
-
-```bash
-./run_oracle_evaluation.sh --jobs 10 --resume
-```
-
-For replay and oracle experiments, `--jobs` controls reducer workers (default 10),
-while `--parallel` controls concurrent cases (default 1). Crash triage instead uses
-`--jobs` for concurrent cases. Results are saved under `output/replay-evaluation/`
-and `output/oracle-evaluation/`; use `--results-root` to choose another location.
+- Treereduce: [https://github.com/langston-barrett/treereduce](https://github.com/langston-barrett/treereduce)
