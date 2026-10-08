@@ -136,7 +136,7 @@ def reduction_command(experiment, config, args, run, compile_flags, link_flags):
     command = [args.python, "-m", "harnessreducer.cli", str(run / "reference" / "original.cpp"),
         f"--compile-flags={compile_flags}", f"--link-flags={link_flags}",
         "--crash-input", str(run / "reference" / "crash-input"), "--tool", "treereduce", "--jobs", str(args.jobs),
-        "--pch", "--amortize-link", "--stable", "--protect-initializers",
+        "--pch", "--amortize-link", "--no-symbolize", "--stable", "--protect-initializers",
         "--work-dir", str(directory / "work"), "--output", str(directory / "final" / "reduced.cpp")]
     if args.auto_var_init_pattern:
         command.append("--auto-var-init-pattern")

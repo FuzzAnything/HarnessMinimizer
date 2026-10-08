@@ -332,12 +332,12 @@ def calibrated_exec_timeout_ms_from_samples(samples_ms: list[int]) -> int | None
     return min(CALIBRATED_EXEC_TIMEOUT_MAX_MS, timeout_ms)
 
 
-def validate_phase3_mode(mode: str) -> str:
+def validate_compilation_mode(mode: str) -> str:
     if mode == PHASE3_DIRECT_ALIAS:
         return PHASE3_DIRECT
     if mode not in PHASE3_MODES:
         raise ValueError(
-            f"Unsupported phase 3 compilation mode {mode!r}; "
+            f"Unsupported compilation mode {mode!r}; "
             f"expected one of: {', '.join(sorted(PHASE3_MODES | {PHASE3_DIRECT_ALIAS}))}"
         )
     return mode
@@ -1633,7 +1633,7 @@ def run_amortized_reference_candidate(
     compile_flags: str | None,
     link_flags: str | None,
     crash_input: str | None,
-    phase3_mode: str,
+    compilation_mode: str,
     runner_socket: str,
     pch_artifacts: PchArtifacts | None,
     plugin_link_flags: tuple[str, ...] = (),
@@ -1667,7 +1667,7 @@ def run_amortized_reference_candidate(
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
     proc = run_command(
         cmd,
@@ -1954,8 +1954,8 @@ def restore_pch_includes(harness_path: str, artifacts: PchArtifacts) -> None:
     path.write_text(artifacts.restore_prefix + body, encoding="utf-8")
 
 
-def pch_tester_args(artifacts: PchArtifacts | None, phase3_mode: str) -> list[str]:
-    mode = validate_phase3_mode(phase3_mode)
+def pch_tester_args(artifacts: PchArtifacts | None, compilation_mode: str) -> list[str]:
+    mode = validate_compilation_mode(compilation_mode)
     if mode == PHASE3_DIRECT:
         return ["--single-step"]
     if mode == PHASE3_SPLIT:
@@ -2074,7 +2074,7 @@ def _run_restore_transition_stack_diagnostic(
     link_flags: str | None,
     fdp_trace_file: str | None,
     *,
-    phase3_mode: str,
+    compilation_mode: str,
     pch_artifacts: PchArtifacts | None,
     symbolize: bool,
     debug_stage: str,
@@ -2095,7 +2095,7 @@ def _run_restore_transition_stack_diagnostic(
         cmd.append("--symbolize")
     cmd.extend(debug_tester_args(debug_stage))
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
@@ -2112,7 +2112,7 @@ def _append_restore_transition_stack_diagnostics(
     *,
     section_label: str,
     source_path: str,
-    phase3_mode: str,
+    compilation_mode: str,
     pch_artifacts: PchArtifacts | None,
     crash_input: str | None,
     compile_flags: str | None,
@@ -2125,7 +2125,7 @@ def _append_restore_transition_stack_diagnostics(
     expected_dynamic_site = get_dynamic_reference_crash_site()
     lines = [
         f"\n--- {section_label}: {source_path} ---",
-        f"phase3_mode: {phase3_mode}",
+        f"compilation_mode: {compilation_mode}",
     ]
     if expected_dynamic_site is not None:
         lines.extend(
@@ -2149,7 +2149,7 @@ def _append_restore_transition_stack_diagnostics(
             compile_flags,
             link_flags,
             fdp_trace_file,
-            phase3_mode=phase3_mode,
+            compilation_mode=compilation_mode,
             pch_artifacts=pch_artifacts,
             symbolize=symbolize,
             debug_stage=(
@@ -2842,7 +2842,7 @@ def apply_coverage_guided_slice(
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
 ) -> str:
@@ -2891,7 +2891,7 @@ def apply_coverage_guided_slice(
                 crash_input,
                 compile_flags,
                 link_flags,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
             )
         else:
             preserved = validate_crash_pattern_and_stack_trace(
@@ -2901,7 +2901,7 @@ def apply_coverage_guided_slice(
                 crash_input,
                 compile_flags,
                 link_flags,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
             )
         if not preserved:
             print("[!] Coverage-guided slicing failed crash-preservation validation. Falling back to the original harness.")
@@ -3488,16 +3488,16 @@ def check_reducer_crash_pattern(
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
 ) -> None:
     print("[+] Checking crash pattern validity...")
     if not crash_pattern:
         raise ValueError("Crash pattern cannot be empty.")
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
 
     pch_artifacts: PchArtifacts | None = None
     tester_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -3515,7 +3515,7 @@ def check_reducer_crash_pattern(
     ]
     cmd.extend(stack_depth_tester_args(symbolized=False))
     cmd.extend(dynamic_crash_site_tester_args())
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
     if proc.returncode != 77:
@@ -3584,7 +3584,7 @@ def calibrate_exec_timeout_ms(
     link_flags: str | None,
     crash_input: str | None,
     *,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     pch_artifacts: PchArtifacts | None = None,
     symbolize: bool,
     runner_socket: str | None = None,
@@ -3616,7 +3616,7 @@ def calibrate_exec_timeout_ms(
                 "--amortized-plugin-fallback-link-flags="
                 + " ".join(plugin_link_flags)
             )
-        cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+        cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
         append_exec_timeout_tester_args(cmd, DEFAULT_EXEC_TIMEOUT_MS)
         proc = run_command(
             cmd,
@@ -3661,11 +3661,11 @@ def run_treereducer(
     link_flags: str | None,
     crash_input: str | None,
     stable: bool = False,
-    phase3_mode: str = PHASE3_SPLIT,
+    compilation_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
-    symbolize: bool = False,
+    symbolize: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
     tool: str = "treereduce",
@@ -3680,19 +3680,19 @@ def run_treereducer(
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
     if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
             f"Reducer jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
         )
-    if amortize_link and phase3_mode == PHASE3_DIRECT:
+    if amortize_link and compilation_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
     reference_executable = (
         str(Path(get_work_dir()) / "poc.out") if amortize_link else None
     )
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -3729,7 +3729,7 @@ def run_treereducer(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 pch_artifacts=pch_artifacts,
                 symbolize=symbolize,
                 runner_socket=calibration_runner.socket_path,
@@ -3742,14 +3742,14 @@ def run_treereducer(
             compile_flags,
             link_flags,
             crash_input,
-            phase3_mode=phase3_mode,
+            compilation_mode=compilation_mode,
             pch_artifacts=pch_artifacts,
             symbolize=symbolize,
         )
     set_current_exec_timeout_ms(exec_timeout_ms)
     print(f"[+] Using fixed execution timeout: {exec_timeout_ms} ms")
 
-    if phase3_mode == PHASE3_PCH and auto_var_init_pattern:
+    if compilation_mode == PHASE3_PCH and auto_var_init_pattern:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -3773,7 +3773,7 @@ def run_treereducer(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(debug_tester_args("reduction_candidate"))
     from harnessreducer.oracle_evaluation import reference_root
@@ -3825,7 +3825,7 @@ def run_treereducer(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode,
+                compilation_mode,
                 amortized_runner.socket_path,
                 pch_artifacts,
                 plugin_link_flags,
@@ -3916,7 +3916,7 @@ def run_treereducer(
                 "tool": tool,
                 "engine": invocation.metadata,
                 "jobs": jobs,
-                "phase3_mode": phase3_mode,
+                "compilation_mode": compilation_mode,
                 "amortize_link": amortize_link,
                 "symbolize": symbolize,
                 "stable": stable,
@@ -3961,7 +3961,7 @@ def run_treereducer(
             restore_transition_log_path,
             section_label="before_restore",
             source_path=reduced_harness,
-            phase3_mode=PHASE3_PCH,
+            compilation_mode=PHASE3_PCH,
             pch_artifacts=pch_artifacts,
             crash_input=crash_input,
             compile_flags=compile_flags,
@@ -3978,7 +3978,7 @@ def run_treereducer(
             restore_transition_log_path,
             section_label="after_restore",
             source_path=reduced_harness,
-            phase3_mode=PHASE3_DIRECT,
+            compilation_mode=PHASE3_DIRECT,
             pch_artifacts=None,
             crash_input=crash_input,
             compile_flags=compile_flags,
@@ -4087,7 +4087,7 @@ def validate_crash_pattern(
     compile_flags: str | None,
     link_flags: str | None,
     fdp_trace_file: str | None = None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
@@ -4095,10 +4095,10 @@ def validate_crash_pattern(
     auto_var_init_pattern: bool = False,
 ) -> bool:
     """Run a fast symbolize=0 crash-pattern/depth validation."""
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
     pch_artifacts: PchArtifacts | None = None
     tester_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -4122,7 +4122,7 @@ def validate_crash_pattern(
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
@@ -4162,7 +4162,7 @@ def validate_stack_trace(
     compile_flags: str | None,
     link_flags: str | None,
     fdp_trace_file: str | None = None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     require_crash_pattern: bool = True,
     debug_stage: str | None = None,
@@ -4190,10 +4190,10 @@ def validate_stack_trace(
         else:
             stack_trace_arg = ["--stack-trace-file", stack_trace_file]
 
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
     pch_artifacts: PchArtifacts | None = None
     tester_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -4225,7 +4225,7 @@ def validate_stack_trace(
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
@@ -4244,7 +4244,7 @@ def validate_symbolized_crash_pattern_depth_location(
     compile_flags: str | None,
     link_flags: str | None,
     fdp_trace_file: str | None = None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
@@ -4254,10 +4254,10 @@ def validate_symbolized_crash_pattern_depth_location(
     """Run a symbolize=1 crash-pattern/depth/location validation."""
     if not crash_pattern:
         raise ValueError("Symbolized crash pattern cannot be empty.")
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
     pch_artifacts: PchArtifacts | None = None
     tester_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -4282,7 +4282,7 @@ def validate_symbolized_crash_pattern_depth_location(
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
@@ -4323,7 +4323,7 @@ def validate_crash_pattern_and_stack_trace(
     compile_flags: str | None,
     link_flags: str | None,
     fdp_trace_file: str | None = None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     validation_log_path: str | None = None,
     debug_stage: str | None = None,
     retry_oom_without_rss_limit: bool = False,
@@ -4338,7 +4338,7 @@ def validate_crash_pattern_and_stack_trace(
         compile_flags,
         link_flags,
         fdp_trace_file=fdp_trace_file,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         validation_log_path=validation_log_path,
         debug_stage=(f"{debug_stage}_symbolize_0" if debug_stage else None),
         retry_oom_without_rss_limit=retry_oom_without_rss_limit,
@@ -4359,7 +4359,7 @@ def validate_crash_pattern_and_stack_trace(
         compile_flags,
         link_flags,
         fdp_trace_file=fdp_trace_file,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         validation_log_path=validation_log_path,
         require_crash_pattern=crash_pattern_symbolize_1 is not None,
         debug_stage=(f"{debug_stage}_symbolize_1" if debug_stage else None),
@@ -4375,7 +4375,7 @@ def check_reducer_symbolized_reduction_oracle(
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
 ) -> None:
     print("[+] Checking symbolized reduction crash-location oracle validity...")
     if not validate_symbolized_crash_pattern_depth_location(
@@ -4384,7 +4384,7 @@ def check_reducer_symbolized_reduction_oracle(
         crash_input,
         compile_flags,
         link_flags,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
     ):
         raise ValueError(
             "Symbolized reduction crash-location oracle did not match the original crash behavior."
@@ -4398,7 +4398,7 @@ def check_reducer_symbolized_crash_pattern(
     crash_input: str | None,
     compile_flags: str | None,
     link_flags: str | None,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
 ) -> None:
     if crash_pattern:
         print("[+] Checking symbolized crash pattern validity...")
@@ -4410,7 +4410,7 @@ def check_reducer_symbolized_crash_pattern(
         crash_input,
         compile_flags,
         link_flags,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         require_crash_pattern=crash_pattern is not None,
     ):
         raise ValueError(

@@ -66,7 +66,7 @@ from harnessreducer.reducer_runner import (
     validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
     validate_stack_trace,
-    validate_phase3_mode,
+    validate_compilation_mode,
     DEFAULT_EXEC_TIMEOUT_MS,
 )
 
@@ -116,14 +116,14 @@ class ReductionConfig:
     start_id: int = 100000
     marker: str = "FDP_ID"
     stable: bool = False
-    phase3_mode: str = PHASE3_SPLIT
+    compilation_mode: str = PHASE3_SPLIT
     statistics: bool = False
     slice_enabled: bool = False
     check: bool = False
     debug: bool = False
     snapshot: bool = False
     amortize_link: bool = False
-    symbolize: bool = False
+    symbolize: bool = True
     jobs: int = DEFAULT_TREEREDUCE_JOBS
     profile: bool = False
     tool: str = "treereduce"
@@ -263,7 +263,7 @@ def _validate_post_reduction_harness(
     link_flags: str | None,
     *,
     fdp_trace_file: str | None,
-    phase3_mode: str,
+    compilation_mode: str,
     symbolize: bool,
     validation_log_path: str,
     debug_stage: str,
@@ -291,7 +291,7 @@ def _validate_post_reduction_harness(
                 compile_flags,
                 link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 validation_log_path=log_path,
                 debug_stage=effective_debug_stage,
                 retry_oom_without_rss_limit=True,
@@ -307,7 +307,7 @@ def _validate_post_reduction_harness(
                 compile_flags,
                 link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 validation_log_path=log_path,
                 debug_stage=effective_debug_stage,
                 retry_oom_without_rss_limit=True,
@@ -362,7 +362,7 @@ def _finalize_and_validate_fallback_harness(
     compile_flags: str | None,
     link_flags: str | None,
     *,
-    phase3_mode: str,
+    compilation_mode: str,
     symbolize: bool,
     fallback_label: str,
     auto_var_init_pattern_fallback: bool = False,
@@ -382,7 +382,7 @@ def _finalize_and_validate_fallback_harness(
         compile_flags,
         link_flags,
         fdp_trace_file=None,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         symbolize=symbolize,
         validation_log_path=validation_log_path,
         debug_stage="post_reduction_fallback",
@@ -829,7 +829,7 @@ def _inline_direct_input_in_reduced_harness(
     compile_flags: str | None,
     link_flags: str | None,
     start_id: int,
-    phase3_mode: str,
+    compilation_mode: str,
     snapshot: bool,
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
@@ -914,7 +914,7 @@ def _inline_direct_input_in_reduced_harness(
             compile_flags,
             link_flags,
             fdp_trace_file=None,
-            phase3_mode=phase3_mode,
+            compilation_mode=compilation_mode,
             symbolize=symbolize,
             validation_log_path=validation_log_path,
             debug_stage="post_reduction_direct_input_inline",
@@ -981,7 +981,7 @@ def _inline_direct_input_in_reduced_harness(
                 crash_input,
                 compile_flags,
                 link_flags,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
@@ -999,7 +999,7 @@ def _inline_direct_input_in_reduced_harness(
         crash_input,
         compile_flags,
         link_flags,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
@@ -1015,7 +1015,7 @@ def inline_literals_in_reduced_harness(
     compile_flags: str | None,
     link_flags: str | None,
     start_id: int = 100000,
-    phase3_mode: str = PHASE3_DIRECT,
+    compilation_mode: str = PHASE3_DIRECT,
     snapshot: bool = False,
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
@@ -1033,7 +1033,7 @@ def inline_literals_in_reduced_harness(
             compile_flags,
             link_flags,
             start_id,
-            phase3_mode,
+            compilation_mode,
             snapshot,
             fast_crash_pattern,
             symbolize,
@@ -1089,7 +1089,7 @@ def inline_literals_in_reduced_harness(
                 compile_flags,
                 link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 symbolize=symbolize,
                 validation_log_path=replay_validation_log_path,
                 debug_stage="post_reduction_fdp_replay",
@@ -1134,7 +1134,7 @@ def inline_literals_in_reduced_harness(
             compile_flags,
             link_flags,
             fdp_trace_file=None,
-            phase3_mode=phase3_mode,
+            compilation_mode=compilation_mode,
             symbolize=symbolize,
             validation_log_path=validation_log_path,
             debug_stage="post_reduction_final_output",
@@ -1187,7 +1187,7 @@ def inline_literals_in_reduced_harness(
                 crash_input,
                 compile_flags,
                 link_flags,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
@@ -1205,7 +1205,7 @@ def inline_literals_in_reduced_harness(
         crash_input,
         compile_flags,
         link_flags,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
@@ -1220,8 +1220,8 @@ def _reduction_attempt(
 ) -> PostReductionOutcome:
     raw_capture_args = {"raw_output_capture": RawOutputCapture()} if config.capture_raw_output else {}
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
-    reduction_phase3_mode = config.phase3_mode
-    validation_phase3_mode = PHASE3_DIRECT
+    reduction_compilation_mode = config.compilation_mode
+    validation_compilation_mode = PHASE3_DIRECT
     if config.check:
         reduced_harness = run_treereducer_with_check(
             tagged_harness_file,
@@ -1231,7 +1231,7 @@ def _reduction_attempt(
             config.link_flags,
             config.crash_input,
             stable=config.stable,
-            phase3_mode=reduction_phase3_mode,
+            compilation_mode=reduction_compilation_mode,
             snapshot=config.snapshot,
             amortize_link=config.amortize_link,
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
@@ -1251,7 +1251,7 @@ def _reduction_attempt(
             config.link_flags,
             config.crash_input,
             stable=config.stable,
-            phase3_mode=reduction_phase3_mode,
+            compilation_mode=reduction_compilation_mode,
             statistics=config.statistics,
             snapshot=config.snapshot,
             amortize_link=config.amortize_link,
@@ -1283,7 +1283,7 @@ def _reduction_attempt(
                 compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=validation_phase3_mode,
+                compilation_mode=validation_compilation_mode,
                 debug_stage="post_reduction_tree_harness_symbolize_1",
                 retry_oom_without_rss_limit=True,
             )
@@ -1295,7 +1295,7 @@ def _reduction_attempt(
                 compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=validation_phase3_mode,
+                compilation_mode=validation_compilation_mode,
                 debug_stage="post_reduction_tree_harness_symbolize_0",
                 retry_oom_without_rss_limit=True,
             )
@@ -1306,7 +1306,7 @@ def _reduction_attempt(
                 compile_flags,
                 config.link_flags,
                 fdp_trace_file=fdp_trace_file,
-                phase3_mode=validation_phase3_mode,
+                compilation_mode=validation_compilation_mode,
                 require_crash_pattern=crash_pattern_symbolize_1 is not None,
                 debug_stage="post_reduction_tree_harness_symbolize_1",
                 retry_oom_without_rss_limit=True,
@@ -1320,7 +1320,7 @@ def _reduction_attempt(
         compile_flags,
         config.link_flags,
         config.start_id if config.replay_enabled else None,
-        phase3_mode=validation_phase3_mode,
+        compilation_mode=validation_compilation_mode,
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
@@ -1361,14 +1361,14 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if config.statistics:
         from harnessreducer.reducer_runner import reset_statistics_state
         reset_statistics_state()
-    validate_phase3_mode(config.phase3_mode)
-    if config.amortize_link and config.phase3_mode == PHASE3_DIRECT:
+    validate_compilation_mode(config.compilation_mode)
+    if config.amortize_link and config.compilation_mode == PHASE3_DIRECT:
         raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
     if config.amortize_link:
         resolve_amortized_link_inputs(config.link_flags)
     if has_static_target_libraries(config.link_flags):
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
-    validation_phase3_mode = PHASE3_DIRECT
+    validation_compilation_mode = PHASE3_DIRECT
     if config.tool == "treereduce":
         check_tree_reducer()
     else:
@@ -1436,7 +1436,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             compile_flags,
             config.link_flags,
-            phase3_mode=validation_phase3_mode,
+            compilation_mode=validation_compilation_mode,
         )
     else:
         check_reducer_crash_pattern(
@@ -1445,7 +1445,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             compile_flags,
             config.link_flags,
-            phase3_mode=validation_phase3_mode,
+            compilation_mode=validation_compilation_mode,
         )
         check_reducer_symbolized_crash_pattern(
             harness_path,
@@ -1453,7 +1453,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             compile_flags,
             config.link_flags,
-            phase3_mode=validation_phase3_mode,
+            compilation_mode=validation_compilation_mode,
         )
     if config.check:
         print(
@@ -1479,7 +1479,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.crash_input,
             compile_flags,
             config.link_flags,
-            phase3_mode=validation_phase3_mode,
+            compilation_mode=validation_compilation_mode,
             crash_pattern_symbolize_0=crash_pattern_symbolize_0,
             symbolize=config.symbolize,
         )
@@ -1551,14 +1551,14 @@ def process(
     crash_input: str | None = None,
     link_flags: str | None = None,
     work_dir: str | None = None,
-    phase3_mode: str = PHASE3_SPLIT,
+    compilation_mode: str = PHASE3_SPLIT,
     statistics: bool = False,
     slice_enabled: bool = False,
     check: bool = False,
     debug: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
-    symbolize: bool = False,
+    symbolize: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
     tool: str = "treereduce",
@@ -1571,7 +1571,7 @@ def process(
         link_flags=link_flags,
         crash_input=crash_input,
         work_dir=work_dir,
-        phase3_mode=phase3_mode,
+        compilation_mode=compilation_mode,
         amortize_link=amortize_link,
         statistics=statistics,
         slice_enabled=slice_enabled,

@@ -16,6 +16,16 @@ from harnessreducer.reducer_runner import HarnessCrashDetected
 
 
 class TestApiPipeline(unittest.TestCase):
+    def test_defaults_use_unoptimized_configuration(self):
+        config = ReductionConfig("h.cpp")
+        self.assertEqual(config.compilation_mode, "split")
+        self.assertTrue(config.symbolize)
+        self.assertFalse(config.amortize_link)
+        self.assertEqual(config.tool, "treereduce")
+        self.assertEqual(config.jobs, 60)
+        self.assertFalse(config.profile)
+        self.assertFalse(config.stable)
+
     def setUp(self):
         self.check_symbolized_patch = patch(
             "harnessreducer.api.check_reducer_symbolized_crash_pattern"
@@ -72,7 +82,7 @@ class TestApiPipeline(unittest.TestCase):
             reduce_with_config(
                 ReductionConfig(
                     harness_path="a.cpp",
-                    phase3_mode="direct",
+                    compilation_mode="direct",
                     amortize_link=True,
                 )
             )
@@ -188,6 +198,7 @@ class TestApiPipeline(unittest.TestCase):
 
             result = reduce_with_config(
                 ReductionConfig(
+                    symbolize=False,
                     harness_path=str(harness),
                     compile_flags="-std=c++17",
                     crash_input="seed.bin",
@@ -238,7 +249,7 @@ class TestApiPipeline(unittest.TestCase):
                 link_flags="-lm",
                 crash_input="/tmp/crash-input",
                 work_dir="/tmp/workdir",
-                phase3_mode="pch",
+                compilation_mode="pch",
                 amortize_link=True,
             )
         )
@@ -302,6 +313,7 @@ class TestApiPipeline(unittest.TestCase):
         )()
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
@@ -324,7 +336,7 @@ class TestApiPipeline(unittest.TestCase):
             None,
             "seed.bin",
             stable=False,
-            phase3_mode="split",
+            compilation_mode="split",
             snapshot=False,
             amortize_link=False,
             crash_pattern_symbolize_0="AddressSanitizer",
@@ -377,6 +389,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_slice.return_value = "/tmp/sliced.cpp"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             compile_flags="-std=c++17",
             link_flags="-lm",
@@ -407,7 +420,7 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             "-std=c++17",
             "-lm",
-            phase3_mode="direct",
+            compilation_mode="direct",
         )
         self.mock_check_symbolized_pattern.assert_called_once_with(
             "a.cpp",
@@ -415,7 +428,7 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             "-std=c++17",
             "-lm",
-            phase3_mode="direct",
+            compilation_mode="direct",
         )
         mock_slice.assert_called_once_with(
             "a.cpp",
@@ -423,7 +436,7 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             "-std=c++17",
             "-lm",
-            phase3_mode="direct",
+            compilation_mode="direct",
             crash_pattern_symbolize_0="AddressSanitizer",
             symbolize=False,
         )
@@ -438,7 +451,7 @@ class TestApiPipeline(unittest.TestCase):
             "-lm",
             "seed.bin",
             stable=False,
-            phase3_mode="split",
+            compilation_mode="split",
             statistics=False,
             snapshot=False,
             amortize_link=False,
@@ -457,7 +470,7 @@ class TestApiPipeline(unittest.TestCase):
             "-std=c++17",
             "-lm",
             123,
-            phase3_mode="direct",
+            compilation_mode="direct",
             snapshot=False,
             crash_pattern_symbolize_0="AddressSanitizer",
             symbolize=False,
@@ -502,6 +515,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
@@ -553,31 +567,32 @@ class TestApiPipeline(unittest.TestCase):
         mock_slice.return_value = "/tmp/sliced.cpp"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             compile_flags="-std=c++17",
             link_flags="-lm",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
-            phase3_mode="pch",
+            compilation_mode="pch",
             slice_enabled=True,
         )
 
         reduce_with_config(config)
 
         self.assertEqual(
-            mock_check_pattern.call_args.kwargs["phase3_mode"],
+            mock_check_pattern.call_args.kwargs["compilation_mode"],
             "direct",
         )
         self.assertEqual(
-            mock_slice.call_args.kwargs["phase3_mode"],
+            mock_slice.call_args.kwargs["compilation_mode"],
             "direct",
         )
         self.assertEqual(
-            mock_reduce.call_args.kwargs["phase3_mode"],
+            mock_reduce.call_args.kwargs["compilation_mode"],
             "pch",
         )
         self.assertEqual(
-            mock_inline.call_args.kwargs["phase3_mode"],
+            mock_inline.call_args.kwargs["compilation_mode"],
             "direct",
         )
 
@@ -603,9 +618,24 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(reduced, expected_reduced)
         mock_reduce_with_config.assert_called_once()
         self.assertEqual(
-            mock_reduce_with_config.call_args.args[0].phase3_mode,
+            mock_reduce_with_config.call_args.args[0].compilation_mode,
             "split",
         )
+        self.assertTrue(mock_reduce_with_config.call_args.args[0].symbolize)
+
+    @patch("harnessreducer.api.reduce_with_config")
+    def test_process_forwards_compilation_mode_and_symbolize_override(self, reduce):
+        reduce.return_value = ReductionResult("reduced.cpp", "tagged.cpp", None)
+        for mode in ("direct", "split", "pch"):
+            for symbolize in (False, True):
+                with self.subTest(mode=mode, symbolize=symbolize):
+                    self.assertEqual(
+                        process("h.cpp", compilation_mode=mode, symbolize=symbolize),
+                        "reduced.cpp",
+                    )
+                    config = reduce.call_args.args[0]
+                    self.assertEqual(config.compilation_mode, mode)
+                    self.assertEqual(config.symbolize, symbolize)
 
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")
@@ -646,6 +676,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             compile_flags="-std=c++17",
             link_flags="-lm",
@@ -693,6 +724,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
@@ -711,7 +743,7 @@ class TestApiPipeline(unittest.TestCase):
             None,
             "seed.bin",
             stable=False,
-            phase3_mode="split",
+            compilation_mode="split",
             statistics=False,
             snapshot=False,
             amortize_link=False,
@@ -763,6 +795,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
+            symbolize=False,
             harness_path="a.cpp",
             compile_flags="-std=c++17",
             link_flags="-lm",
@@ -800,7 +833,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessreducer.api.extract_crash_pattern_from_output")
     @patch("harnessreducer.api.check_harness_compilation")
     @patch("harnessreducer.api.check_tree_reducer")
-    def test_reduce_with_config_symbolize_uses_symbolized_reduction_oracle(
+    def test_reduce_with_config_defaults_to_symbolized_reduction_oracle(
         self,
         mock_check_tree,
         mock_check_compile,
@@ -825,7 +858,6 @@ class TestApiPipeline(unittest.TestCase):
             harness_path="a.cpp",
             crash_input="seed.bin",
             work_dir="/tmp/workdir",
-            symbolize=True,
         )
 
         result = reduce_with_config(config)
@@ -844,7 +876,7 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             None,
             None,
-            phase3_mode="direct",
+            compilation_mode="direct",
         )
         mock_check_pattern.assert_not_called()
         self.mock_check_symbolized_pattern.assert_not_called()
@@ -856,7 +888,7 @@ class TestApiPipeline(unittest.TestCase):
             None,
             "seed.bin",
             stable=False,
-            phase3_mode="split",
+            compilation_mode="split",
             statistics=False,
             snapshot=False,
             amortize_link=False,
@@ -874,12 +906,16 @@ class TestApiPipeline(unittest.TestCase):
             None,
             None,
             100000,
-            phase3_mode="direct",
+            compilation_mode="direct",
             snapshot=False,
             crash_pattern_symbolize_0="FastPattern",
             symbolize=True,
             auto_var_init_pattern_fallback=False,
         )
+
+        self.mock_get_symbolized_pattern.return_value = None
+        with self.assertRaisesRegex(ValueError, "symbolize=1 crash pattern"):
+            reduce_with_config(config)
 
 
 if __name__ == "__main__":

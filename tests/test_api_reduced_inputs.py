@@ -62,7 +62,7 @@ def test_zero_fdp_calls_still_validate(tmp_path: Path, capsys, symbolize, preser
     first_call = selected.call_args_list[0]
     assert first_call.args[0] == str(prepared)
     assert first_call.kwargs["fdp_trace_file"] is None
-    assert first_call.kwargs["phase3_mode"] == "direct"
+    assert first_call.kwargs["compilation_mode"] == "direct"
     assert first_call.kwargs["retry_oom_without_rss_limit"] is True
     assert first_call.kwargs["evidence_attempts"] == api.POST_REDUCTION_VALIDATION_ATTEMPTS
     assert source in prepared.read_text()
@@ -132,7 +132,7 @@ def test_direct_input_shapes_validate(tmp_path: Path, capsys, parameters, assign
     other.assert_not_called()
     first_call = selected.call_args_list[0]
     assert first_call.kwargs["fdp_trace_file"] is None
-    assert first_call.kwargs["phase3_mode"] == "direct"
+    assert first_call.kwargs["compilation_mode"] == "direct"
     assert first_call.kwargs["retry_oom_without_rss_limit"] is True
     assert str(seed) in first_call.args
     output = capsys.readouterr().out
@@ -286,7 +286,7 @@ def test_pipeline_validates_reduced_no_input_harness(tmp_path: Path, tool, optim
     trace.write_text("S 100001 42\n")
     config = api.ReductionConfig(
         harness_path=str(reduced), crash_input=str(seed), work_dir=str(tmp_path),
-        phase3_mode="pch" if optimized else "split", amortize_link=optimized,
+        compilation_mode="pch" if optimized else "split", amortize_link=optimized,
         symbolize=not optimized, tool=tool, stable=True, jobs=1,
     )
     with ExitStack() as stack:
@@ -313,12 +313,12 @@ def test_pipeline_validates_reduced_no_input_harness(tmp_path: Path, tool, optim
     assert result.generated_headers == ()
     reducer.assert_called_once()
     assert reducer.call_args.kwargs["tool"] == tool
-    assert reducer.call_args.kwargs["phase3_mode"] == config.phase3_mode
+    assert reducer.call_args.kwargs["compilation_mode"] == config.compilation_mode
     assert reducer.call_args.kwargs["amortize_link"] is optimized
     assert reducer.call_args.kwargs["stable"] is True
     selected.assert_called_once()
     other.assert_not_called()
-    assert selected.call_args.kwargs["phase3_mode"] == "direct"
+    assert selected.call_args.kwargs["compilation_mode"] == "direct"
     assert selected.call_args.kwargs["fdp_trace_file"] is None
 
 

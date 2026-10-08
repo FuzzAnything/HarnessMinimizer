@@ -651,7 +651,7 @@ def test_cleaned_fallback_keeps_raw_bytes_before_id_and_header_cleanup(tmp_path,
     monkeypatch.setattr(api, "_validate_post_reduction_harness", lambda *a, **kw: True)
     outcome = api._finalize_and_validate_fallback_harness(
         str(source), 100000, None, "pattern", "input", None, None,
-        phase3_mode="split", symbolize=False, fallback_label="reduced",
+        compilation_mode="split", symbolize=False, fallback_label="reduced",
         raw_output_capture=capture,
     )
     assert outcome.validated and outcome.raw_reduced_harness == str(raw)

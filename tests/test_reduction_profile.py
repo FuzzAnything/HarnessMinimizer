@@ -71,10 +71,12 @@ class TestReductionProfile(unittest.TestCase):
             wall_ns=1_000_000_000,
             jobs=4,
             returncode=0,
-            configuration={"jobs": 4, "phase3_mode": "pch"},
+            configuration={"jobs": 4, "compilation_mode": "pch"},
         )
 
         reducer = summary["reducer"]
+        self.assertEqual(summary["configuration"]["compilation_mode"], "pch")
+        self.assertIn("compilation_mode: pch", render_profile_text(summary))
         self.assertEqual(reducer["profiled_checks"], 2)
         self.assertEqual(reducer["checks_per_second"], 2.0)
         self.assertEqual(reducer["result_counts"], {"1": 1, "77": 1})
@@ -113,7 +115,7 @@ class TestReductionProfile(unittest.TestCase):
                 returncode=0,
                 configuration={
                     "jobs": 1,
-                    "phase3_mode": "split",
+                    "compilation_mode": "split",
                     "amortize_link": False,
                     "symbolize": False,
                     "stable": False,

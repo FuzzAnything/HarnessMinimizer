@@ -74,6 +74,7 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner.set_normal_reference_stack_depth_strict(True)
 
         out = reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
@@ -93,6 +94,7 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("12", cmd)
         self.assertIn("--strict-stack-depth", cmd)
         self.assertNotIn("--last-interesting-file", cmd)
+        self.assertNotIn("--symbolize", cmd)
 
     @patch("harnessreducer.reducer_runner.run_supervised")
     def test_normal_reduction_has_no_measurement_side_effects(self, mock_run):
@@ -102,6 +104,8 @@ class TestReducerRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, reference_capture(None):
             root = Path(tmpdir)
             reducer_runner.configure_work_dir(tmpdir)
+            reducer_runner.set_symbolized_reference_stack_depth(3)
+            reducer_runner.set_symbolized_reference_crash_location_pattern(r"/src/target\.cpp:7")
             source = root / "in.cpp"
             source.write_text("int main() { return 0; }\n")
             output = root / "reduced_harness.cpp"
@@ -122,6 +126,7 @@ class TestReducerRunner(unittest.TestCase):
                     str(output),
                 )
             command = mock_run.call_args.args[0]
+            self.assertIn("--symbolize", command)
             self.assertNotIn("--profile-file", command)
             self.assertFalse(any(arg.startswith("--oracle-") for arg in command))
             self.assertEqual(command[command.index("--timeout") + 1], "300")
@@ -132,7 +137,7 @@ class TestReducerRunner(unittest.TestCase):
                 self.assertFalse((root / artifact).exists(), artifact)
 
     @patch("harnessreducer.reducer_runner.run_supervised")
-    def test_run_treereducer_symbolize_uses_symbolized_oracle(self, mock_run):
+    def test_run_treereducer_defaults_to_symbolized_oracle(self, mock_run):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
@@ -157,7 +162,6 @@ class TestReducerRunner(unittest.TestCase):
                 compile_flags=None,
                 link_flags="-lm",
                 crash_input=None,
-                symbolize=True,
             )
 
         cmd = mock_run.call_args.args[0]
@@ -195,13 +199,14 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner.set_normal_reference_stack_depth_strict(True)
 
         reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
             compile_flags=None,
             link_flags="/tmp/libtarget.so",
             crash_input=None,
-            phase3_mode="split",
+            compilation_mode="split",
             amortize_link=True,
         )
 
@@ -220,6 +225,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_exists.return_value = True
 
         reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
@@ -246,6 +252,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_initialize_statistics.return_value = "/tmp/work/statistics.txt"
 
         reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
@@ -283,6 +290,7 @@ class TestReducerRunner(unittest.TestCase):
             source = Path(tmpdir) / "in.cpp"
             source.write_text("int main() { return 0; }\n", encoding="utf-8")
             reducer_runner.run_treereducer(
+                symbolize=False,
                 harness_path=str(source),
                 fdp_trace_file=None,
                 crash_pattern="AddressSanitizer",
@@ -298,6 +306,9 @@ class TestReducerRunner(unittest.TestCase):
         self.assertEqual(cmd[jobs_index + 1], "7")
         self.assertIn("--profile-file", cmd)
         mock_write_profile.assert_called_once()
+        configuration = mock_write_profile.call_args.kwargs["configuration"]
+        self.assertEqual(configuration["compilation_mode"], "split")
+        self.assertFalse(configuration["symbolize"])
 
     def test_run_treereducer_rejects_out_of_range_jobs(self):
         with self.assertRaisesRegex(ValueError, "between 1 and 63"):
@@ -321,6 +332,7 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.configure_work_dir(tmpdir)
             debug_log = reducer_runner.configure_debug_logging(True)
             reducer_runner.run_treereducer(
+                symbolize=False,
                 harness_path="/tmp/in.cpp",
                 fdp_trace_file=None,
                 crash_pattern="AddressSanitizer",
@@ -342,13 +354,14 @@ class TestReducerRunner(unittest.TestCase):
         mock_exists.return_value = True
 
         reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
             crash_pattern="AddressSanitizer",
             compile_flags=None,
             link_flags=None,
             crash_input=None,
-            phase3_mode="split",
+            compilation_mode="split",
         )
 
         cmd = mock_run.call_args.args[0]
@@ -361,6 +374,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_exists.return_value = True
 
         reducer_runner.run_treereducer(
+            symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file=None,
             crash_pattern="AddressSanitizer",
@@ -412,9 +426,9 @@ class TestReducerRunner(unittest.TestCase):
         self.assertFalse(reducer_runner._coverage_count_is_nonzero("0.0k"))
         self.assertFalse(reducer_runner._coverage_count_is_nonzero(""))
 
-    def test_validate_phase3_mode_accepts_single_step_alias(self):
+    def test_validate_compilation_mode_accepts_single_step_alias(self):
         self.assertEqual(
-            reducer_runner.validate_phase3_mode("single-step"),
+            reducer_runner.validate_compilation_mode("single-step"),
             reducer_runner.PHASE3_DIRECT,
         )
 

@@ -170,13 +170,21 @@ def build_parser() -> argparse.ArgumentParser:
             "compile and crash-oracle result in reduction_debug.log."
         ),
     )
-    parser.add_argument(
+    symbolization_group = parser.add_mutually_exclusive_group()
+    symbolization_group.add_argument(
         "--symbolize",
         action="store_true",
+        default=True,
         help=(
-            "Ablation mode: run reduction candidates with symbolize=1 and validate "
-            "the symbolized crash pattern, stack depth, and crash location."
+            "Run reduction candidates with symbolization and validate the symbolized "
+            "crash pattern, stack depth, and crash location (default)."
         ),
+    )
+    symbolization_group.add_argument(
+        "--no-symbolize",
+        dest="symbolize",
+        action="store_false",
+        help="Disable symbolization during candidate checks for faster reduction.",
     )
     parser.add_argument(
         "--snapshot",
@@ -190,33 +198,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--amortize-link",
         action="store_true",
         help=(
-            "Reuse a persistent runner and shared/static target libraries during Phase 3. "
+            "Reuse a persistent runner and shared/static target libraries during reduction. "
             "Requires split or PCH mode; when used alone, the default split mode applies."
         ),
     )
-    phase3_group = parser.add_mutually_exclusive_group()
-    phase3_group.add_argument(
+    compilation_group = parser.add_mutually_exclusive_group()
+    compilation_group.add_argument(
         "--direct",
         "--single-step",
-        dest="phase3_mode",
+        dest="compilation_mode",
         action="store_const",
         const="direct",
         default="split",
-        help="Use the single-step Phase 3 compile/link path.",
+        help="Compile and link each candidate in a single step.",
     )
-    phase3_group.add_argument(
+    compilation_group.add_argument(
         "--split",
-        dest="phase3_mode",
+        dest="compilation_mode",
         action="store_const",
         const="split",
-        help="Use two-step Phase 3 mode: compile the full source to an object, then link it (default).",
+        help="Compile the full source to an object, then link it (default).",
     )
-    phase3_group.add_argument(
+    compilation_group.add_argument(
         "--pch",
-        dest="phase3_mode",
+        dest="compilation_mode",
         action="store_const",
         const="pch",
-        help="Use Phase 3 precompiled-header mode and separate compile/link steps.",
+        help="Use precompiled headers and separate compilation/linking steps.",
     )
     parser.add_argument("--no-fdp-replay", action="store_true", help="Disable FDP replay for the replay evaluation.")
     parser.add_argument("--oracle-evaluation", help="Record oracle observations in an evaluation run directory.")
@@ -226,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.amortize_link and args.phase3_mode == "direct":
+    if args.amortize_link and args.compilation_mode == "direct":
         parser.error("--amortize-link cannot be combined with --direct/--single-step")
     if args.debug and args.check:
         parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
@@ -244,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         crash_input=args.crash_input,
         work_dir=args.work_dir,
         stable=args.stable,
-        phase3_mode=args.phase3_mode,
+        compilation_mode=args.compilation_mode,
         amortize_link=args.amortize_link,
         statistics=args.statistics,
         slice_enabled=args.slice,

@@ -41,7 +41,7 @@ from harnessreducer.reducer_runner import (
     set_current_exec_timeout_ms,
     start_amortized_runner,
     get_stack_trace_file,
-    validate_phase3_mode,
+    validate_compilation_mode,
     runtime_library_env,
     absolutize_link_flags,
 )
@@ -346,7 +346,7 @@ def run_treereducer_with_check(
     link_flags: str | None,
     crash_input: str | None,
     stable: bool = False,
-    phase3_mode: str = PHASE3_SPLIT,
+    compilation_mode: str = PHASE3_SPLIT,
     snapshot: bool = False,
     amortize_link: bool = False,
     crash_pattern_symbolize_0: str | None = None,
@@ -363,19 +363,19 @@ def run_treereducer_with_check(
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
 
-    validate_phase3_mode(phase3_mode)
+    validate_compilation_mode(compilation_mode)
     if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
             f"Reducer jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
         )
-    if amortize_link and phase3_mode == PHASE3_DIRECT:
+    if amortize_link and compilation_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")
     reference_executable = (
         str(Path(get_work_dir()) / "poc.out") if amortize_link else None
     )
     pch_artifacts: PchArtifacts | None = None
     reducer_source = harness_path
-    if phase3_mode == PHASE3_PCH:
+    if compilation_mode == PHASE3_PCH:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -406,7 +406,7 @@ def run_treereducer_with_check(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 pch_artifacts=pch_artifacts,
                 symbolize=True,
                 runner_socket=calibration_runner.socket_path,
@@ -431,7 +431,7 @@ def run_treereducer_with_check(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 pch_artifacts=pch_artifacts,
                 symbolize=False,
                 runner_socket=calibration_runner_symbolize_0.socket_path,
@@ -450,7 +450,7 @@ def run_treereducer_with_check(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 pch_artifacts=pch_artifacts,
                 symbolize=True,
             ),
@@ -460,7 +460,7 @@ def run_treereducer_with_check(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode=phase3_mode,
+                compilation_mode=compilation_mode,
                 pch_artifacts=pch_artifacts,
                 symbolize=False,
             ),
@@ -468,7 +468,7 @@ def run_treereducer_with_check(
     set_current_exec_timeout_ms(exec_timeout_ms)
     print(f"[+] Using fixed execution timeout for check mode: {exec_timeout_ms} ms")
 
-    if phase3_mode == PHASE3_PCH and auto_var_init_pattern:
+    if compilation_mode == PHASE3_PCH and auto_var_init_pattern:
         pch_artifacts = prepare_phase3_pch_harness(
             harness_path,
             compile_flags,
@@ -503,7 +503,7 @@ def run_treereducer_with_check(
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
-    cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
+    cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(dynamic_crash_site_tester_args())
 
@@ -556,7 +556,7 @@ def run_treereducer_with_check(
                 compile_flags,
                 link_flags,
                 crash_input,
-                phase3_mode,
+                compilation_mode,
                 amortized_runner.socket_path,
                 pch_artifacts,
                 plugin_link_flags,
@@ -579,7 +579,7 @@ def run_treereducer_with_check(
                         compile_flags,
                         link_flags,
                         crash_input,
-                        phase3_mode,
+                        compilation_mode,
                         amortized_runner_symbolize_0.socket_path,
                         pch_artifacts,
                         plugin_link_flags,

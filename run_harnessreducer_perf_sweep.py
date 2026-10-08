@@ -26,7 +26,7 @@ from harnessreducer.reduction_engines import TOOL_CHOICES
 ALL_TOOLS = ("treereduce", "perses", "wdd", "cdd")
 DATASETS = (("harness-bug", "harness_bug_cases.tsv"), ("library-bug", "library_bug_cases.tsv"))
 VARIANTS = (
-    ("optimized", ("--pch", "--amortize-link")),
+    ("optimized", ("--pch", "--amortize-link", "--no-symbolize")),
     ("split_symbolize", ("--split", "--symbolize")),
 )
 PLACEHOLDERS = re.compile(r"\$\(pwd\)|\$\{PWD\}|\$PWD\b|\{bench_dir\}")

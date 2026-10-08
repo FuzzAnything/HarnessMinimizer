@@ -8,6 +8,37 @@ from harnessreducer.api import ReductionResult
 from harnessreducer.cli import build_parser, main
 
 
+@pytest.mark.parametrize("flags,mode", [
+    ([], "split"), (["--direct"], "direct"), (["--single-step"], "direct"),
+    (["--split"], "split"), (["--pch"], "pch"),
+    (["--pch", "--amortize-link"], "pch"),
+])
+@pytest.mark.parametrize("symbolization,expected", [
+    ([], True), (["--symbolize"], True), (["--no-symbolize"], False),
+])
+def test_cli_forwards_compilation_mode_and_symbolization(flags, mode, symbolization, expected):
+    result = ReductionResult("unused.cpp", "tagged.cpp", None, success=False)
+    with patch("harnessreducer.cli.reduce_with_config", return_value=result) as reduce:
+        assert main(["h.cpp", "-o", "r.cpp", *flags, *symbolization]) == 1
+    config = reduce.call_args.args[0]
+    assert config.compilation_mode == mode
+    assert config.symbolize is expected
+    assert config.amortize_link == ("--amortize-link" in flags)
+    assert config.tool == "treereduce" and config.jobs == 60
+    assert not config.profile and not config.stable
+
+
+@pytest.mark.parametrize("flags", [
+    ["--symbolize", "--no-symbolize"], ["--no-symbolize", "--symbolize"],
+])
+def test_conflicting_symbolization_flags_are_rejected(flags):
+    with patch("harnessreducer.cli.reduce_with_config") as reduce:
+        with pytest.raises(SystemExit) as error:
+            main(["h.cpp", "-o", "r.cpp", *flags])
+    assert error.value.code == 2
+    reduce.assert_not_called()
+
+
 @pytest.mark.parametrize("success", [True, False])
 @pytest.mark.parametrize("capture_raw", [True, False])
 def test_output_staging_without_profile(tmp_path, success, capture_raw):
@@ -74,18 +105,20 @@ def test_profile_never_substitutes_final_output_for_missing_raw(tmp_path):
     assert not output.with_suffix(".raw.cpp").exists()
 
 
-class TestCliPhase3Mode(unittest.TestCase):
+class TestCliCompilationMode(unittest.TestCase):
     def test_raw_capture_requires_explicit_opt_in_even_with_profile(self):
         parser = build_parser()
         self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp"]).capture_raw_output)
         self.assertFalse(parser.parse_args(["h.cpp", "-o", "r.cpp", "--profile"]).capture_raw_output)
         self.assertTrue(parser.parse_args(["h.cpp", "-o", "r.cpp", "--capture-raw-output"]).capture_raw_output)
 
-    def test_split_is_default_phase3_mode(self):
+    def test_split_is_default_compilation_mode(self):
         args = build_parser().parse_args(["harness.cpp", "-o", "reduced.cpp"])
-        self.assertEqual(args.phase3_mode, "split")
+        self.assertEqual(args.compilation_mode, "split")
+        self.assertTrue(args.symbolize)
+        self.assertFalse(args.amortize_link)
 
-    def test_explicit_phase3_modes_override_default(self):
+    def test_explicit_compilation_modes_override_default(self):
         parser = build_parser()
         for option, expected in (
             ("--direct", "direct"),
@@ -97,14 +130,14 @@ class TestCliPhase3Mode(unittest.TestCase):
                 args = parser.parse_args(
                     ["harness.cpp", "-o", "reduced.cpp", option]
                 )
-                self.assertEqual(args.phase3_mode, expected)
+                self.assertEqual(args.compilation_mode, expected)
 
     def test_amortize_link_alone_uses_split(self):
         args = build_parser().parse_args(
             ["harness.cpp", "-o", "reduced.cpp", "--amortize-link"]
         )
         self.assertTrue(args.amortize_link)
-        self.assertEqual(args.phase3_mode, "split")
+        self.assertEqual(args.compilation_mode, "split")
 
     def test_symbolize_argument_is_available(self):
         args = build_parser().parse_args(

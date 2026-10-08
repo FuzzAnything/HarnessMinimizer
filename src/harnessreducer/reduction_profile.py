@@ -209,7 +209,7 @@ def render_profile_text(summary: dict[str, object]) -> str:
         "------------------",
         f"tool: {configuration.get('tool', 'treereduce')}",
         f"jobs: {configuration.get('jobs')}",
-        f"phase3_mode: {configuration.get('phase3_mode')}",
+        f"compilation_mode: {configuration.get('compilation_mode')}",
         f"amortize_link: {configuration.get('amortize_link')}",
         f"symbolize: {configuration.get('symbolize')}",
         f"stable: {configuration.get('stable')}",

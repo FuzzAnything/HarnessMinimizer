@@ -83,7 +83,7 @@ harnessreducer /path/to/harness.cpp \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
-  --pch --amortize-link --stable \
+  --pch --amortize-link --no-symbolize --stable \
   -o /path/to/output/reduced.cpp
 ```
 
@@ -98,8 +98,9 @@ harnessreducer /path/to/harness.cpp \
   -o /path/to/output/reduced.cpp
 ```
 
-By default, HarnessReducer uses **treereduce**, **split compilation**, and
-**60 workers**. Amortized linking, profiling, symbolization, and stable mode are
+The default is the **unoptimized configuration**: **split compilation** with
+**symbolization on**, **PCH off**, and **amortized linking off**. HarnessReducer
+uses **treereduce** and **60 workers** by default; profiling and stable mode are
 **off** unless explicitly enabled.
 
 | Argument | Purpose |
@@ -114,7 +115,7 @@ By default, HarnessReducer uses **treereduce**, **split compilation**, and
 | `--direct`, `--split`, `--pch` | Compile and link in one step; compile then link separately (default); or use precompiled headers with separate compilation and linking. |
 | `--amortize-link` | Reuse a persistent runner and shared/static target libraries. |
 | `--stable` | Repeat engine passes until their stopping conditions are reached. |
-| `--symbolize` | Use symbolized crash traces when checking reduction candidates. |
+| `--symbolize`, `--no-symbolize` | Enable symbolized candidate checks (default), or disable them for faster reduction. These flags are mutually exclusive. |
 | `--work-dir` | Directory for intermediate files; a temporary directory is created by default. |
 | `--profile` | Record candidate timings and reduction throughput (for evaluation purpose only). |
 | `--debug` | Log candidate compilation and crash-check details. |
@@ -137,8 +138,9 @@ result = reduce_with_config(ReductionConfig(
     crash_input="/path/to/inputs/crash-input",
     compile_flags="-I/path/to/library/include",
     link_flags="-L/path/to/library/lib -ltarget",
-    phase3_mode="pch",
+    compilation_mode="pch",
     amortize_link=True,
+    symbolize=False,
     stable=True,
 ))
 if not result.success:

@@ -36,7 +36,7 @@ def profile(root, events, wall_ns):
     write_profile_summary(
         events_path, root / "reduction_profile.json", root / "reduction_profile.txt",
         wall_ns=wall_ns, jobs=2, returncode=0,
-        configuration={"jobs": 2, "tool": "perses", "phase3_mode": "pch"},
+        configuration={"jobs": 2, "tool": "perses", "compilation_mode": "pch"},
     )
 
 
@@ -229,7 +229,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     def reduce(path, trace, pattern, flags, link, crash_input, **kwargs):
         reductions.append((path, kwargs))
         assert trace is None
-        assert kwargs["phase3_mode"] == mode and kwargs["amortize_link"] == plugin
+        assert kwargs["compilation_mode"] == mode and kwargs["amortize_link"] == plugin
         assert kwargs["symbolize"] == symbolize and kwargs["tool"] == "wdd"
         assert kwargs["jobs"] == 2 and kwargs["stable"] is True
         text = Path(path).read_text()
@@ -251,7 +251,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     monkeypatch.setattr(recovery, "verify_preparation", lambda *a, **kw: None)
     result = api.reduce_with_config(api.ReductionConfig(
         str(source), crash_input=str(seed), work_dir=str(tmp_path / "work"),
-        tool="wdd", jobs=2, stable=True, symbolize=symbolize, phase3_mode=mode,
+        tool="wdd", jobs=2, stable=True, symbolize=symbolize, compilation_mode=mode,
         amortize_link=plugin, protect_initializers=True,
         capture_raw_output=capture_raw,
     ))
@@ -303,7 +303,7 @@ def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, tool
     monkeypatch.setattr(api, "inline_literals_in_reduced_harness", inline)
     result = api._reduction_attempt(
         api.ReductionConfig(str(work), tool=tool, snapshot=True, symbolize=symbolize,
-                            phase3_mode="pch", amortize_link=True),
+                            compilation_mode="pch", amortize_link=True),
         str(protection.source), trace, "fast-reference", "symbolized-reference", "", protection,
     )
     assert result.validated and len(calls) == 1

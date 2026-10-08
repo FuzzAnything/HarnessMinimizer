@@ -350,7 +350,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                     result = run(
                         str(source), None, "pattern", None, None, None,
                         tool="cdd", jobs=2, stable=True,
-                        **({} if diagnostic else {"profile": True}),
+                        **({} if diagnostic else {"profile": True, "symbolize": False}),
                     )
                 self.assertEqual(Path(result).read_text(), "#define VALUE 7\nint result;\n")
                 metadata = json.loads((root / "reduction_engine.json").read_text())
@@ -361,6 +361,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                 if not diagnostic:
                     profile = json.loads((root / "reduction_profile.json").read_text())
                     self.assertEqual(profile["configuration"]["tool"], "cdd")
+                    self.assertEqual(profile["configuration"]["compilation_mode"], "split")
                     self.assertEqual(profile["reducer"]["profiled_checks"], 2)
                     self.assertEqual(profile["reducer"]["result_counts"], {"77": 1, "-1": 1})
                     self.assertEqual(profile["candidate_timing"]["compile_ns"]["mean_ns"], 11)
@@ -396,7 +397,8 @@ class TestEngineRunnerRouting(unittest.TestCase):
                  patch.object(reducer_runner, "run_supervised", side_effect=pretend_perses):
                 result = reducer_runner.run_treereducer(
                     str(source), str(root / "trace.log"), "pattern", None, None,
-                    str(root / "input.bin"), tool="perses", phase3_mode="pch", amortize_link=True,
+                    str(root / "input.bin"), tool="perses", compilation_mode="pch", amortize_link=True,
+                    symbolize=False,
                 )
             metadata = json.loads((root / "reduction_engine.json").read_text())
             self.assertEqual(metadata["checker_working_directory"], str(Path.cwd()))
