@@ -12,7 +12,7 @@ LLVM FuzzedDataProvider
 Upstream project: LLVM Project
 Source: https://github.com/llvm/llvm-project/blob/main/compiler-rt/include/fuzzer/FuzzedDataProvider.h
 License: Apache-2.0 WITH LLVM-exception
-Full upstream license text: LICENSES/LLVM.txt
+Full upstream license text: THIRD_PARTY_LICENSES/LLVM.txt
 License source: https://llvm.org/LICENSE.txt
 
 Applicable local files:
@@ -36,7 +36,7 @@ Source: https://github.com/langston-barrett/treereduce
 Pinned revision: 47655579ae4a19e95d7c4f7911d7ded7719b6d22
 License: MIT
 Copyright (c) 2025 Brian Langston Barrett
-Full upstream license text: LICENSES/treereduce.txt
+Full upstream license text: THIRD_PARTY_LICENSES/treereduce.txt
 License source: https://github.com/langston-barrett/treereduce/blob/47655579ae4a19e95d7c4f7911d7ded7719b6d22/LICENSE
 
 Applicable local files and installed component:

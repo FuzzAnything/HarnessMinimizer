@@ -1,6 +1,6 @@
 // The Native* consumption helpers are adapted from LLVM's FuzzedDataProvider.h.
 // LLVM-derived portions are under the Apache License v2.0 with LLVM Exceptions;
-// see https://llvm.org/LICENSE.txt and the repository's LICENSES/LLVM.txt.
+// see https://llvm.org/LICENSE.txt and the repository's THIRD_PARTY_LICENSES/LLVM.txt.
 // Modifications and replay implementation: Copyright (C) 2026 HarnessMinimizer
 // Authors. HarnessMinimizer-authored additions follow LICENSE; upstream portions
 // retain their original terms. See THIRD_PARTY_NOTICES for attribution.

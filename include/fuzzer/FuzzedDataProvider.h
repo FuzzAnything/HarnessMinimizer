@@ -6,7 +6,7 @@
 //
 // Modified in 2026 by HarnessMinimizer Authors to add call-site identifiers,
 // value recording/replay, and an external replay runtime. See the repository's
-// THIRD_PARTY_NOTICES and LICENSES/LLVM.txt for attribution and license terms.
+// THIRD_PARTY_NOTICES and THIRD_PARTY_LICENSES/LLVM.txt for attribution and license terms.
 //
 //===----------------------------------------------------------------------===//
 // A single header library providing an utility class to break up an array of

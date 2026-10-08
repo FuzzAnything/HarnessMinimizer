@@ -103,7 +103,7 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
     shutil.copyfile(tree / "LICENSE", notices / "LICENSE")
     shutil.copyfile(PROJECT / "LICENSE", notices / "LICENSE.HarnessMinimizer")
     shutil.copyfile(PROJECT / "THIRD_PARTY_NOTICES", notices / "THIRD_PARTY_NOTICES")
-    shutil.copytree(PROJECT / "LICENSES", notices / "LICENSES")
+    shutil.copytree(PROJECT / "THIRD_PARTY_LICENSES", notices / "THIRD_PARTY_LICENSES")
     records = dependency_notices(tree, notices)
     (notices / "dependencies.json").write_text(json.dumps(records, indent=2) + "\n")
     rust_notices(notices, tree)
@@ -143,7 +143,7 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
         bundle.add(tree, arcname="treereduce-source", filter=archive_metadata)
         bundle.add(building, arcname="treereduce-source/BUILDING.txt", filter=archive_metadata)
         bundle.add(notices, arcname="treereduce-source/notices", filter=archive_metadata)
-        for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES", "tools/treereduce/install.py",
+        for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "THIRD_PARTY_LICENSES", "tools/treereduce/install.py",
                          "tools/treereduce/process-cleanup.patch", "tools/treereduce/licenses"):
             bundle.add(PROJECT / relative, arcname=f"treereduce-source/harnessminimizer/{relative}",
                        filter=archive_metadata)
@@ -158,7 +158,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     install_root = args.root.resolve()
     # These accompany the installer in the repository, sdist, and Docker context.
-    for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES", "tools/treereduce/licenses/sources.json"):
+    for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "THIRD_PARTY_LICENSES", "tools/treereduce/licenses/sources.json"):
         if not (PROJECT / relative).exists():
             raise SystemExit(f"Missing licensing input: {relative}")
     with tempfile.TemporaryDirectory(prefix="harnessminimizer-treereduce-build-") as work:
