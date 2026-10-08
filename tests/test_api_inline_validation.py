@@ -635,26 +635,3 @@ def test_inline_literals_does_not_use_snapshot_unless_enabled(
 
     assert out == str(reduced)
     assert mock_load_trace.call_count == 1
-
-
-def test_cleaned_fallback_keeps_raw_bytes_before_id_and_header_cleanup(tmp_path, monkeypatch):
-    from harnessreducer import api
-    from harnessreducer.evaluation_metrics import count_source_tokens
-    from harnessreducer.reduction_engines import RawOutputCapture, ReducerInvocation, raw_reducer_output_path
-    source = tmp_path / "reduced.cpp"
-    engine_text = "auto value = fdp.ConsumeIntegral<int>(/*FDP_ID:100001*/ 100001);\n"
-    source.write_text(engine_text)
-    invocation = ReducerInvocation([], source, source, {})
-    capture = RawOutputCapture()
-    invocation.publish_result(capture)
-    raw = raw_reducer_output_path(source)
-    monkeypatch.setattr(api, "_validate_post_reduction_harness", lambda *a, **kw: True)
-    outcome = api._finalize_and_validate_fallback_harness(
-        str(source), 100000, None, "pattern", "input", None, None,
-        compilation_mode="split", symbolize=False, fallback_label="reduced",
-        raw_output_capture=capture,
-    )
-    assert outcome.validated and outcome.raw_reduced_harness == str(raw)
-    assert raw.read_text() == engine_text
-    assert "100001" not in source.read_text()
-    assert count_source_tokens(raw) != count_source_tokens(source)

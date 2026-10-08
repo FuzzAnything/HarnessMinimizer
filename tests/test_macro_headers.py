@@ -5,13 +5,12 @@ import os
 import shutil
 import subprocess
 import sys
-from unittest.mock import patch
 
 import pytest
 
 from harnessreducer.macro_headers import prepare_macro_headers
 from harnessreducer.reduction_engines import (
-    PERSES_COMMIT, TOOL_CHOICES, PersesRuntime, RawOutputCapture, prepare_reducer_invocation, raw_reducer_output_path,
+    prepare_reducer_invocation,
 )
 from harnessreducer.reducer_runner import PchArtifacts, _split_source_for_pch, restore_pch_includes
 from harnessreducer.process_supervisor import run_supervised
@@ -84,10 +83,8 @@ def test_restore_uses_include_identity_not_positions_and_preserves_user_includes
     assert preparation.restore(comment) == comment
 
 
-@pytest.mark.parametrize("tool", TOOL_CHOICES)
 @pytest.mark.parametrize("mode", ["split", "pch"])
-@pytest.mark.parametrize("capture_raw", [False, True])
-def test_every_engine_restores_output_and_snapshot(tmp_path, tool, mode, capture_raw):
+def test_treereduce_restores_output_and_snapshot(tmp_path, mode):
     original = tmp_path / "source.cpp"
     source = '#include <cstddef>\nint before;\n#define VALUE (7 + 8 + 9)\nint value = VALUE;\n'
     original.write_text(source)
@@ -99,14 +96,12 @@ def test_every_engine_restores_output_and_snapshot(tmp_path, tool, mode, capture
         engine_input.write_text(body)
     destination = tmp_path / "reduced.cpp"
     snapshot = tmp_path / "snapshot.cpp"
-    runtime = PersesRuntime(("java", "-jar", "/fake.jar"), "digest", "version", "java", PERSES_COMMIT)
-    with patch("harnessreducer.reduction_engines.check_perses", return_value=runtime):
-        invocation = prepare_reducer_invocation(
-            tool=tool, source=str(engine_input), output=str(destination),
-            checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
-            stable=True, jobs=2,
-        )
-    key = "-s" if tool == "treereduce" else "--input-file"
+    invocation = prepare_reducer_invocation(
+        source=str(engine_input), output=str(destination),
+        checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
+        stable=True, jobs=2,
+    )
+    key = "-s"
     engine_source = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
     assert "#define" not in engine_source
     assert ("#include <cstddef>" in engine_source) == (mode == "split")
@@ -115,25 +110,17 @@ def test_every_engine_restores_output_and_snapshot(tmp_path, tool, mode, capture
     invocation.result.write_text(engine_source)
     snapshot_source = engine_source + "int snapshot_only;\n"
     snapshot.write_text(snapshot_source)
-    capture = RawOutputCapture() if capture_raw else None
-    invocation.publish_result(capture)
+    invocation.publish_result()
     assert "#define VALUE" in destination.read_text()
+    assert "#define VALUE" in snapshot.read_text()
     if mode == "pch":
         artifacts = PchArtifacts(str(engine_input), "prefix.h", "prefix.pch", prefix)
         restore_pch_includes(str(destination), artifacts)
         restore_pch_includes(str(snapshot), artifacts)
     assert "#include <cstddef>" in destination.read_text()
     assert "int snapshot_only;" in snapshot.read_text()
-    # Restoration must not modify either raw copy, even in the direct-output
-    # treereduce case where the result and destination are the same file.
-    if capture_raw:
-        assert raw_reducer_output_path(destination).read_text() == engine_source
-        assert raw_reducer_output_path(snapshot).read_text() == snapshot_source
-        from harnessreducer.evaluation_metrics import count_source_tokens
-        assert count_source_tokens(destination) != count_source_tokens(raw_reducer_output_path(destination))
-    else:
-        assert not raw_reducer_output_path(destination).exists()
-        assert not raw_reducer_output_path(snapshot).exists()
+    assert not destination.with_suffix(".raw.cpp").exists()
+    assert not snapshot.with_suffix(".raw.cpp").exists()
     assert original.read_text() == source
 
 
@@ -216,10 +203,9 @@ def test_repeated_inclusion_does_not_add_implicit_include_guards(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_PERSES") != "1", reason="opt-in real reducer test")
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd", "sfc"])
+@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_TREEREDUCE") != "1", reason="opt-in real reducer test")
 @pytest.mark.parametrize("mode", ["split", "pch"])
-def test_real_engines_reduce_macros_and_export_compilable_source(tmp_path, tool, mode):
+def test_real_treereduce_reduces_macros_and_exports_compilable_source(tmp_path, mode):
     source = tmp_path / "original.cpp"
     original = (
         '#include <cstddef>\n'
@@ -262,7 +248,7 @@ def test_real_engines_reduce_macros_and_export_compilable_source(tmp_path, tool,
     checker.chmod(0o700)
     destination = tmp_path / "reduced.cpp"
     invocation = prepare_reducer_invocation(
-        tool=tool, source=str(source), output=str(destination),
+        source=str(source), output=str(destination),
         checker_command=[str(checker), "@@.cpp"], stable=True, jobs=2,
     )
 
@@ -272,8 +258,6 @@ def test_real_engines_reduce_macros_and_export_compilable_source(tmp_path, tool,
 
     result = invocation.run(bounded_run)
     assert result.returncode == 0, result.stdout
-    if invocation.log_path:
-        assert "SanityCheckFailedException" not in invocation.log_path.read_text()
     invocation.publish_result()
     exported = prefix + destination.read_text()
     assert "reducer-macros-" not in exported
@@ -286,42 +270,3 @@ def test_real_engines_reduce_macros_and_export_compilable_source(tmp_path, tool,
     )
     assert run_supervised([str(binary)], timeout=5).returncode == 7
     assert (tmp_path / "original.cpp").read_text() == original
-
-
-@pytest.mark.parametrize("tool", TOOL_CHOICES)
-def test_raw_capture_failure_does_not_block_publication_or_restore_stale_measurements(tmp_path, monkeypatch, capsys, tool):
-    source = tmp_path / "source.cpp"
-    text = '#define VALUE (1 + 2)\nint value = VALUE;\n'
-    source.write_text(text)
-    destination, snapshot = tmp_path / "reduced.cpp", tmp_path / "snapshot.cpp"
-    runtime = PersesRuntime(("java", "-jar", "/fake.jar"), "digest", "version", "java", PERSES_COMMIT)
-    with patch("harnessreducer.reduction_engines.check_perses", return_value=runtime):
-        invocation = prepare_reducer_invocation(
-            tool=tool, source=str(source), output=str(destination),
-            checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
-            stable=True, jobs=1,
-        )
-    key = "-s" if tool == "treereduce" else "--input-file"
-    prepared = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
-    invocation.result.parent.mkdir(exist_ok=True)
-    invocation.result.write_text(prepared)
-    snapshot.write_text(prepared)
-    capture = RawOutputCapture()
-    # Even an old sidecar (or an earlier capture by this object) must not become
-    # the measurement for a result whose own capture failed.
-    for path in (destination, snapshot):
-        capture.capture(source, path)
-        assert capture.for_source(path) is not None
-    original_copy = shutil.copyfile
-    def fail_measurement_copy(source, destination, *args, **kwargs):
-        if Path(destination).name.startswith(".raw-output-"):
-            raise OSError("synthetic measurement failure")
-        return original_copy(source, destination, *args, **kwargs)
-    monkeypatch.setattr(shutil, "copyfile", fail_measurement_copy)
-    command = list(invocation.command)
-    invocation.publish_result(capture)
-    assert invocation.command == command
-    assert destination.read_text() == snapshot.read_text() == text
-    assert capture.for_source(destination) is capture.for_source(snapshot) is None
-    assert not list(tmp_path.glob(".raw-output-*"))
-    assert "synthetic measurement failure" in capsys.readouterr().err

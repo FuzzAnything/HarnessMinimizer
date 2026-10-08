@@ -5,13 +5,6 @@ import os
 from pathlib import Path
 
 from harnessreducer.process_supervisor import termination_guard
-from harnessreducer.reduction_engines import RawOutputCapture, check_perses, validate_tool
-from harnessreducer.check_mode import (
-    emit_check_statistics_summary,
-    record_check_reference,
-    reset_check_state,
-    run_treereducer_with_check,
-)
 from harnessreducer.fdp_transform import (
     PARSER,
     VALUES_HEADER_NAME,
@@ -42,10 +35,8 @@ from harnessreducer.reducer_runner import (
     get_crash_tester_path,
     get_dynamic_reference_crash_site,
     get_last_interesting_file,
-    get_normal_reference_stack_depth,
     get_poc_runtime_args,
     get_reference_crash_pattern_symbolize_1,
-    get_symbolized_reference_stack_depth,
     check_harness_compilation,
     compile_dump_mode_harness,
     configure_debug_logging,
@@ -117,21 +108,15 @@ class ReductionConfig:
     marker: str = "FDP_ID"
     stable: bool = False
     compilation_mode: str = PHASE3_SPLIT
-    statistics: bool = False
     slice_enabled: bool = False
-    check: bool = False
     debug: bool = False
     snapshot: bool = False
     amortize_link: bool = False
     symbolize: bool = True
     jobs: int = DEFAULT_TREEREDUCE_JOBS
     profile: bool = False
-    tool: str = "treereduce"
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
-    capture_raw_output: bool = False
-    replay_enabled: bool = True
-    oracle_evaluation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -142,7 +127,6 @@ class ReductionResult:
     generated_headers: tuple[str, ...] = ()
     poc_runtime_args: tuple[str, ...] = ()
     success: bool = True
-    raw_reduced_harness: str | None = None
 
 
 class PostReductionOutcome(tuple):
@@ -151,13 +135,11 @@ class PostReductionOutcome(tuple):
     def __new__(
         cls, path: str, headers: tuple[str, ...] = (), *, validated: bool = True,
         stage: str = "final-output", log: str | None = None,
-        raw_reduced_harness: str | None = None,
     ):
         result = super().__new__(cls, (path, headers))
         result.validated = validated
         result.stage = stage
         result.log = log
-        result.raw_reduced_harness = raw_reduced_harness
         return result
 
 
@@ -366,7 +348,6 @@ def _finalize_and_validate_fallback_harness(
     symbolize: bool,
     fallback_label: str,
     auto_var_init_pattern_fallback: bool = False,
-    raw_output_capture: RawOutputCapture | None = None,
 ) -> PostReductionOutcome:
     fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id)
     validation_log_path = f"{fallback_path}.fallback.validation.log"
@@ -399,7 +380,6 @@ def _finalize_and_validate_fallback_harness(
     return PostReductionOutcome(
         fallback_path, validated=crash_preserved, stage="cleaned-fallback",
         log=validation_log_path,
-        raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
     )
 
 
@@ -834,7 +814,6 @@ def _inline_direct_input_in_reduced_harness(
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
-    raw_output_capture: RawOutputCapture | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
@@ -844,7 +823,6 @@ def _inline_direct_input_in_reduced_harness(
         return PostReductionOutcome(
             _finalize_fallback_harness(reduced_harness_path, start_id),
             validated=False, stage="missing-input",
-            raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
         )
 
     crash_input_path = Path(crash_input)
@@ -856,7 +834,6 @@ def _inline_direct_input_in_reduced_harness(
         return PostReductionOutcome(
             _finalize_fallback_harness(reduced_harness_path, start_id),
             validated=False, stage="missing-input",
-            raw_reduced_harness=raw_output_capture.for_source(reduced_harness_path) if raw_output_capture else None,
         )
 
     crash_bytes = crash_input_path.read_bytes()
@@ -925,7 +902,6 @@ def _inline_direct_input_in_reduced_harness(
             print("[+] Post-reduction validation preserved crash behavior.")
             return PostReductionOutcome(
                 inline_harness_path, generated_headers,
-                raw_reduced_harness=raw_output_capture.for_source(base_harness_path) if raw_output_capture else None,
             )
 
         print(
@@ -985,7 +961,6 @@ def _inline_direct_input_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
-                raw_output_capture=raw_output_capture,
             )
 
     print(
@@ -1003,7 +978,6 @@ def _inline_direct_input_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
-        raw_output_capture=raw_output_capture,
     )
 
 
@@ -1020,7 +994,6 @@ def inline_literals_in_reduced_harness(
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
-    raw_output_capture: RawOutputCapture | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -1038,7 +1011,6 @@ def inline_literals_in_reduced_harness(
             fast_crash_pattern,
             symbolize,
             auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
-            raw_output_capture=raw_output_capture,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -1145,7 +1117,6 @@ def inline_literals_in_reduced_harness(
             print("[+] Final output preserved crash behavior.")
             return PostReductionOutcome(
                 inline_harness_path, tuple(generated_headers),
-                raw_reduced_harness=raw_output_capture.for_source(base_harness_path) if raw_output_capture else None,
             )
 
         print(
@@ -1191,7 +1162,6 @@ def inline_literals_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
-                raw_output_capture=raw_output_capture,
             )
 
     print(
@@ -1209,7 +1179,6 @@ def inline_literals_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
-        raw_output_capture=raw_output_capture,
     )
 
 
@@ -1218,58 +1187,30 @@ def _reduction_attempt(
     crash_pattern_symbolize_0: str, recorded_symbolized_pattern: str | None,
     compile_flags: str | None, protection=None,
 ) -> PostReductionOutcome:
-    raw_capture_args = {"raw_output_capture": RawOutputCapture()} if config.capture_raw_output else {}
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
     reduction_compilation_mode = config.compilation_mode
     validation_compilation_mode = PHASE3_DIRECT
-    if config.check:
-        reduced_harness = run_treereducer_with_check(
-            tagged_harness_file,
-            fdp_trace_file,
-            recorded_symbolized_pattern,
-            compile_flags,
-            config.link_flags,
-            config.crash_input,
-            stable=config.stable,
-            compilation_mode=reduction_compilation_mode,
-            snapshot=config.snapshot,
-            amortize_link=config.amortize_link,
-            crash_pattern_symbolize_0=crash_pattern_symbolize_0,
-            require_crash_pattern=recorded_symbolized_pattern is not None,
-            jobs=config.jobs,
-            tool=config.tool,
-            auto_var_init_pattern=config.auto_var_init_pattern,
-            **raw_capture_args,
-        )
-        emit_check_statistics_summary()
-    else:
-        reduced_harness = run_treereducer(
-            tagged_harness_file,
-            fdp_trace_file,
-            crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
-            compile_flags,
-            config.link_flags,
-            config.crash_input,
-            stable=config.stable,
-            compilation_mode=reduction_compilation_mode,
-            statistics=config.statistics,
-            snapshot=config.snapshot,
-            amortize_link=config.amortize_link,
-            symbolize=config.symbolize,
-            jobs=config.jobs,
-            profile=config.profile,
-            tool=config.tool,
-            auto_var_init_pattern=config.auto_var_init_pattern,
-            **raw_capture_args,
-        )
+    reduced_harness = run_treereducer(
+        tagged_harness_file,
+        fdp_trace_file,
+        crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
+        compile_flags,
+        config.link_flags,
+        config.crash_input,
+        stable=config.stable,
+        compilation_mode=reduction_compilation_mode,
+        snapshot=config.snapshot,
+        amortize_link=config.amortize_link,
+        symbolize=config.symbolize,
+        jobs=config.jobs,
+        profile=config.profile,
+        auto_var_init_pattern=config.auto_var_init_pattern,
+    )
     if protection is not None:
         protection.restore_file(reduced_harness)
         if config.snapshot:
             protection.restore_file(get_last_interesting_file())
     format_reduced_harness(reduced_harness)
-    if config.oracle_evaluation:
-        from harnessreducer.oracle_evaluation import record_reduction_completed
-        record_reduction_completed(reduced_harness)
     if config.debug:
         print(
             "[DEBUG] Recording direct post-reduction validation for the "
@@ -1319,30 +1260,22 @@ def _reduction_attempt(
         config.crash_input,
         compile_flags,
         config.link_flags,
-        config.start_id if config.replay_enabled else None,
+        config.start_id,
         compilation_mode=validation_compilation_mode,
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
         auto_var_init_pattern_fallback=config.auto_var_init_pattern,
-        **raw_capture_args,
     )
 
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
-    from harnessreducer.oracle_evaluation import reference_capture
-    with reference_capture(config.oracle_evaluation):
-        return _reduce_with_config(config)
+    return _reduce_with_config(config)
 
 
 def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
-    validate_tool(config.tool)
     configure_work_dir(config.work_dir)
-    if config.debug and config.check:
-        raise ValueError("debug and check modes cannot be enabled together.")
-    if config.profile and config.check:
-        raise ValueError("profile and check modes cannot be enabled together.")
     if config.protect_initializers and config.slice_enabled:
         raise ValueError(
             "--protect-initializers cannot currently be combined with --slice; "
@@ -1357,10 +1290,6 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     reset_stack_trace_state()
     reset_last_interesting_state()
     reset_poc_runtime_args()
-    reset_check_state()
-    if config.statistics:
-        from harnessreducer.reducer_runner import reset_statistics_state
-        reset_statistics_state()
     validate_compilation_mode(config.compilation_mode)
     if config.amortize_link and config.compilation_mode == PHASE3_DIRECT:
         raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
@@ -1369,10 +1298,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if has_static_target_libraries(config.link_flags):
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_compilation_mode = PHASE3_DIRECT
-    if config.tool == "treereduce":
-        check_tree_reducer()
-    else:
-        check_perses()
+    check_tree_reducer()
     prepared_source = _prepare_fuzzer_entry_return(
         config.harness_path,
         config.compile_flags,
@@ -1412,9 +1338,6 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             success=False
         )
     recorded_symbolized_pattern = get_reference_crash_pattern_symbolize_1()
-    if config.oracle_evaluation:
-        from harnessreducer.oracle_evaluation import freeze_references
-        freeze_references(crash_pattern_symbolize_0, recorded_symbolized_pattern)
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
 
     print(f"[+] Extracted symbolize=0 crash pattern: {crash_pattern_symbolize_0}")
@@ -1455,23 +1378,6 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             config.link_flags,
             compilation_mode=validation_compilation_mode,
         )
-    if config.check:
-        print(
-            "[+] Stored reference depths: "
-            f"fast(symbolize=0)={get_normal_reference_stack_depth()}, "
-            f"symbolized(symbolize=1)={get_symbolized_reference_stack_depth()}"
-        )
-        reference = record_check_reference(
-            config.crash_input,
-            recorded_symbolized_pattern or ".*",
-            config.link_flags,
-        )
-        print(
-            "[+] Recorded check reference: "
-            f"{reference.frame_count} symbolized frame(s), "
-            f"{getattr(reference, 'frame_count_symbolize_0', 0)} "
-            "unsymbolized frame(s)."
-        )
     if config.slice_enabled:
         effective_harness_path = apply_coverage_guided_slice(
             harness_path,
@@ -1485,14 +1391,11 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         )
     else:
         effective_harness_path = harness_path
-    if config.replay_enabled:
-        tagged_harness = tag_harness_with_fdp_ids(
-            effective_harness_path,
-            start_id=config.start_id,
-            marker=config.marker,
-        )
-    else:
-        tagged_harness = TaggedHarness(effective_harness_path, 0)
+    tagged_harness = tag_harness_with_fdp_ids(
+        effective_harness_path,
+        start_id=config.start_id,
+        marker=config.marker,
+    )
     tagged_harness_file = _tagged_harness_path(tagged_harness)
     fdp_callsite_count = _tagged_harness_fdp_count(tagged_harness)
     fdp_trace_file: str | None = None
@@ -1523,7 +1426,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         outcome = reduce_with_initializer_recovery(
             attempt, tagged_harness_file, compile_flags,
             replay=fdp_trace_file is not None, plugin=config.amortize_link,
-            profile=config.profile, statistics=config.statistics, jobs=config.jobs,
+            profile=config.profile, jobs=config.jobs,
         )
     else:
         outcome = attempt(tagged_harness_file, compile_flags)
@@ -1532,7 +1435,6 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         return ReductionResult(
             reduced_harness=post_inline_harness, tagged_harness=tagged_harness_file,
             fdp_trace=fdp_trace_file, generated_headers=generated_headers, success=False,
-            raw_reduced_harness=getattr(outcome, "raw_reduced_harness", None),
         )
     return ReductionResult(
         reduced_harness=post_inline_harness,
@@ -1541,7 +1443,6 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         generated_headers=generated_headers,
         poc_runtime_args=get_poc_runtime_args(),
         success=True,
-        raw_reduced_harness=getattr(outcome, "raw_reduced_harness", None),
     )
 
 
@@ -1552,16 +1453,13 @@ def process(
     link_flags: str | None = None,
     work_dir: str | None = None,
     compilation_mode: str = PHASE3_SPLIT,
-    statistics: bool = False,
     slice_enabled: bool = False,
-    check: bool = False,
     debug: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
-    tool: str = "treereduce",
     protect_initializers: bool = False,
     auto_var_init_pattern: bool = False,
 ) -> str | None:
@@ -1573,15 +1471,12 @@ def process(
         work_dir=work_dir,
         compilation_mode=compilation_mode,
         amortize_link=amortize_link,
-        statistics=statistics,
         slice_enabled=slice_enabled,
-        check=check,
         debug=debug,
         snapshot=snapshot,
         symbolize=symbolize,
         jobs=jobs,
         profile=profile,
-        tool=tool,
         protect_initializers=protect_initializers,
         auto_var_init_pattern=auto_var_init_pattern,
     )

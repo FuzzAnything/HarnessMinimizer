@@ -5,7 +5,6 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
-from harnessreducer.reduction_engines import RawOutputCapture, TOOL_CHOICES
 from harnessreducer.reducer_runner import (
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
@@ -51,17 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Reduce FDP-based harnesses while preserving crash behavior.",
     )
     parser.add_argument(
-        "--capture-raw-output",
-        action="store_true",
-        help="Save raw reducer output for evaluation; disabled by default and independent of --profile.",
-    )
-    parser.add_argument(
         "harness",
         help="Path to the original harness source file (.c/.cc/.cpp).",
-    )
-    parser.add_argument(
-        "--tool", choices=TOOL_CHOICES, default="treereduce",
-        help="Reduction engine (default: treereduce; other choices use Perses).",
     )
     parser.add_argument(
         "--compile-flags",
@@ -99,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stable",
         action="store_true",
-        help="Repeat the selected engine's reduction passes until their stopping conditions are reached.",
+        help="Repeat treereduce's reduction passes until their stopping conditions are reached.",
     )
     parser.add_argument(
         "-j",
@@ -109,14 +99,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Requested number of concurrent interestingness checks "
             f"(default: {DEFAULT_TREEREDUCE_JOBS}; maximum: {MAX_TREEREDUCE_JOBS})."
-        ),
-    )
-    parser.add_argument(
-        "--statistics",
-        action="store_true",
-        help=(
-            "Collect crash_tester return-code statistics during reduction and "
-            "write them to statistics.txt in the work directory."
         ),
     )
     parser.add_argument(
@@ -132,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "After unsuccessful final validation, diagnose uninitialized uses and, "
             "if relevant, retry reduction once from the original tagged source with "
-            "whole initialized declarations protected. Profiles include both attempts."
+            "whole initialized declarations protected. When enabled, profiles include both attempts."
         ),
     )
     parser.add_argument(
@@ -151,15 +133,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Enable coverage-guided dynamic slicing before tree reduction. "
             "When omitted, the original harness is passed directly into the "
             "rest of the pipeline."
-        ),
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help=(
-            "Insight-only mode: record the first entire stack trace and its frame "
-            "count, then run tree reduction with symbolize=1 for every candidate "
-            "while tracking how often frame count and full stack trace stay the same."
         ),
     )
     parser.add_argument(
@@ -226,8 +199,6 @@ def build_parser() -> argparse.ArgumentParser:
         const="pch",
         help="Use precompiled headers and separate compilation/linking steps.",
     )
-    parser.add_argument("--no-fdp-replay", action="store_true", help="Disable FDP replay for the replay evaluation.")
-    parser.add_argument("--oracle-evaluation", help="Record oracle observations in an evaluation run directory.")
     return parser
 
 
@@ -236,10 +207,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.amortize_link and args.compilation_mode == "direct":
         parser.error("--amortize-link cannot be combined with --direct/--single-step")
-    if args.debug and args.check:
-        parser.error("--debug and --check are separate diagnostic modes and cannot be combined")
-    if args.profile and args.check:
-        parser.error("--profile currently measures the normal oracle and cannot be combined with --check")
     if args.protect_initializers and args.slice:
         parser.error("--protect-initializers cannot currently be combined with --slice")
     if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
@@ -254,20 +221,14 @@ def main(argv: list[str] | None = None) -> int:
         stable=args.stable,
         compilation_mode=args.compilation_mode,
         amortize_link=args.amortize_link,
-        statistics=args.statistics,
         slice_enabled=args.slice,
-        check=args.check,
         debug=args.debug,
         snapshot=args.snapshot,
         symbolize=args.symbolize,
         jobs=args.jobs,
         profile=args.profile,
-        tool=args.tool,
         protect_initializers=args.protect_initializers,
         auto_var_init_pattern=args.auto_var_init_pattern,
-        capture_raw_output=args.capture_raw_output,
-        replay_enabled=not args.no_fdp_replay,
-        oracle_evaluation=args.oracle_evaluation,
     )
     try:
         result = reduce_with_config(config)
@@ -276,8 +237,6 @@ def main(argv: list[str] | None = None) -> int:
             _stage_debug_log(args.output)
         if args.profile:
             _stage_profile(args.output)
-    if args.capture_raw_output and args.output and result.raw_reduced_harness:
-        RawOutputCapture().capture(result.raw_reduced_harness, args.output)
     if not result.success:
         print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
         return 1

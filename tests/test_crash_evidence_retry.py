@@ -30,10 +30,10 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
             source = root / "candidate.cpp"
             source.write_text("candidate source\n")
             obj = root / "candidate.o"
-            stats, snapshot, events = (root / name for name in ("stats", "last.cpp", "profile.jsonl"))
+            snapshot, events = (root / name for name in ("last.cpp", "profile.jsonl"))
             argv = ["crash_tester", str(source), crash_pattern, "--crash-input", "seed.bin",
                     "--fdp-trace", "trace.log", "--exec-timeout-ms", "1000",
-                    "--statistics-file", str(stats), "--last-interesting-file", str(snapshot),
+                    "--last-interesting-file", str(snapshot),
                     "--print-exec-time-ms"]
             if symbolize:
                 argv += ["--symbolize", "--crash-location-pattern", LOCATION]
@@ -86,7 +86,6 @@ class TestCandidateEvidenceRetry(unittest.TestCase):
             self.assertEqual(sum(mock.call_count for mock in builders), 1)
             self.assertFalse(obj.exists())
             self.assertEqual(list(root.glob("poc_*.out")), [])
-            self.assertIn("total: 1\n", stats.read_text())
             self.assertEqual(snapshot.exists(), result == 77)
             if result == 77:
                 self.assertEqual(snapshot.read_text(), source.read_text())

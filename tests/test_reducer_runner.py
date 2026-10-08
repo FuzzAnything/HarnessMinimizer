@@ -98,10 +98,9 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessreducer.reducer_runner.run_supervised")
     def test_normal_reduction_has_no_measurement_side_effects(self, mock_run):
-        from harnessreducer.oracle_evaluation import reference_capture
 
         mock_run.return_value = _Proc(returncode=0)
-        with tempfile.TemporaryDirectory() as tmpdir, reference_capture(None):
+        with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             reducer_runner.configure_work_dir(tmpdir)
             reducer_runner.set_symbolized_reference_stack_depth(3)
@@ -113,11 +112,7 @@ class TestReducerRunner(unittest.TestCase):
             with patch("harnessreducer.reducer_runner.initialize_candidate_profile_events_file",
                        side_effect=AssertionError("profiling is disabled")), \
                     patch("harnessreducer.reducer_runner.write_profile_summary",
-                          side_effect=AssertionError("profiling is disabled")), \
-                    patch("harnessreducer.reduction_engines.RawOutputCapture.capture",
-                          side_effect=AssertionError("raw capture is disabled")), \
-                    patch("harnessreducer.oracle_paired_execution.comparison_mode",
-                          side_effect=AssertionError("oracle evaluation is disabled")):
+                          side_effect=AssertionError("profiling is disabled")):
                 self.assertEqual(
                     reducer_runner.run_treereducer(
                         str(source), None, "AddressSanitizer", None, None, None,
@@ -238,33 +233,6 @@ class TestReducerRunner(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--last-interesting-file", cmd)
 
-    @patch("harnessreducer.reducer_runner.initialize_statistics_file")
-    @patch("harnessreducer.reducer_runner.os.path.exists")
-    @patch("harnessreducer.reducer_runner.run_supervised")
-    def test_run_treereducer_adds_statistics_file_when_enabled(
-        self,
-        mock_run,
-        mock_exists,
-        mock_initialize_statistics,
-    ):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
-        mock_exists.return_value = True
-        mock_initialize_statistics.return_value = "/tmp/work/statistics.txt"
-
-        reducer_runner.run_treereducer(
-            symbolize=False,
-            harness_path="/tmp/in.cpp",
-            fdp_trace_file="/tmp/trace.log",
-            crash_pattern="AddressSanitizer",
-            compile_flags=None,
-            link_flags=None,
-            crash_input=None,
-            statistics=True,
-        )
-
-        cmd = mock_run.call_args.args[0]
-        self.assertIn("--statistics-file", cmd)
-        self.assertIn("/tmp/work/statistics.txt", cmd)
 
     @patch("harnessreducer.reducer_runner.write_profile_summary")
     @patch("harnessreducer.reducer_runner.os.path.exists")
@@ -464,15 +432,6 @@ class TestReducerRunner(unittest.TestCase):
             ],
         )
 
-    def test_initialize_statistics_file_writes_zeroed_summary(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            reducer_runner.configure_work_dir(tmpdir)
-            path = reducer_runner.initialize_statistics_file()
-            text = Path(path).read_text(encoding="utf-8")
-            self.assertIn("total: 0", text)
-            self.assertIn("count_77: 0", text)
-            self.assertIn("count_1: 0", text)
-            self.assertIn("count_-1: 0", text)
 
     @patch("harnessreducer.reducer_runner.run_command")
     def test_dump_fdp_trace_clears_stale_trace_before_run(self, mock_run_command):

@@ -21,40 +21,12 @@ _PROFILE_FILES = ("candidate_profile.jsonl", "reduction_profile.json", "reductio
 _REFERENCE_FILES = (
     "poc.out", "stack_trace.pattern", "crash_pattern.symbolize0", "crash_pattern.symbolize1",
     "dynamic_crash_site.json", "symbolized_crash_location.pattern",
-    "check_reference.json",
 )
-
-
-def _merge_statistics(attempts: list[dict], root: Path) -> None:
-    from harnessreducer.reducer_runner import _format_statistics_text
-    counts = {"count_77": 0, "count_1": 0, "count_-1": 0}
-    found = False
-    for attempt in attempts:
-        path = Path(attempt["directory"]) / "statistics.txt"
-        if not path.is_file():
-            continue
-        found = True
-        for line in path.read_text().splitlines():
-            key, _, value = line.partition(":")
-            if key in counts:
-                counts[key] += int(value.strip())
-    if found:
-        (root / "statistics.txt").write_text(_format_statistics_text(*counts.values()))
-
-
-def _merge_check_statistics(attempts: list[dict], root: Path) -> None:
-    from harnessreducer.check_mode import read_check_statistics, _format_check_statistics_text
-    paths = [Path(a["directory"]) / "check_statistics.txt" for a in attempts]
-    stats = [read_check_statistics(str(path)) for path in paths if path.is_file()]
-    if stats:
-        (root / "check_statistics.txt").write_text(_format_check_statistics_text(
-            sum(item.level_same for item in stats), sum(item.stack_same for item in stats),
-        ))
 
 
 def reduce_with_initializer_recovery(
     attempt, tagged_source: str, compile_flags: str | None, *,
-    replay: bool, plugin: bool, profile: bool, statistics: bool, jobs: int,
+    replay: bool, plugin: bool, profile: bool, jobs: int,
 ):
     """Run normally, diagnose only an unvalidated result, retry no more than once."""
     root = Path(get_work_dir()).resolve()
@@ -86,7 +58,7 @@ def reduce_with_initializer_recovery(
     recovery_root = Path(tempfile.mkdtemp(prefix="initializer-recovery-", dir=root))
     normal = recovery_root / "attempt-1-normal"
     normal.mkdir()
-    for name in (*_PROFILE_FILES, "statistics.txt", "check_statistics.txt", "reduction_engine.json"):
+    for name in _PROFILE_FILES:
         source = root / name
         if source.is_file():
             shutil.copy2(source, normal / name)
@@ -123,7 +95,7 @@ def reduce_with_initializer_recovery(
             metadata["compile_flags_response_file"] = str(protected_dir / "compile_flags.rsp")
             metadata.update(triggered=True, attempt_count=2, status="retrying")
             print(
-                f"[+] Retrying the same engine from the original tagged source with "
+                f"[+] Retrying treereduce from the original tagged source with "
                 f"{len(protection.declarations)} protected declarations "
                 f"({len(protection.skipped)} unsupported declarations skipped)."
             )
@@ -148,6 +120,3 @@ def reduce_with_initializer_recovery(
         (root / "initializer_recovery.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if profile:
             combine_attempt_profiles(attempts, root, metadata, jobs=jobs)
-        if statistics:
-            _merge_statistics(attempts, root)
-        _merge_check_statistics(attempts, root)

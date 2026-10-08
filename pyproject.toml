@@ -26,7 +26,6 @@ include = [
     "/include",
     "/README.md",
     "/tools/treereduce",
-    "/tools/perses",
     "/pyproject.toml",
 ]
 

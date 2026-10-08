@@ -64,8 +64,8 @@ harnessreducer /path/to/harness.cpp \
 
 The default is the **unoptimized configuration**: **split compilation** with
 **symbolization on**, **PCH off**, and **amortized linking off**. HarnessReducer
-uses **treereduce** and **60 workers** by default; profiling and stable mode are
-**off** unless explicitly enabled.
+uses **treereduce** as its sole reduction engine and **60 workers** by default.
+Profiling and stable mode are **off** unless explicitly enabled.
 
 | Argument | Purpose |
 | --- | --- |
@@ -74,14 +74,13 @@ uses **treereduce** and **60 workers** by default; profiling and stable mode are
 | `--crash-input` | Optional crashing input file passed to the harness. |
 | `--compile-flags="..."` | Compiler flags, such as include paths, defines, and language standard. |
 | `--link-flags="..."` | Linker flags, such as library paths, library names, or full archive paths. |
-| `--tool` | Engine: `treereduce` (default), `perses`, `wdd`, `cdd`. |
 | `-j`, `--jobs` | Requested concurrent candidate checks: 1–63, default 60. |
 | `--direct`, `--split`, `--pch` | Compile and link in one step; compile then link separately (default); or use precompiled headers with separate compilation and linking. |
 | `--amortize-link` | Reuse a persistent runner and shared/static target libraries. |
 | `--stable` | Repeat engine passes until their stopping conditions are reached. |
 | `--symbolize`, `--no-symbolize` | Enable symbolized candidate checks (default), or disable them for faster reduction. These flags are mutually exclusive. |
 | `--work-dir` | Directory for intermediate files; a temporary directory is created by default. |
-| `--profile` | Record candidate timings and reduction throughput (for evaluation purpose only). |
+| `--profile` | Record candidate timings and reduction throughput for diagnostics. |
 | `--debug` | Log candidate compilation and crash-check details. |
 
 Choose only one of `--direct`, `--split`, and `--pch`. `--amortize-link` requires

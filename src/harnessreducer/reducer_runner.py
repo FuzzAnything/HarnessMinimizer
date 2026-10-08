@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import atexit
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext
 import filecmp
 import json
 import os
@@ -22,7 +22,6 @@ from harnessreducer.crash_evidence import (
 
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessreducer.reduction_profile import write_profile_summary
-from harnessreducer.reduction_engines import RawOutputCapture
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -52,7 +51,6 @@ SOURCE_COVERAGE_RAW_FILE_NAME = "coverage.profraw"
 SOURCE_COVERAGE_DATA_FILE_NAME = "coverage.profdata"
 SOURCE_COVERAGE_SHOW_FILE_NAME = "coverage_show.txt"
 SOURCE_COVERAGE_EXPORT_FILE_NAME = "coverage_export.json"
-STATISTICS_FILE_NAME = "statistics.txt"
 DEBUG_LOG_FILE_NAME = "reduction_debug.log"
 CANDIDATE_PROFILE_EVENTS_FILE_NAME = "candidate_profile.jsonl"
 REDUCTION_PROFILE_JSON_FILE_NAME = "reduction_profile.json"
@@ -1531,7 +1529,6 @@ def start_amortized_runner(
     static_root_config: StaticArchiveRootConfig | None = None,
     exec_timeout_ms: int | None = None,
     reference_executable: str | Path | None = None,
-    reuse_binary: str | None = None,
 ):
     unfiltered_link_inputs = resolve_amortized_link_inputs(link_flags)
     link_inputs = filter_amortized_shared_libraries_for_reference(
@@ -1549,7 +1546,7 @@ def start_amortized_runner(
         )
     _print_amortized_link_classification(link_inputs)
     shared_libraries = link_inputs.shared_libraries
-    runner_binary = reuse_binary or _compile_harness_runner(link_inputs, static_root_config)
+    runner_binary = _compile_harness_runner(link_inputs, static_root_config)
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
     socket_path = str(Path(socket_dir) / "runner.sock")
     env = runtime_library_env(link_flags, symbolize=symbolize)
@@ -1562,10 +1559,6 @@ def start_amortized_runner(
     env["UBSAN_OPTIONS"] = (
         f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     )
-    from harnessreducer.oracle_evaluation import reference_root
-    if symbolize and reference_root() is not None:
-        from harnessreducer.oracle_paired_execution import configure_symbolized_environment
-        configure_symbolized_environment(env)
     if fdp_trace_file is not None:
         env["FDP_TRACE_PATH"] = fdp_trace_file
         env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_path(fdp_trace_file)
@@ -2596,9 +2589,6 @@ def get_symbolized_crash_location_file() -> str:
 def get_last_interesting_file() -> str:
     return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
 
-def get_statistics_file() -> str:
-    return os.path.join(get_work_dir(), STATISTICS_FILE_NAME)
-
 
 def get_candidate_profile_events_file() -> str:
     return os.path.join(get_work_dir(), CANDIDATE_PROFILE_EVENTS_FILE_NAME)
@@ -2656,40 +2646,6 @@ def candidate_files_match(path_a: str, path_b: str) -> bool:
         return filecmp.cmp(path_a, path_b, shallow=False)
     except FileNotFoundError:
         return False
-
-
-def reset_statistics_state() -> None:
-    try:
-        os.remove(get_statistics_file())
-    except FileNotFoundError:
-        pass
-
-
-def _format_statistics_text(
-    count_77: int,
-    count_1: int,
-    count_neg1: int,
-) -> str:
-    total = count_77 + count_1 + count_neg1
-
-    def probability(count: int) -> float:
-        return 0.0 if total == 0 else count / total
-
-    return (
-        f"total: {total}\n"
-        f"count_77: {count_77}\n"
-        f"count_1: {count_1}\n"
-        f"count_-1: {count_neg1}\n"
-        f"probability_77: {probability(count_77):.6f}\n"
-        f"probability_1: {probability(count_1):.6f}\n"
-        f"probability_-1: {probability(count_neg1):.6f}\n"
-    )
-
-
-def initialize_statistics_file() -> str:
-    path = get_statistics_file()
-    Path(path).write_text(_format_statistics_text(0, 0, 0), encoding="utf-8")
-    return path
 
 
 def _source_coverage_raw_path() -> Path:
@@ -2930,12 +2886,6 @@ def _run_harness_for_crash_reference(
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
-    from harnessreducer.oracle_evaluation import reference_root
-    if symbolize and reference_root() is not None:
-        # Module identity lets the observer select the same target frames in
-        # symbolized references and raw candidate reports. Frame depth is intact.
-        for variable in ("ASAN_OPTIONS", "UBSAN_OPTIONS"):
-            env[variable] += ":stack_trace_format='    #%n %p in %f %S (%m+%o)'"
     return run_command(
         cmd,
         env=env,
@@ -3035,8 +2985,6 @@ def _probe_reference_stack_depth_stability(
             ignore_errors=True,
         )
         if compile_proc.returncode != 0:
-            from harnessreducer.oracle_evaluation import capture_reference
-            capture_reference(symbolize, run_index, compile_proc, str(output_bin), harness_path, link_flags, stage="compile")
             wall_ns = time.perf_counter_ns() - started_ns
             _update_stack_depth_stability_record(
                 symbolize=symbolize,
@@ -3065,8 +3013,6 @@ def _probe_reference_stack_depth_stability(
             symbolize=symbolize,
             link_flags=link_flags,
         )
-        from harnessreducer.oracle_evaluation import capture_reference
-        capture_reference(symbolize, run_index, proc, str(output_bin), harness_path, link_flags)
         try:
             output_bin.unlink()
         except FileNotFoundError:
@@ -3662,19 +3608,15 @@ def run_treereducer(
     crash_input: str | None,
     stable: bool = False,
     compilation_mode: str = PHASE3_SPLIT,
-    statistics: bool = False,
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = True,
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
-    tool: str = "treereduce",
     auto_var_init_pattern: bool = False,
-    raw_output_capture: RawOutputCapture | None = None,
 ) -> str:
-    from harnessreducer.reduction_engines import prepare_reducer_invocation, validate_tool
+    from harnessreducer.reduction_engines import prepare_reducer_invocation
 
-    validate_tool(tool)
     # Reducers change cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
     if crash_input:
@@ -3776,15 +3718,6 @@ def run_treereducer(
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(debug_tester_args("reduction_candidate"))
-    from harnessreducer.oracle_evaluation import reference_root
-    if reference_root() is not None:
-        cmd.extend(["--oracle-evaluation", str(reference_root())])
-        if pch_artifacts is not None:
-            prefix = Path(get_work_dir()) / "oracle_restore_prefix.h"
-            prefix.write_text(pch_artifacts.restore_prefix)
-            cmd.extend(["--oracle-prefix", str(prefix)])
-    if statistics:
-        cmd.extend(["--statistics-file", initialize_statistics_file()])
     profile_events_path: str | None = None
     if profile:
         profile_events_path = initialize_candidate_profile_events_file()
@@ -3815,7 +3748,7 @@ def run_treereducer(
         if amortize_link
         else nullcontext(None)
     )
-    with runner_context as amortized_runner, ExitStack() as evaluation_runners:
+    with runner_context as amortized_runner:
         if amortized_runner is not None:
             plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
@@ -3858,41 +3791,11 @@ def run_treereducer(
             if not symbolize:
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
-        evaluation_options = {}
-        from harnessreducer.oracle_paired_execution import (
-            PAIRED_MODE, MIN_SYMBOLIZED_TIMEOUT_MS, comparison_mode,
-        )
-        if reference_root() is not None and comparison_mode(reference_root()) == PAIRED_MODE:
-            symbolized_timeout_ms = max(exec_timeout_ms, MIN_SYMBOLIZED_TIMEOUT_MS)
-            cmd.extend(["--oracle-symbolized-timeout-ms", str(symbolized_timeout_ms)])
-            if amortized_runner is not None:
-                # A fresh parent is necessary because sanitizer options are read
-                # at process startup. Reuse the exact already linked runner.
-                symbolized_runner = evaluation_runners.enter_context(start_amortized_runner(
-                    link_flags, crash_input, fdp_trace_file, symbolize=True,
-                    exec_timeout_ms=symbolized_timeout_ms,
-                    reference_executable=reference_executable,
-                    reuse_binary=amortized_runner.process.args[0],
-                ))
-                cmd.extend(["--oracle-symbolized-runner-socket", symbolized_runner.socket_path])
-            # Keep F's execution deadline unchanged and allow the additional
-            # observations to finish before the reducer kills the whole query.
-            evaluation_options["candidate_timeout_seconds"] = (
-                300 + 2 * CANDIDATE_EVIDENCE_ATTEMPTS * ((symbolized_timeout_ms + 999) // 1000 + 5)
-            )
-            from harnessreducer.evaluation_common import write_json
-            write_json(reference_root() / "paired_execution.json", {
-                "fast_execution_timeout_ms": exec_timeout_ms,
-                "symbolized_execution_timeout_ms": symbolized_timeout_ms,
-                "candidate_timeout_seconds": evaluation_options["candidate_timeout_seconds"],
-                "operational_oracle": "unsymbolized",
-            })
         invocation = prepare_reducer_invocation(
-            tool=tool, source=reducer_source, output=reduced_harness,
+            source=reducer_source, output=reduced_harness,
             checker_command=cmd, stable=stable, jobs=jobs,
-            **evaluation_options,
         )
-        print(f"[+] Running reduction engine: {tool}")
+        print("[+] Running reduction engine: treereduce")
         reduction_started_ns = time.perf_counter_ns()
         try:
             proc = invocation.run(run_supervised)
@@ -3913,7 +3816,7 @@ def run_treereducer(
             jobs=jobs,
             returncode=proc.returncode,
             configuration={
-                "tool": tool,
+                "tool": "treereduce",
                 "engine": invocation.metadata,
                 "jobs": jobs,
                 "compilation_mode": compilation_mode,
@@ -3935,8 +3838,8 @@ def run_treereducer(
         )
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
-    invocation.publish_result(raw_output_capture)
+        raise RuntimeError(f"Failed to run treereduce reducer:\n{proc.stdout} {proc.stderr}")
+    invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
 

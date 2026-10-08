@@ -9,7 +9,6 @@ from harnessreducer.api import PostReductionOutcome
 from harnessreducer.initializer_analysis import InitializationDiagnosis, analyze_uninitialized
 from harnessreducer import reducer_runner as runner
 from harnessreducer.reduction_profile import write_profile_summary
-from harnessreducer.reduction_engines import raw_reducer_output_path
 
 
 @pytest.fixture
@@ -36,14 +35,14 @@ def profile(root, events, wall_ns):
     write_profile_summary(
         events_path, root / "reduction_profile.json", root / "reduction_profile.txt",
         wall_ns=wall_ns, jobs=2, returncode=0,
-        configuration={"jobs": 2, "tool": "perses", "compilation_mode": "pch"},
+        configuration={"jobs": 2, "tool": "treereduce", "compilation_mode": "pch"},
     )
 
 
 def invoke(work, attempt, profile_enabled=True):
     return recovery.reduce_with_initializer_recovery(
         attempt, str(work), "-std=c++17", replay=True, plugin=True,
-        profile=profile_enabled, statistics=False, jobs=2,
+        profile=profile_enabled, jobs=2,
     )
 
 
@@ -86,23 +85,20 @@ def test_one_retry_and_pooled_metrics_preserve_first_attempt(work, monkeypatch, 
             assert source == str(work)
             result.write_text("void f(){int value; consume(value);}\n")
             profile(root, [event(0, 200_000_000), event(0, 9_000_000_000, False)], 2_000_000_000)
-            raw_reducer_output_path(result).write_text("int first_raw;")
             return PostReductionOutcome(str(result), validated=False, stage=stage,
-                                        raw_reduced_harness=str(raw_reducer_output_path(result)))
+                                        )
         assert source != str(work) and root != work.parent
         assert protection.restore(Path(source).read_text()) == source_before
         assert (root / "poc.out").read_bytes() == b"reference executable"
         assert (root / "crash_pattern.symbolize0").read_text() == "same-reference"
         result.write_text(source_before)
         profile(root, [event(4_000_000_000, 300_000_000) for _ in range(3)], 3_000_000_000)
-        raw_reducer_output_path(result).write_text("int protected_raw;")
         return PostReductionOutcome(str(result), validated=retry_succeeds,
-                                    raw_reduced_harness=str(raw_reducer_output_path(result)))
+                                    )
     result = invoke(work, attempt)
     assert result.validated is retry_succeeds
-    assert Path(result.raw_reduced_harness).read_text() == "int protected_raw;"
-    assert Path(result.raw_reduced_harness).parent != work.parent
-    assert (work.parent / "reduced.raw.cpp").read_text() == "int first_raw;"
+    assert Path(result[0]).read_text() == source_before
+    assert Path(result[0]).parent != work.parent
     assert len(calls) == 2 and len(diagnosis_calls) == 1
     assert runner.get_work_dir() == str(work.parent)
     assert work.read_text() == source_before
@@ -147,12 +143,11 @@ def test_retry_exception_restores_work_dir_and_retains_profile(work, monkeypatch
         if protection is not None:
             raise RuntimeError("synthetic reducer failure")
         profile(work.parent, [event(0, 200)], 1_000_000_000)
-        raw_reducer_output_path(source).write_text("int first_raw;")
         return PostReductionOutcome(source, validated=False,
-                                    raw_reduced_harness=str(raw_reducer_output_path(source)))
+                                    )
     result = invoke(work, attempt)
     assert not result.validated
-    assert Path(result.raw_reduced_harness).read_text() == "int first_raw;"
+    assert result[0] == str(work)
     assert runner.get_work_dir() == str(work.parent)
     summary = json.loads((work.parent / "reduction_profile.json").read_text())
     assert summary["reducer"]["profiled_checks"] == 1
@@ -191,17 +186,9 @@ def test_analyzer_timeout_is_not_an_initialization_diagnostic(tmp_path, monkeypa
 @pytest.mark.parametrize("symbolize", [False, True])
 @pytest.mark.parametrize("mode,plugin", [("split", False), ("pch", True)])
 @pytest.mark.parametrize("retry_succeeds", [True, False])
-@pytest.mark.parametrize("capture_raw,fail_capture", [(False, False), (True, False), (True, True)])
-def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds, capture_raw, fail_capture):
+def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds):
     """Exercise API orchestration with a harmless synthetic source and no execution."""
     from harnessreducer import api
-    if fail_capture:
-        original_replace = Path.replace
-        def fail_raw_replace(path, target):
-            if str(target).endswith(".raw.cpp"):
-                raise OSError("synthetic capture failure")
-            return original_replace(path, target)
-        monkeypatch.setattr(Path, "replace", fail_raw_replace)
     source = tmp_path / "harness.cpp"
     original = (
         "#include <cstdint>\n#include <cstddef>\n"
@@ -212,7 +199,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     source.write_text(original)
     seed = tmp_path / "input"
     seed.write_bytes(b"hello")
-    for name in ("check_perses", "check_harness_compilation", "check_reducer_crash_pattern",
+    for name in ("check_tree_reducer", "check_harness_compilation", "check_reducer_crash_pattern",
                  "check_reducer_symbolized_crash_pattern", "check_reducer_symbolized_reduction_oracle",
                  "resolve_amortized_link_inputs", "format_reduced_harness", "_append_inline_stack_diagnostics"):
         monkeypatch.setattr(api, name, lambda *a, **kw: None)
@@ -230,7 +217,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
         reductions.append((path, kwargs))
         assert trace is None
         assert kwargs["compilation_mode"] == mode and kwargs["amortize_link"] == plugin
-        assert kwargs["symbolize"] == symbolize and kwargs["tool"] == "wdd"
+        assert kwargs["symbolize"] == symbolize
         assert kwargs["jobs"] == 2 and kwargs["stable"] is True
         text = Path(path).read_text()
         output = Path(runner.get_work_dir()) / "reduced_harness.cpp"
@@ -239,10 +226,6 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
         else:
             assert "HR_KEEP_INIT_" in text
         output.write_text(text)
-        if capture_raw:
-            kwargs["raw_output_capture"].capture(output, output)
-        else:
-            assert "raw_output_capture" not in kwargs
         return str(output)
     monkeypatch.setattr(api, "run_treereducer", reduce)
     # The analyzer's command/diagnostic filtering is tested separately with Clang;
@@ -251,17 +234,11 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     monkeypatch.setattr(recovery, "verify_preparation", lambda *a, **kw: None)
     result = api.reduce_with_config(api.ReductionConfig(
         str(source), crash_input=str(seed), work_dir=str(tmp_path / "work"),
-        tool="wdd", jobs=2, stable=True, symbolize=symbolize, compilation_mode=mode,
+        jobs=2, stable=True, symbolize=symbolize, compilation_mode=mode,
         amortize_link=plugin, protect_initializers=True,
-        capture_raw_output=capture_raw,
     ))
     assert result.success is retry_succeeds
-    if capture_raw and not fail_capture:
-        assert "attempt-2-protected" in result.raw_reduced_harness
-        assert "HR_KEEP_INIT_" in Path(result.raw_reduced_harness).read_text()
-    else:
-        assert result.raw_reduced_harness is None
-        assert not list((tmp_path / "work").rglob("*.raw.cpp"))
+    assert not list((tmp_path / "work").rglob("*.raw.cpp"))
     assert len(reductions) == 2
     assert len(validations) == (3 if retry_succeeds else 4)
     assert all(trace is None for _, trace in validations)
@@ -271,9 +248,8 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     assert "Point p = {2,3};" in Path(result.tagged_harness).read_text()
 
 
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd", "sfc"])
 @pytest.mark.parametrize("symbolize", [False, True])
-def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, tool, symbolize):
+def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, symbolize):
     from harnessreducer import api
     from harnessreducer.initializer_protection import prepare_initializer_protection
     original = "void f(){int n=fdp.ConsumeIntegral<int>(100001); consume(n);}\n"
@@ -285,7 +261,7 @@ def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, tool
     def reduce(source, trace_file, pattern, flags, link_flags, crash_input, **kwargs):
         calls.append(kwargs)
         assert trace_file == trace and kwargs["snapshot"]
-        assert kwargs["tool"] == tool and kwargs["symbolize"] is symbolize
+        assert kwargs["symbolize"] is symbolize
         result = work.parent / "reduced_harness.cpp"
         # Model the runner after its existing include/macro restoration step.
         result.write_text(Path(source).read_text())
@@ -302,27 +278,8 @@ def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, tool
     monkeypatch.setattr(api, "run_treereducer", reduce)
     monkeypatch.setattr(api, "inline_literals_in_reduced_harness", inline)
     result = api._reduction_attempt(
-        api.ReductionConfig(str(work), tool=tool, snapshot=True, symbolize=symbolize,
+        api.ReductionConfig(str(work), snapshot=True, symbolize=symbolize,
                             compilation_mode="pch", amortize_link=True),
         str(protection.source), trace, "fast-reference", "symbolized-reference", "", protection,
     )
     assert result.validated and len(calls) == 1
-
-
-def test_statistics_totals_include_both_attempts(work, monkeypatch):
-    from harnessreducer.check_mode import _format_check_statistics_text
-    monkeypatch.setattr(recovery, "analyze_uninitialized", lambda *a: InitializationDiagnosis("uninitialized-use", ({},), 1, "log"))
-    monkeypatch.setattr(recovery, "verify_preparation", lambda *a, **kw: None)
-    def attempt(source, flags, protection=None):
-        root = Path(runner.get_work_dir())
-        counts = (2, 3, 4) if protection is None else (10, 20, 30)
-        (root / "statistics.txt").write_text(runner._format_statistics_text(*counts))
-        check_counts = (2, 1) if protection is None else (10, 9)
-        (root / "check_statistics.txt").write_text(_format_check_statistics_text(*check_counts))
-        return PostReductionOutcome(source, validated=protection is not None)
-    result = recovery.reduce_with_initializer_recovery(
-        attempt, str(work), "", replay=False, plugin=False, profile=False, statistics=True, jobs=1,
-    )
-    assert result.validated
-    assert (work.parent / "statistics.txt").read_text() == runner._format_statistics_text(12, 23, 34)
-    assert (work.parent / "check_statistics.txt").read_text() == _format_check_statistics_text(12, 10)

@@ -21,7 +21,6 @@ class TestApiPipeline(unittest.TestCase):
         self.assertEqual(config.compilation_mode, "split")
         self.assertTrue(config.symbolize)
         self.assertFalse(config.amortize_link)
-        self.assertEqual(config.tool, "treereduce")
         self.assertEqual(config.jobs, 60)
         self.assertFalse(config.profile)
         self.assertFalse(config.stable)
@@ -40,42 +39,6 @@ class TestApiPipeline(unittest.TestCase):
         self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
         self.addCleanup(self.symbolized_pattern_patch.stop)
 
-    def test_oracle_capture_is_isolated_between_api_calls(self):
-        from harnessreducer import oracle_evaluation
-
-        for first_fails in (False, True):
-            with self.subTest(first_fails=first_fails), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp) / "oracle"
-                observed = []
-                result = ReductionResult("reduced.cpp", "tagged.cpp", None)
-
-                def reduce(config):
-                    observed.append((oracle_evaluation.reference_root(), config))
-                    if len(observed) == 1 and first_fails:
-                        raise RuntimeError("synthetic reduction failure")
-                    return result
-
-                with patch.object(oracle_evaluation, "_REFERENCE_ROOT", None), \
-                        patch("harnessreducer.api._reduce_with_config", side_effect=reduce):
-                    experiment = ReductionConfig(
-                        "h.cpp", profile=True, capture_raw_output=True,
-                        oracle_evaluation=str(root), replay_enabled=False,
-                    )
-                    if first_fails:
-                        with self.assertRaisesRegex(RuntimeError, "synthetic reduction failure"):
-                            reduce_with_config(experiment)
-                    else:
-                        self.assertIs(reduce_with_config(experiment), result)
-                    self.assertIsNone(oracle_evaluation.reference_root())
-                    normal = ReductionConfig("h.cpp")
-                    self.assertIs(reduce_with_config(normal), result)
-                    self.assertIsNone(oracle_evaluation.reference_root())
-
-                self.assertEqual([entry[0] for entry in observed], [root.resolve(), None])
-                self.assertFalse(normal.profile)
-                self.assertFalse(normal.capture_raw_output)
-                self.assertIsNone(normal.oracle_evaluation)
-                self.assertTrue(normal.replay_enabled)
 
     def test_amortize_link_rejects_direct_mode(self):
         with self.assertRaisesRegex(ValueError, "requires split or PCH"):
@@ -263,90 +226,6 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.assert_not_called()
         mock_reduce.assert_not_called()
 
-    @patch("harnessreducer.api.emit_check_statistics_summary")
-    @patch("harnessreducer.api.run_treereducer")
-    @patch("harnessreducer.api.run_treereducer_with_check")
-    @patch("harnessreducer.api.record_check_reference")
-    @patch("harnessreducer.api.inline_literals_in_reduced_harness")
-    @patch("harnessreducer.api.format_reduced_harness")
-    @patch("harnessreducer.api.dump_fdp_trace")
-    @patch("harnessreducer.api.compile_dump_mode_harness")
-    @patch("harnessreducer.api.reset_check_state")
-    @patch("harnessreducer.api.reset_last_interesting_state")
-    @patch("harnessreducer.api.reset_stack_trace_state")
-    @patch("harnessreducer.api.configure_work_dir")
-    @patch("harnessreducer.api.tag_harness_with_fdp_ids")
-    @patch("harnessreducer.api.check_reducer_crash_pattern")
-    @patch("harnessreducer.api.extract_crash_pattern_from_output")
-    @patch("harnessreducer.api.check_harness_compilation")
-    @patch("harnessreducer.api.check_tree_reducer")
-    def test_reduce_with_config_uses_check_mode_runner(
-        self,
-        mock_check_tree,
-        mock_check_compile,
-        mock_extract,
-        mock_check_pattern,
-        mock_tag,
-        mock_configure,
-        mock_reset_stack_state,
-        mock_reset_last_interesting_state,
-        mock_reset_check_state,
-        mock_compile,
-        mock_dump,
-        mock_format,
-        mock_inline,
-        mock_record_check_reference,
-        mock_run_with_check,
-        mock_run_normal,
-        mock_emit_check_summary,
-    ):
-        mock_tag.return_value = "/tmp/tagged.cpp"
-        mock_compile.return_value = "/tmp/tagged.out"
-        mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_extract.return_value = "AddressSanitizer"
-        mock_run_with_check.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
-        mock_record_check_reference.return_value = type(
-            "Reference",
-            (),
-            {"frame_count": 12},
-        )()
-
-        config = ReductionConfig(
-            symbolize=False,
-            harness_path="a.cpp",
-            crash_input="seed.bin",
-            work_dir="/tmp/workdir",
-            check=True,
-        )
-
-        result = reduce_with_config(config)
-
-        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
-        mock_reset_last_interesting_state.assert_called_once_with()
-        mock_reset_check_state.assert_called_once_with()
-        mock_record_check_reference.assert_called_once_with(
-            "seed.bin", ".*", None
-        )
-        mock_run_with_check.assert_called_once_with(
-            "/tmp/tagged.cpp",
-            "/tmp/fdp_trace.log",
-            None,
-            None,
-            None,
-            "seed.bin",
-            stable=False,
-            compilation_mode="split",
-            snapshot=False,
-            amortize_link=False,
-            crash_pattern_symbolize_0="AddressSanitizer",
-            require_crash_pattern=False,
-            jobs=60,
-            tool="treereduce",
-            auto_var_init_pattern=False,
-        )
-        mock_run_normal.assert_not_called()
-        mock_emit_check_summary.assert_called_once_with()
 
     @patch("harnessreducer.api.inline_literals_in_reduced_harness")
     @patch("harnessreducer.api.format_reduced_harness")
@@ -383,7 +262,7 @@ class TestApiPipeline(unittest.TestCase):
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
         mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = PostReductionOutcome("/tmp/reduced.cpp", raw_reduced_harness="/tmp/selected.raw.cpp")
+        mock_inline.return_value = PostReductionOutcome("/tmp/reduced.cpp", )
         mock_extract.return_value = "AddressSanitizer"
         self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
         mock_slice.return_value = "/tmp/sliced.cpp"
@@ -403,7 +282,6 @@ class TestApiPipeline(unittest.TestCase):
         result = reduce_with_config(config)
 
         self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
-        self.assertEqual(result.raw_reduced_harness, "/tmp/selected.raw.cpp")
         self.assertEqual(result.tagged_harness, "/tmp/tagged.cpp")
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
@@ -452,13 +330,11 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             stable=False,
             compilation_mode="split",
-            statistics=False,
             snapshot=False,
             amortize_link=False,
             symbolize=False,
             jobs=60,
             profile=False,
-            tool="treereduce",
             auto_var_init_pattern=False,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
@@ -744,13 +620,11 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             stable=False,
             compilation_mode="split",
-            statistics=False,
             snapshot=False,
             amortize_link=False,
             symbolize=False,
             jobs=60,
             profile=False,
-            tool="treereduce",
             auto_var_init_pattern=False,
         )
 
@@ -889,13 +763,11 @@ class TestApiPipeline(unittest.TestCase):
             "seed.bin",
             stable=False,
             compilation_mode="split",
-            statistics=False,
             snapshot=False,
             amortize_link=False,
             symbolize=True,
             jobs=60,
             profile=False,
-            tool="treereduce",
             auto_var_init_pattern=False,
         )
         mock_inline.assert_called_once_with(
@@ -920,3 +792,15 @@ class TestApiPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_removed_api_options_are_rejected():
+    import pytest
+    for name in ("tool", "check", "statistics", "capture_raw_output", "replay_enabled", "oracle_evaluation"):
+        with pytest.raises(TypeError, match=name):
+            ReductionConfig("h.cpp", **{name: True})
+    for name in ("tool", "check", "statistics"):
+        with pytest.raises(TypeError, match=name):
+            process("h.cpp", **{name: True})
+    with pytest.raises(TypeError, match="raw_reduced_harness"):
+        ReductionResult("out.cpp", "tagged.cpp", None, raw_reduced_harness="unused.cpp")

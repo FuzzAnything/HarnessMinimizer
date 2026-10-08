@@ -12,11 +12,10 @@ from harnessreducer.reduction_engines import prepare_reducer_invocation
 from harnessreducer.reducer_runner import _split_source_for_pch
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_INITIALIZER_ENGINES") != "1",
+@pytest.mark.skipif(os.environ.get("HARNESSREDUCER_TEST_TREEREDUCE") != "1",
                     reason="opt-in harmless real-engine integration")
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd", "sfc"])
 @pytest.mark.parametrize("mode,jobs", [("split", 1), ("pch", 2)])
-def test_real_engine_protected_declarations(tmp_path, tool, mode, jobs):
+def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
     original = tmp_path / "original.cpp"
     original.write_text(
         "#include <cstddef>\n"
@@ -56,11 +55,10 @@ def test_real_engine_protected_declarations(tmp_path, tool, mode, jobs):
     checker.chmod(0o700)
     output = tmp_path / "reduced.cpp"
     invocation = prepare_reducer_invocation(
-        tool=tool, source=str(source), output=str(output),
+        source=str(source), output=str(output),
         checker_command=[str(checker), "@@.cpp"], stable=True, jobs=jobs,
     )
-    # SFC can schedule hundreds of syntax transformations even on this tiny
-    # fixture. Keep a finite test deadline without altering engine options.
+    # Keep a finite test deadline without altering reducer options.
     deadline = float(os.environ.get("HARNESSREDUCER_TEST_ENGINE_TIMEOUT", "300"))
     def bounded(command, **kwargs):
         return run_supervised(command, **{**kwargs, "timeout": deadline})
@@ -68,7 +66,7 @@ def test_real_engine_protected_declarations(tmp_path, tool, mode, jobs):
         result = invocation.run(bounded)
     except subprocess.TimeoutExpired:
         # Avoid pytest printing the supervisor's entire environment on failure.
-        pytest.fail(f"{tool}/{mode} exceeded the {deadline:g}s test deadline; artifacts: {tmp_path}",
+        pytest.fail(f"treereduce/{mode} exceeded the {deadline:g}s test deadline; artifacts: {tmp_path}",
                     pytrace=False)
     assert result.returncode == 0, result.stdout
     invocation.publish_result()

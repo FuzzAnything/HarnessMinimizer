@@ -14,7 +14,7 @@ Requires Linux x86-64 and access to a local Docker daemon.
   -h, --help        Show this help
 
 An existing container is left untouched. Choose another name to create a
-new container. For the supplied benchmark evaluations, use setup_docker_eval.sh.
+new container.
 EOF
 }
 

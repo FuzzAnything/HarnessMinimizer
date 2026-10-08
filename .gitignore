@@ -9,14 +9,9 @@ output/
 
 reduced.cpp
 harness_values.h
-benchmark.tar.gz
-benchmark/*/*/build/sanitizer/lib/*
-!benchmark/*/*/build/sanitizer/lib/.gitkeep
 dummy_file
 dummy*
 
-triage-logs*/
-crash_triage*.csv
 *.csv.lock
 *.csv.run.lock
 .*.csv.*.tmp
