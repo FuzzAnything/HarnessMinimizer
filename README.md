@@ -119,3 +119,9 @@ the files in `result.generated_headers` alongside it.
 This tool integrates the reduction engine Treereduce:
 
 - Treereduce: [https://github.com/langston-barrett/treereduce](https://github.com/langston-barrett/treereduce)
+
+## License
+
+HarnessMinimizer is available under AGPL-3.0-only or a separately negotiated
+commercial license; see [LICENSE](LICENSE). Third-party components retain their
+own licenses, as described in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).

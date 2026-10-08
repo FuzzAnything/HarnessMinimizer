@@ -1,0 +1,55 @@
+HarnessMinimizer third-party notices
+===================================
+
+HarnessMinimizer-authored code is covered by LICENSE unless a file-specific
+notice states otherwise. The upstream portions identified below retain their
+respective licenses. Neither the project license nor a separate commercial
+license replaces those third-party terms.
+
+LLVM FuzzedDataProvider
+----------------------
+
+Upstream project: LLVM Project
+Source: https://github.com/llvm/llvm-project/blob/main/compiler-rt/include/fuzzer/FuzzedDataProvider.h
+License: Apache-2.0 WITH LLVM-exception
+Full upstream license text: LICENSES/LLVM.txt
+License source: https://llvm.org/LICENSE.txt
+
+Applicable local files:
+- include/fuzzer/FuzzedDataProvider.h contains the modified upstream header.
+- src/harnessreducer/fdp_replay_runtime.cpp contains adapted Native* consumption
+  helpers, including byte/string consumption, integral and floating-point
+  consumption, byte-pointer advancement, and unsigned-to-signed conversion.
+
+The original header's LLVM attribution and SPDX notice are preserved.
+HarnessMinimizer Authors modified the header in 2026 to add call-site identifiers,
+value recording/replay, and support for an external replay runtime. Its existing
+file-specific Apache-2.0 WITH LLVM-exception notice remains in effect.
+LLVM-derived portions of the external runtime retain the upstream terms;
+HarnessMinimizer-authored additions to that runtime are covered by LICENSE.
+
+treereduce
+----------
+
+Upstream project: treereduce
+Source: https://github.com/langston-barrett/treereduce
+Pinned revision: 47655579ae4a19e95d7c4f7911d7ded7719b6d22
+License: MIT
+Copyright (c) 2025 Brian Langston Barrett
+Full upstream license text: LICENSES/treereduce.txt
+License source: https://github.com/langston-barrett/treereduce/blob/47655579ae4a19e95d7c4f7911d7ded7719b6d22/LICENSE
+
+Applicable local files and installed component:
+- tools/treereduce/process-cleanup.patch contains upstream context and removed
+  lines, which retain their MIT terms, plus HarnessMinimizer-authored additions.
+- tools/treereduce/install.py downloads and verifies the pinned upstream source,
+  applies the patch, and installs the treereduce-c executable.
+
+The patch adds process-group cleanup for timeouts/cancellation and a supervisor
+version probe. HarnessMinimizer-authored patch additions and the installer are
+covered by LICENSE; the upstream code retains its MIT copyright and permission
+notice. The installer preserves the verified source's upstream license at
+<installation-root>/share/licenses/treereduce/LICENSE, including when installed
+under /usr/local in Docker.
+
+Separately installed dependencies retain their own licenses and notices.

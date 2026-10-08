@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -19,6 +20,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--archive", type=Path, help="Use an already downloaded pinned archive")
     args = parser.parse_args()
+    install_root = args.root.resolve()
     with tempfile.TemporaryDirectory(prefix="harnessreducer-treereduce-build-") as work:
         work = Path(work)
         archive = args.archive
@@ -36,9 +38,12 @@ def main():
         subprocess.run(["patch", "--batch", "-p1", "-i", str(HERE / "process-cleanup.patch")], cwd=tree, check=True)
         subprocess.run([
             "cargo", "install", "--locked", "--path", str(tree / "crates/treereduce-c"),
-            "--root", str(args.root.resolve()), "--jobs", str(args.jobs), "--force",
+            "--root", str(install_root), "--jobs", str(args.jobs), "--force",
         ], cwd=tree, check=True)
-        subprocess.run([str(args.root.resolve() / "bin/treereduce-c"), "--harnessreducer-supervisor-version"], check=True)
+        license_dir = install_root / "share" / "licenses" / "treereduce"
+        license_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(tree / "LICENSE", license_dir / "LICENSE")
+        subprocess.run([str(install_root / "bin/treereduce-c"), "--harnessreducer-supervisor-version"], check=True)
 
 
 if __name__ == "__main__":

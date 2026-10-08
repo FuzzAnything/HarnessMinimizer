@@ -4,6 +4,10 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Modified in 2026 by HarnessMinimizer Authors to add call-site identifiers,
+// value recording/replay, and an external replay runtime. See the repository's
+// THIRD_PARTY_NOTICES and LICENSES/LLVM.txt for attribution and license terms.
+//
 //===----------------------------------------------------------------------===//
 // A single header library providing an utility class to break up an array of
 // bytes. Whenever run on the same input, provides the same output, as long as
