@@ -49,15 +49,6 @@ RUN apt-get update && apt-get install -y lsb-release wget software-properties-co
     fi && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install AFLplusplus
-RUN git clone https://github.com/AFLplusplus/AFLplusplus.git /tmp/AFLplusplus && \
-     cd /tmp/AFLplusplus && \
-     sed -i 's|^#define USE_COLOR|/* #define USE_COLOR */|g' include/config.h && \
-     export LLVM_CONFIG=llvm-config && \
-     make all -j$(nproc) && \
-     make install && \
-     rm -rf /tmp/AFLplusplus
-
 # Install honggfuzz
 # RUN git clone https://github.com/google/honggfuzz.git /tmp/honggfuzz && \
 #     cd /tmp/honggfuzz && \
@@ -65,24 +56,11 @@ RUN git clone https://github.com/AFLplusplus/AFLplusplus.git /tmp/AFLplusplus &&
 #     make -j$(nproc) install && \
 #     rm -rf /tmp/honggfuzz
 
-# Install code coverage utils
-RUN git clone https://chromium.googlesource.com/chromium/src/tools/code_coverage /tmp/code_coverage && \
-    cd /tmp/code_coverage && \
-    mv coverage_utils.py /usr/local/bin/coverage_utils && \
-    sed -i '1i#!/usr/bin/env python3' /usr/local/bin/coverage_utils && \
-    chmod +x /usr/local/bin/coverage_utils && \
-    mv html_templates/ /usr/local/bin/ && \
-    mv static/ /usr/local/bin/
-
 # Install Rust and casr
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     echo 'source $HOME/.cargo/env' >> ~/.bashrc
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo install -F dojo casr
-COPY tools/treereduce /tmp/harnessreducer-treereduce
-RUN python3 /tmp/harnessreducer-treereduce/install.py --root /usr/local && \
-    rm -rf /tmp/harnessreducer-treereduce
-ENV HARNESSREDUCER_TREEREDUCE="/usr/local/bin/treereduce-c"
 
 # Install Ruby
 # RUN git clone https://github.com/rbenv/rbenv.git ~/.rbenv && \
