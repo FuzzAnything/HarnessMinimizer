@@ -3,18 +3,20 @@ set -Eeuo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: ./setup_docker.sh [--image IMAGE] [--name CONTAINER]
+Usage: ./setup_docker_eval.sh [--image IMAGE] [--name CONTAINER]
 
-Build the Docker image and create a container for using HarnessReducer directly,
-with this repository mounted at /root/HarnessMinimizer.
+Build the Docker image and create a container for benchmark evaluation,
+with this repository mounted at /root/HarnessMinimizer. Configure the
+liblouis table path and install the supplied benchmarks' additional packages.
 Requires Linux x86-64 and access to a local Docker daemon.
 
   --image IMAGE     Image to build (default: harnessminimizer:latest)
-  --name CONTAINER  Container to create (default: harnessminimizer)
+  --name CONTAINER  Container to create (default: harnessminimizer-eval)
   -h, --help        Show this help
 
 An existing container is left untouched. Choose another name to create a
-new container. For the supplied benchmark evaluations, use setup_docker_eval.sh.
+new container. Benchmark data must be supplied separately under benchmark/.
+For using HarnessReducer directly, use setup_docker.sh.
 EOF
 }
 
@@ -30,7 +32,7 @@ print_command() {
 }
 
 image_name=harnessminimizer:latest
-container_name=harnessminimizer
+container_name=harnessminimizer-eval
 while (($#)); do
     case "$1" in
         --image|--name)
@@ -58,6 +60,7 @@ done
 [[ "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || fail "Invalid container name: $container_name"
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null && pwd -P)"
 container_workspace=/root/HarnessMinimizer
+louis_tablepath="$container_workspace/benchmark/library-bug/liblouis-1/build/sanitizer/share/liblouis/tables"
 [[ -f "$repo_dir/Dockerfile" ]] || fail "Dockerfile is missing beside this script."
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed or is not on PATH."
 
@@ -82,7 +85,7 @@ if docker container inspect "$container_name" >/dev/null 2>&1; then
     print_command docker start "$container_name" >&2
     print_command docker exec -it --workdir "$container_workspace" "$container_name" bash >&2
     printf 'To build an image and create a separate container:\n' >&2
-    print_command "$repo_dir/setup_docker.sh" --image "$image_name" --name "${container_name}-new" >&2
+    print_command "$repo_dir/setup_docker_eval.sh" --image "$image_name" --name "${container_name}-new" >&2
     exit 1
 fi
 
@@ -98,7 +101,23 @@ container_requested=true
 docker run --detach --name "$container_name" --init \
     --mount "type=bind,\"source=$mount_source\",target=$container_workspace" \
     --workdir "$container_workspace" \
+    --env "LOUIS_TABLEPATH=$louis_tablepath" \
     "$image_name" sleep infinity
+
+step='updating the container package index'
+docker exec --user 0 --env DEBIAN_FRONTEND=noninteractive "$container_name" \
+    apt-get update
+
+step='installing the benchmark dependencies in the container'
+benchmark_packages=(
+    libzstd-dev libjbig-dev libjpeg-dev
+    libnl-genl-3-dev libnl-3-dev libdbus-1-dev libexpat1-dev
+)
+docker exec --user 0 --env DEBIAN_FRONTEND=noninteractive "$container_name" \
+    apt-get install -y --no-install-recommends "${benchmark_packages[@]}"
 
 printf '\nContainer %s is ready. Continue installation inside it:\n' "$container_name"
 print_command docker exec -it "$container_name" bash
+if [[ ! -d "$repo_dir/benchmark/library-bug/liblouis-1/build/sanitizer/share/liblouis/tables" ]]; then
+    printf 'Before running liblouis cases, supply the benchmark data containing:\n  %s\n' "$louis_tablepath"
+fi
