@@ -6,18 +6,16 @@ It can be used through a command-line interface
 
 ## Installation
 
-For direct use of HarnessMinimizer, run this on the host from the repository root
-to build the image and create the `harnessminimizer` container.
-
 ```bash
-./setup_docker.sh
-docker exec -it harnessminimizer bash
-cd /root/HarnessMinimizer
+docker build -t '<image-name>' - < Dockerfile
+docker run -d --name '<container-name>' --init '<image-name>' sleep infinity
+docker exec -it '<container-name>' bash
 ```
 
-The script mounts the repository at `/root/HarnessMinimizer` and defaults to the
-`harnessminimizer:latest` image. Use `--image` or `--name` to override the names of the image or the container.
-Run the remaining installation commands inside the chosen container.
+The image fetches the GitHub `main` branch.
+To select a specific commit, tag, or branch, add `--build-arg HARNESSMINIMIZER_REF='<revision>'` to `docker build`.
+Docker may reuse a cached checkout; use `--no-cache`
+to fetch again.
 
 Install the Python package and activate its environment using uv.
 
@@ -26,46 +24,12 @@ uv sync
 source .venv/bin/activate
 ```
 
-Install and select patched treereduce.
-
-```bash
-python tools/treereduce/install.py
-export HARNESSMINIMIZER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
-```
-
-Optionally install Java 17 and Bazelisk for the Perses, WDD, and CDD engines.
-
-```bash
-apt-get update
-apt-get install -y openjdk-17-jdk-headless coreutils unzip zip
-mkdir -p .tools/bin
-curl -fL --retry 3 \
-  https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64 \
-  -o .tools/bin/bazelisk
-chmod +x .tools/bin/bazelisk
-export PATH="$(pwd)/.tools/bin:$PATH"
-```
-
-Obtain Perses from upstream and build the supported revision; its checkout selects Bazel 9.1.0.
-
-```bash
-mkdir -p .tools/perses
-git clone https://github.com/uw-pluverse/perses.git .tools/perses/source
-git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2
-python tools/perses/install.py --source .tools/perses/source --jobs 2
-export HARNESSMINIMIZER_PERSES_JAR="$(pwd)/.tools/perses/perses_deploy.jar"
-```
-
-These optional engines use the same external Perses JAR. Set
-`HARNESSMINIMIZER_PERSES_JAR` in each shell that uses them; optionally set
-`HARNESSMINIMIZER_PERSES_HEAP` to change the Java heap limit (default: `4g`).
-
 ## Reduce a harness
 
 Replace the absolute paths below with your harness, crash input, target library,
-and output locations, and replace `target` with the library name. The harness and
-crash input can be in different directories. If the harness opens runtime files
-using relative paths, run from the working directory those paths require.
+and output locations inside the container, and replace `target` with the library
+name. The harness and crash input can be in different directories. If the harness
+opens runtime files using relative paths, run from the working directory those paths require.
 
 Optimized pipeline:
 
@@ -104,7 +68,7 @@ Profiling and stable mode are **off** unless explicitly enabled.
 | `--crash-input` | Optional crashing input file passed to the harness. |
 | `--compile-flags="..."` | Compiler flags, such as include paths, defines, and language standard. |
 | `--link-flags="..."` | Linker flags, such as library paths, library names, or full archive paths. |
-| `--tool` | Reduction engine: `treereduce` (default), `perses`, `wdd`, or `cdd`. The latter three require the separately installed Perses JAR. |
+| `--tool` | Reduction engine: `treereduce` (default), `perses`, `wdd`, or `cdd`. |
 | `-j`, `--jobs` | Requested concurrent candidate checks: 1–63, default 60. |
 | `--direct`, `--split`, `--pch` | Compile and link in one step; compile then link separately (default); or use precompiled headers with separate compilation and linking. |
 | `--amortize-link` | Reuse a persistent runner and shared/static target libraries. |

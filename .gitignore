@@ -15,3 +15,5 @@ dummy*
 *.csv.lock
 *.csv.run.lock
 .*.csv.*.tmp
+
+*PLAN.md

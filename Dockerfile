@@ -10,7 +10,7 @@ ENV TZ=Asia/Shanghai
 
 # Install dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y \
         bash git sudo jq curl wget gzip locales patch \
         build-essential cmake pkg-config lld ninja-build \
         binutils binutils-dev autoconf automake libtool libncurses5-dev libgdbm-dev libnss3-dev liblzma-dev zlib1g-dev libyaml-dev graphviz libgraphviz-dev \
@@ -21,7 +21,7 @@ RUN apt-get update && \
 
 # Install secondary dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -y \
     lsb-release software-properties-common gnupg pixz
 
 # Locale settings
@@ -80,6 +80,7 @@ RUN echo "alias ls='ls -F'" >> ~/.bashrc
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /root/.local/bin/uv python install 3.12 
 
+ENV PATH="/root/.local/bin:${PATH}"
 ENV CMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
     
 
@@ -98,7 +99,7 @@ RUN cd /root && git clone --single-branch https://github.com/gpakosz/.tmux.git &
 
 
 # Install later dependencies
-RUN apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     bubblewrap rsync yasm
 
 # Install Golang dependencies
@@ -112,10 +113,43 @@ ENV PATH=$PATH:$GOPATH/bin
 
 RUN go install github.com/boyter/scc/v3@latest
 
-# We Must mapping our source code to this path in the container (DEV Phase)
-WORKDIR /root
+# Fetch the published tool separately from the host workspace.
+ARG HARNESSMINIMIZER_REF=main
+RUN git init /root/HarnessMinimizer && \
+    git -C /root/HarnessMinimizer remote add origin https://github.com/FuzzAnything/HarnessMinimizer.git && \
+    git -C /root/HarnessMinimizer fetch --depth 1 --no-tags origin "$HARNESSMINIMIZER_REF" && \
+    git -C /root/HarnessMinimizer checkout --detach FETCH_HEAD
+WORKDIR /root/HarnessMinimizer
 
-#ENTRYPOINT ["python", "main.py"]
+# Install the Python package and both external reducer programs into the image.
+ARG ENGINE_BUILD_JOBS=2
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        openjdk-17-jdk-headless coreutils unzip zip && \
+    rm -rf /var/lib/apt/lists/*
+RUN mkdir -p .tools/bin && \
+    curl -fL --retry 3 \
+        https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64 \
+        -o .tools/bin/bazelisk && \
+    chmod +x .tools/bin/bazelisk
+
+ENV VIRTUAL_ENV="/root/HarnessMinimizer/.venv"
+ENV PATH="/root/HarnessMinimizer/.venv/bin:/root/HarnessMinimizer/.tools/bin:${PATH}"
+RUN uv sync --frozen
+RUN python tools/treereduce/install.py --jobs "$ENGINE_BUILD_JOBS"
+
+# Keep the pinned upstream checkout, including its license and build files.
+RUN mkdir -p .tools/perses && \
+    git clone https://github.com/uw-pluverse/perses.git .tools/perses/source && \
+    git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2 && \
+    python tools/perses/install.py --source .tools/perses/source --jobs "$ENGINE_BUILD_JOBS" && \
+    (cd .tools/perses/source && bazelisk shutdown)
+
+ENV HARNESSMINIMIZER_TREEREDUCE="/root/HarnessMinimizer/.tools/bin/treereduce-c" \
+    HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
+RUN harnessminimizer --help >/dev/null && \
+    "$HARNESSMINIMIZER_TREEREDUCE" --harnessminimizer-supervisor-version && \
+    java -jar "$HARNESSMINIMIZER_PERSES_JAR" --help >/dev/null
 
 ENV DEBUGINFOD_URLS="" \
     ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \
