@@ -160,7 +160,8 @@ negotiated commercial license: see [LICENSE](LICENSE). Applicable upstream
 license conditions and notices remain in effect: see
 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for component details.
 
-Perses is an optional external program licensed under GPL-3.0-or-later. It is not part of HarnessMinimizer.
+Perses is an optional external program licensed under GPL-3.0-or-later.
+It is not part of the HarnessMinimizer distribution.
 HarnessMinimizer does not bundle Perses source or binaries: users obtain and
 build Perses separately, and HarnessMinimizer invokes its command-line interface
 using candidate files and a checker script. Our installer and adapter scripts are

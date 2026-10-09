@@ -64,16 +64,15 @@ License text: https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71c
 Version grant: https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/src/org/perses/reduction/reducer/PersesNodeReducer.kt
 
 Applicable HarnessMinimizer integration files:
-- tools/perses/install.py builds a separately obtained, unmodified upstream
-  checkout and installs the resulting JAR locally.
-- src/harnessminimizer/reduction_engines.py invokes the external program with
-  command-line arguments, candidate files, and a checker script. The script
-  translates checker exit codes into Perses's interestingness-test protocol.
+- tools/perses/install.py builds and installs a separately obtained,
+  unmodified upstream checkout.
+- src/harnessminimizer/reduction_engines.py invokes Perses through its
+  command-line interface.
 
-The perses, wdd, and cdd selections use the same Perses JAR with different
-list-minimizer configurations. HarnessMinimizer does not include Perses source
-or binaries in this repository or its Python distributions, and does not patch
-the upstream implementation. Users obtain Perses separately from upstream.
+Perses is a separate, optional external program and is not part of the
+HarnessMinimizer distribution. It provides the optional perses, wdd, and cdd
+engines. Users obtain it separately from upstream; no Perses source or binaries
+are bundled with HarnessMinimizer.
 
 Our installer and command-line adapter are covered by LICENSE. The separately
 installed Perses program remains under its upstream GPL-3.0-or-later terms.
