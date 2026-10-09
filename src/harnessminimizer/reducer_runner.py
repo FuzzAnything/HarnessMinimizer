@@ -2003,7 +2003,7 @@ def configure_debug_logging(enabled: bool) -> str | None:
     debug_log_path = str(Path(get_work_dir()) / DEBUG_LOG_FILE_NAME)
     Path(debug_log_path).write_text(
         "===== HarnessMinimizer normal-path reduction debug log =====\n"
-        "Candidate records can be out of order because treereduce-c runs "
+        "Candidate records can be out of order because the reduction engine runs "
         "multiple workers concurrently.\n",
         encoding="utf-8",
     )
@@ -3614,8 +3614,11 @@ def run_treereducer(
     jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
     auto_var_init_pattern: bool = False,
+    tool: str = "treereduce",
 ) -> str:
-    from harnessminimizer.reduction_engines import prepare_reducer_invocation
+    from harnessminimizer.reduction_engines import prepare_reducer_invocation, validate_tool
+
+    validate_tool(tool)
 
     # Reducers change cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -3794,8 +3797,9 @@ def run_treereducer(
         invocation = prepare_reducer_invocation(
             source=reducer_source, output=reduced_harness,
             checker_command=cmd, stable=stable, jobs=jobs,
+            tool=tool,
         )
-        print("[+] Running reduction engine: treereduce")
+        print(f"[+] Running reduction engine: {tool}")
         reduction_started_ns = time.perf_counter_ns()
         try:
             proc = invocation.run(run_supervised)
@@ -3816,7 +3820,7 @@ def run_treereducer(
             jobs=jobs,
             returncode=proc.returncode,
             configuration={
-                "tool": "treereduce",
+                "tool": tool,
                 "engine": invocation.metadata,
                 "jobs": jobs,
                 "compilation_mode": compilation_mode,
@@ -3838,7 +3842,7 @@ def run_treereducer(
         )
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run treereduce reducer:\n{proc.stdout} {proc.stderr}")
+        raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
     invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")

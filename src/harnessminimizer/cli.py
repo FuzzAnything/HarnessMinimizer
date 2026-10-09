@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from harnessminimizer.api import ReductionConfig, reduce_with_config
+from harnessminimizer.reduction_engines import TOOL_CHOICES
 from harnessminimizer.reducer_runner import (
     DEFAULT_TREEREDUCE_JOBS,
     MAX_TREEREDUCE_JOBS,
@@ -54,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
     parser.add_argument(
+        "--tool", choices=TOOL_CHOICES, default="treereduce",
+        help="Reduction engine (default: treereduce; other choices use external Perses).",
+    )
+    parser.add_argument(
         "--compile-flags",
         default=None,
         help=(
@@ -89,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stable",
         action="store_true",
-        help="Repeat treereduce's reduction passes until their stopping conditions are reached.",
+        help="Repeat the selected engine's reduction passes until their stopping conditions are reached.",
     )
     parser.add_argument(
         "-j",
@@ -229,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         profile=args.profile,
         protect_initializers=args.protect_initializers,
         auto_var_init_pattern=args.auto_var_init_pattern,
+        tool=args.tool,
     )
     try:
         result = reduce_with_config(config)

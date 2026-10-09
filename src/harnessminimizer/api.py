@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from harnessminimizer.process_supervisor import termination_guard
+from harnessminimizer.reduction_engines import check_perses, validate_tool
 from harnessminimizer.fdp_transform import (
     PARSER,
     VALUES_HEADER_NAME,
@@ -117,6 +118,7 @@ class ReductionConfig:
     profile: bool = False
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
+    tool: str = "treereduce"
 
 
 @dataclass(frozen=True)
@@ -1205,6 +1207,7 @@ def _reduction_attempt(
         jobs=config.jobs,
         profile=config.profile,
         auto_var_init_pattern=config.auto_var_init_pattern,
+        tool=config.tool,
     )
     if protection is not None:
         protection.restore_file(reduced_harness)
@@ -1275,6 +1278,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 
 
 def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    validate_tool(config.tool)
     configure_work_dir(config.work_dir)
     if config.protect_initializers and config.slice_enabled:
         raise ValueError(
@@ -1298,7 +1302,10 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if has_static_target_libraries(config.link_flags):
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_compilation_mode = PHASE3_DIRECT
-    check_tree_reducer()
+    if config.tool == "treereduce":
+        check_tree_reducer()
+    else:
+        check_perses()
     prepared_source = _prepare_fuzzer_entry_return(
         config.harness_path,
         config.compile_flags,
@@ -1462,6 +1469,7 @@ def process(
     profile: bool = False,
     protect_initializers: bool = False,
     auto_var_init_pattern: bool = False,
+    tool: str = "treereduce",
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,
@@ -1479,6 +1487,7 @@ def process(
         profile=profile,
         protect_initializers=protect_initializers,
         auto_var_init_pattern=auto_var_init_pattern,
+        tool=tool,
     )
     result = reduce_with_config(config)
     return result.reduced_harness if result.success else None

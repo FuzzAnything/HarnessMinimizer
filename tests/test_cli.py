@@ -7,6 +7,26 @@ from harnessminimizer.api import ReductionResult
 from harnessminimizer.cli import build_parser, main
 
 
+@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+def test_cli_passes_selected_tool_to_api(tool):
+    with patch("harnessminimizer.cli.reduce_with_config", return_value=ReductionResult(
+        "unused.cpp", "tagged.cpp", None, success=False,
+    )) as reduce:
+        assert main(["h.cpp", "-o", "r.cpp", "--tool", tool]) == 1
+    config = reduce.call_args.args[0]
+    assert config.tool == tool
+    assert config.symbolize and config.compilation_mode == "split"
+    assert config.jobs == 60
+    assert not config.profile and not config.stable and not config.amortize_link
+
+
+@pytest.mark.parametrize("tool", ["sfc", "vulcan", "all", "unknown"])
+def test_cli_rejects_unsupported_engines(tool):
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args(["h.cpp", "-o", "r.cpp", "--tool", tool])
+    assert error.value.code == 2
+
+
 def test_help_uses_public_command_name(capsys):
     with pytest.raises(SystemExit) as error:
         main(["--help"])
@@ -172,7 +192,7 @@ if __name__ == "__main__":
 
 
 @pytest.mark.parametrize("flags", [
-    ["--tool", "treereduce"], ["--check"], ["--statistics"],
+    ["--check"], ["--statistics"],
     ["--capture-raw-output"], ["--no-fdp-replay"], ["--oracle-evaluation", "unused"],
 ])
 def test_removed_options_are_rejected_before_execution(flags):

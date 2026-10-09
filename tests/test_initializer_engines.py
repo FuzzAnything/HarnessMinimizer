@@ -12,10 +12,12 @@ from harnessminimizer.reduction_engines import prepare_reducer_invocation
 from harnessminimizer.reducer_runner import _split_source_for_pch
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_TREEREDUCE") != "1",
-                    reason="opt-in harmless real-engine integration")
+@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
 @pytest.mark.parametrize("mode,jobs", [("split", 1), ("pch", 2)])
-def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
+def test_real_engine_protected_declarations(tmp_path, mode, jobs, tool):
+    gate = "HARNESSMINIMIZER_TEST_TREEREDUCE" if tool == "treereduce" else "HARNESSMINIMIZER_TEST_PERSES"
+    if os.environ.get(gate) != "1":
+        pytest.skip(f"opt-in real-engine integration: {gate}=1")
     original = tmp_path / "original.cpp"
     original.write_text(
         "#include <cstddef>\n"
@@ -57,6 +59,7 @@ def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
     invocation = prepare_reducer_invocation(
         source=str(source), output=str(output),
         checker_command=[str(checker), "@@.cpp"], stable=True, jobs=jobs,
+        tool=tool,
     )
     # Keep a finite test deadline without altering reducer options.
     deadline = float(os.environ.get("HARNESSMINIMIZER_TEST_ENGINE_TIMEOUT", "300"))
@@ -66,7 +69,7 @@ def test_real_treereduce_protected_declarations(tmp_path, mode, jobs):
         result = invocation.run(bounded)
     except subprocess.TimeoutExpired:
         # Avoid pytest printing the supervisor's entire environment on failure.
-        pytest.fail(f"treereduce/{mode} exceeded the {deadline:g}s test deadline; artifacts: {tmp_path}",
+        pytest.fail(f"{tool}/{mode} exceeded the {deadline:g}s test deadline; artifacts: {tmp_path}",
                     pytrace=False)
     assert result.returncode == 0, result.stdout
     invocation.publish_result()

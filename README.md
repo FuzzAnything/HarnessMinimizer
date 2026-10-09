@@ -33,6 +33,33 @@ python tools/treereduce/install.py
 export HARNESSMINIMIZER_TREEREDUCE="$(pwd)/.tools/bin/treereduce-c"
 ```
 
+Optionally install Java 17 and Bazelisk for the Perses, WDD, and CDD engines.
+
+```bash
+apt-get update
+apt-get install -y openjdk-17-jdk-headless coreutils unzip zip
+mkdir -p .tools/bin
+curl -fL --retry 3 \
+  https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64 \
+  -o .tools/bin/bazelisk
+chmod +x .tools/bin/bazelisk
+export PATH="$(pwd)/.tools/bin:$PATH"
+```
+
+Obtain Perses from upstream and build the supported revision; its checkout selects Bazel 9.1.0.
+
+```bash
+mkdir -p .tools/perses
+git clone https://github.com/uw-pluverse/perses.git .tools/perses/source
+git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2
+python tools/perses/install.py --source .tools/perses/source --jobs 2
+export HARNESSMINIMIZER_PERSES_JAR="$(pwd)/.tools/perses/perses_deploy.jar"
+```
+
+These optional engines use the same external Perses JAR. Set
+`HARNESSMINIMIZER_PERSES_JAR` in each shell that uses them; optionally set
+`HARNESSMINIMIZER_PERSES_HEAP` to change the Java heap limit (default: `4g`).
+
 ## Reduce a harness
 
 Replace the absolute paths below with your harness, crash input, target library,
@@ -44,6 +71,7 @@ Optimized pipeline:
 
 ```bash
 harnessminimizer /path/to/harness.cpp \
+  --tool treereduce \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -55,6 +83,7 @@ Unoptimized pipeline:
 
 ```bash
 harnessminimizer /path/to/harness.cpp \
+  --tool treereduce \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -64,7 +93,8 @@ harnessminimizer /path/to/harness.cpp \
 
 The default is the **unoptimized configuration**: **split compilation** with
 **symbolization on**, **PCH off**, and **amortized linking off**. HarnessMinimizer
-uses **treereduce** as its sole reduction engine and **60 workers** by default.
+uses **treereduce** and **60 workers** by default. Replace `--tool treereduce`
+with `--tool perses`, `--tool wdd`, or `--tool cdd` to use an optional engine.
 Profiling and stable mode are **off** unless explicitly enabled.
 
 | Argument | Purpose |
@@ -74,6 +104,7 @@ Profiling and stable mode are **off** unless explicitly enabled.
 | `--crash-input` | Optional crashing input file passed to the harness. |
 | `--compile-flags="..."` | Compiler flags, such as include paths, defines, and language standard. |
 | `--link-flags="..."` | Linker flags, such as library paths, library names, or full archive paths. |
+| `--tool` | Reduction engine: `treereduce` (default), `perses`, `wdd`, or `cdd`. The latter three require the separately installed Perses JAR. |
 | `-j`, `--jobs` | Requested concurrent candidate checks: 1–63, default 60. |
 | `--direct`, `--split`, `--pch` | Compile and link in one step; compile then link separately (default); or use precompiled headers with separate compilation and linking. |
 | `--amortize-link` | Reuse a persistent runner and shared/static target libraries. |
@@ -98,6 +129,7 @@ from harnessminimizer import ReductionConfig, reduce_with_config
 
 result = reduce_with_config(ReductionConfig(
     harness_path="/path/to/harness.cpp",
+    tool="treereduce",
     crash_input="/path/to/inputs/crash-input",
     compile_flags="-I/path/to/library/include",
     link_flags="-L/path/to/library/lib -ltarget",
@@ -116,16 +148,24 @@ the files in `result.generated_headers` alongside it.
 
 ## Reference
 
-This tool integrates the reduction engine Treereduce:
+Supported reduction engines:
 
 - Treereduce: [https://github.com/langston-barrett/treereduce](https://github.com/langston-barrett/treereduce)
+- Perses, WDD and CDD: [https://github.com/uw-pluverse/perses](https://github.com/uw-pluverse/perses)
 
 ## License
 
-HarnessMinimizer, including its modified FuzzedDataProvider (FDP) and treereduce
-components, is distributed as a whole under AGPL-3.0-only or a separately
+HarnessMinimizer is distributed as a whole under AGPL-3.0-only or a separately
 negotiated commercial license: see [LICENSE](LICENSE). Applicable upstream
 license conditions and notices remain in effect: see
 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for component details.
+
+Perses is an optional external program licensed under GPL-3.0-or-later. It is not part of HarnessMinimizer.
+HarnessMinimizer does not bundle Perses source or binaries: users obtain and
+build Perses separately, and HarnessMinimizer invokes its command-line interface
+using candidate files and a checker script. Our installer and adapter scripts are
+covered by HarnessMinimizer's license and a commercial license for HarnessMinimizer
+does not grant exceptions to Perses's license. See the
+[upstream Perses license](https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE).
 
 If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.

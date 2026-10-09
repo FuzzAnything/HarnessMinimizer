@@ -6,7 +6,7 @@ separately negotiated commercial license, as described in LICENSE.
 
 The entries below identify upstream sources, licenses, and modifications.
 Applicable upstream license conditions, copyright notices, and permissions
-remain in effect under either option. Full upstream license texts are
+remain in effect under either option. Full upstream license texts for included code are
 preserved in THIRD_PARTY_LICENSES/.
 
 LLVM FuzzedDataProvider
@@ -52,5 +52,32 @@ HarnessMinimizer Authors added process-group cleanup for timeouts/cancellation
 and a supervisor version probe. The patched treereduce source and executable
 are distributed as a whole under LICENSE, with the upstream MIT copyright
 and permission notice preserved. The installer is also covered by LICENSE.
+
+Optional external Perses engines
+-------------------------------
+
+Upstream project: Perses
+Source: https://github.com/uw-pluverse/perses
+Supported revision: 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2
+Upstream license: GPL-3.0-or-later
+License text: https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE
+Version grant: https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/src/org/perses/reduction/reducer/PersesNodeReducer.kt
+
+Applicable HarnessMinimizer integration files:
+- tools/perses/install.py builds a separately obtained, unmodified upstream
+  checkout and installs the resulting JAR locally.
+- src/harnessminimizer/reduction_engines.py invokes the external program with
+  command-line arguments, candidate files, and a checker script. The script
+  translates checker exit codes into Perses's interestingness-test protocol.
+
+The perses, wdd, and cdd selections use the same Perses JAR with different
+list-minimizer configurations. HarnessMinimizer does not include Perses source
+or binaries in this repository or its Python distributions, and does not patch
+the upstream implementation. Users obtain Perses separately from upstream.
+
+Our installer and command-line adapter are covered by LICENSE. The separately
+installed Perses program remains under its upstream GPL-3.0-or-later terms.
+HarnessMinimizer's commercial license does not cover Perses or grant exceptions
+to its license.
 
 Separately installed dependencies retain their own licenses and notices.

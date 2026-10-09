@@ -95,7 +95,7 @@ def reduce_with_initializer_recovery(
             metadata["compile_flags_response_file"] = str(protected_dir / "compile_flags.rsp")
             metadata.update(triggered=True, attempt_count=2, status="retrying")
             print(
-                f"[+] Retrying treereduce from the original tagged source with "
+                f"[+] Retrying reduction from the original tagged source with "
                 f"{len(protection.declarations)} protected declarations "
                 f"({len(protection.skipped)} unsupported declarations skipped)."
             )

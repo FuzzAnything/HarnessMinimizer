@@ -10,7 +10,7 @@ import pytest
 
 from harnessminimizer.macro_headers import prepare_macro_headers
 from harnessminimizer.reduction_engines import (
-    prepare_reducer_invocation,
+    PersesRuntime, prepare_reducer_invocation,
 )
 from harnessminimizer.reducer_runner import PchArtifacts, _split_source_for_pch, restore_pch_includes
 from harnessminimizer.process_supervisor import run_supervised
@@ -84,7 +84,11 @@ def test_restore_uses_include_identity_not_positions_and_preserves_user_includes
 
 
 @pytest.mark.parametrize("mode", ["split", "pch"])
-def test_treereduce_restores_output_and_snapshot(tmp_path, mode):
+@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+def test_engine_restores_output_and_snapshot(tmp_path, monkeypatch, mode, tool):
+    monkeypatch.setattr("harnessminimizer.reduction_engines.check_perses", lambda: PersesRuntime(
+        ("java", "-jar", "/test/perses.jar"), "digest", "version", "java 17", None,
+    ))
     original = tmp_path / "source.cpp"
     source = '#include <cstddef>\nint before;\n#define VALUE (7 + 8 + 9)\nint value = VALUE;\n'
     original.write_text(source)
@@ -100,8 +104,9 @@ def test_treereduce_restores_output_and_snapshot(tmp_path, mode):
         source=str(engine_input), output=str(destination),
         checker_command=["checker.py", "@@.cpp", "--last-interesting-file", str(snapshot)],
         stable=True, jobs=2,
+        tool=tool,
     )
-    key = "-s"
+    key = "-s" if tool == "treereduce" else "--input-file"
     engine_source = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
     assert "#define" not in engine_source
     assert ("#include <cstddef>" in engine_source) == (mode == "split")

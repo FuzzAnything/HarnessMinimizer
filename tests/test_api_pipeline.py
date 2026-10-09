@@ -18,6 +18,7 @@ from harnessminimizer.reducer_runner import HarnessCrashDetected
 class TestApiPipeline(unittest.TestCase):
     def test_defaults_use_unoptimized_configuration(self):
         config = ReductionConfig("h.cpp")
+        self.assertEqual(config.tool, "treereduce")
         self.assertEqual(config.compilation_mode, "split")
         self.assertTrue(config.symbolize)
         self.assertFalse(config.amortize_link)
@@ -336,6 +337,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
+            tool="treereduce",
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -626,6 +628,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
+            tool="treereduce",
         )
 
     @patch("harnessminimizer.api.validate_stack_trace")
@@ -769,6 +772,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
+            tool="treereduce",
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
@@ -796,10 +800,10 @@ if __name__ == "__main__":
 
 def test_removed_api_options_are_rejected():
     import pytest
-    for name in ("tool", "check", "statistics", "capture_raw_output", "replay_enabled", "oracle_evaluation"):
+    for name in ("check", "statistics", "capture_raw_output", "replay_enabled", "oracle_evaluation"):
         with pytest.raises(TypeError, match=name):
             ReductionConfig("h.cpp", **{name: True})
-    for name in ("tool", "check", "statistics"):
+    for name in ("check", "statistics"):
         with pytest.raises(TypeError, match=name):
             process("h.cpp", **{name: True})
     with pytest.raises(TypeError, match="raw_reduced_harness"):

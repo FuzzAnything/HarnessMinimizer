@@ -24,6 +24,12 @@ third-party code under either option. Upstream copyright notices, license
 texts, and permissions are preserved. See THIRD_PARTY_NOTICES and
 THIRD_PARTY_LICENSES/ for component details and license texts.
 
+Optional external programs, including separately installed Perses, retain
+their own licenses. A commercial license for HarnessMinimizer does not cover
+Perses or grant exceptions to its GPL-3.0-or-later terms. HarnessMinimizer's
+installer and command-line adapter are covered by this file; see
+THIRD_PARTY_NOTICES for details of the external integration.
+
 -------------------------------------------------------------------------------
 
                     GNU AFFERO GENERAL PUBLIC LICENSE
