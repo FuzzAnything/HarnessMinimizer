@@ -2,9 +2,8 @@ HarnessMinimizer Dual License
 
 Copyright (C) 2026 HarnessMinimizer Authors
 
-Except for files or components that contain a separate license notice,
-HarnessMinimizer is available under a dual-license model. You may use
-HarnessMinimizer under either:
+HarnessMinimizer is distributed as a whole under a dual-license model.
+You may use HarnessMinimizer under either:
 
 1. GNU Affero General Public License, Version 3 only (AGPL-3.0-only), as
    reproduced below; or
@@ -20,7 +19,10 @@ HarnessMinimizer under either:
 
 Commercial licensing contact: [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com)
 
-Third-party components remain subject to their respective license terms.
+Applicable upstream license conditions continue to apply to included
+third-party code under either option. Upstream copyright notices, license
+texts, and permissions are preserved. See THIRD_PARTY_NOTICES and
+THIRD_PARTY_LICENSES/ for component details and license texts.
 
 -------------------------------------------------------------------------------
 
