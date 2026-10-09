@@ -125,3 +125,6 @@ This tool integrates the reduction engine Treereduce:
 HarnessMinimizer is available under AGPL-3.0-only or a separately negotiated
 commercial license: see [LICENSE](LICENSE). Third-party components retain their
 own licenses, as described in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
+
+If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
+d

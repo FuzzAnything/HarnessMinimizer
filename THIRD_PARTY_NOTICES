@@ -49,7 +49,6 @@ The patch adds process-group cleanup for timeouts/cancellation and a supervisor
 version probe. HarnessMinimizer-authored patch additions and the installer are
 covered by LICENSE; the upstream code retains its MIT copyright and permission
 notice. The patched executable is not distributed under MIT alone: its
-HarnessMinimizer-authored additions are subject to LICENSE. Upstream Cargo license fields describe
-the upstream code, not the additional HarnessMinimizer patch.
+HarnessMinimizer-authored additions are subject to LICENSE.
 
 Separately installed dependencies retain their own licenses and notices.

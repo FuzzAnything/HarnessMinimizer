@@ -14,7 +14,11 @@ HarnessMinimizer under either:
    distribution, or network deployment without the obligations of the
    AGPL-3.0-only. No commercial license is granted by this file.
 
-Commercial licensing contact:
+   If you cannot comply with the requirements of AGPL-3.0-only for your
+   intended use of HarnessMinimizer, obtain a separate commercial license
+   before proceeding.
+
+Commercial licensing contact: [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com)
 
 Third-party components remain subject to their respective license terms.
 
@@ -681,3 +685,10 @@ specific requirements.
 if any, to sign a "copyright disclaimer" for the program, if necessary.
 For more information on this, and how to apply and follow the GNU AGPL, see
 <https://www.gnu.org/licenses/>.
+
+-------------------------------------------------------------------------------
+
+If you cannot comply with the requirements of AGPL-3.0-only for your intended
+use of HarnessMinimizer, obtain a separate commercial license before proceeding.
+
+To obtain a commercial license, contact [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com).
