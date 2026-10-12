@@ -150,18 +150,32 @@ Supported reduction engines:
 
 ## License
 
-HarnessMinimizer is distributed as a whole under AGPL-3.0-only or a separately
-negotiated commercial license: see [LICENSE](LICENSE). Applicable upstream
-license conditions and notices remain in effect: see
-[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for component details.
+HarnessMinimizer is distributed as a whole under a **dual-license model**.
+You can choose either option:
 
-Perses is an optional external program licensed under GPL-3.0-or-later.
-It is not part of the HarnessMinimizer distribution.
-HarnessMinimizer does not bundle Perses source or binaries: users obtain and
-build Perses separately, and HarnessMinimizer invokes its command-line interface
-using candidate files and a checker script. Our installer and adapter scripts are
-covered by HarnessMinimizer's license and a commercial license for HarnessMinimizer
-does not grant exceptions to Perses's license. See the
-[upstream Perses license](https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE).
+1. **Free, under AGPL-3.0-only.** Use, modify, and share HarnessMinimizer,
+   under the AGPL's terms. If you distribute covered
+   binaries, provide the corresponding source as required by the license.
+   If you run a modified version as a network service, offer its corresponding
+   source to users who interact with it remotely. Full terms: [LICENSE](LICENSE).
+
+2. **Commercial license.** If you cannot or do not want to meet the AGPL
+   requirements for your intended use, obtain a separately negotiated commercial
+   license before proceeding. Contact
+   [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com).
+   This repository does not grant a commercial license.
+
+**Third-party code.** Upstream license conditions and notices for LLVM's
+FuzzedDataProvider (**Apache-2.0 with LLVM exceptions**) and treereduce (**MIT**)
+remain applicable under either option. See
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for details and
+[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/) for the upstream license texts.
+
+**Optional Perses engines.** Perses is a separate external program under
+[GPL-3.0-or-later](https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE).
+It is **not part of the HarnessMinimizer distribution**: users obtain and build
+it separately, and HarnessMinimizer invokes its command-line interface.
+Our installer and adapter use HarnessMinimizer's license; a commercial license
+for HarnessMinimizer does not grant exceptions to Perses's license.
 
 If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
