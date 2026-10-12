@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 340" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">HarnessMinimizer: a smaller harness with the crash preserved</title>
+  <desc id="description">Layered code panels flow through a luminous minimization core into a compact harness. Highlighted code is retained, and the output is marked Crash preserved.</desc>
+  <defs>
+    <linearGradient id="background" x1="80" y1="0" x2="1020" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAFF"/>
+      <stop offset="1" stop-color="#EEF2FF"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#A6A4FB" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#A6A4FB" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blueHalo">
+      <stop stop-color="#8CCBFF" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#8CCBFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F7F9FF"/>
+    </linearGradient>
+    <linearGradient id="core" x1="486" y1="104" x2="596" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A9B6FF"/>
+      <stop offset=".4" stop-color="#7465EC"/>
+      <stop offset="1" stop-color="#3F38AE"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="344" y1="170" x2="718" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#477FE5" stop-opacity=".45"/>
+      <stop offset=".48" stop-color="#6355DB"/>
+      <stop offset="1" stop-color="#6355DB" stop-opacity=".8"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="486" y1="100" x2="572" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="14" cy="14" r=".8" fill="#8395C4" opacity=".24"/>
+    </pattern>
+    <filter id="panelShadow" x="-15%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#2B3D76" flood-opacity=".13"/>
+    </filter>
+    <filter id="coreShadow" x="-60%" y="-40%" width="220%" height="200%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#3F38AE" flood-opacity=".24"/>
+    </filter>
+    <clipPath id="canvas"><rect x="1" y="1" width="1078" height="338" rx="24"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#canvas)">
+    <rect x="1" y="1" width="1078" height="338" rx="24" fill="url(#background)"/>
+    <rect x="350" y="0" width="380" height="340" fill="url(#grid)"/>
+    <ellipse cx="542" cy="170" rx="290" ry="208" fill="url(#halo)"/>
+    <ellipse cx="974" cy="128" rx="200" ry="236" fill="url(#blueHalo)"/>
+    <path d="M350 43C470 3 647 3 732 48M370 303C478 341 636 330 714 285" stroke="#B6BDE8" opacity=".4"/>
+
+    <!-- Fine traces converge on the core; the retained signal continues to the output. -->
+    <g stroke-linecap="round">
+      <path d="M337 117C404 117 409 143 466 150M345 218C407 218 416 200 466 193" stroke="#ACB8DB" stroke-width="1.5"/>
+      <path d="M344 171H467M613 171H716" stroke="url(#signal)" stroke-width="3"/>
+      <path d="M615 151C661 151 666 147 718 147M615 193C661 193 666 206 718 206" stroke="#ACB8DB" stroke-width="1.5"/>
+    </g>
+    <g fill="#6355DB">
+      <circle cx="410" cy="171" r="4"/>
+      <circle cx="673" cy="171" r="4"/>
+      <circle cx="434" cy="142" r="2.5" opacity=".55"/>
+      <circle cx="431" cy="201" r="2.5" opacity=".55"/>
+    </g>
+
+    <!-- Translucent source sheets add depth without literal code or small text. -->
+    <rect x="57" y="82" width="292" height="180" rx="15" transform="rotate(-5 203 172)" fill="#E6ECFB" stroke="#CBD5ED" opacity=".62"/>
+    <rect x="64" y="78" width="292" height="180" rx="15" transform="rotate(3 210 168)" fill="#EEF2FF" stroke="#CBD5ED" opacity=".8"/>
+    <g filter="url(#panelShadow)">
+      <rect x="48" y="70" width="296" height="180" rx="15" fill="url(#panel)" stroke="#CBD5ED"/>
+    </g>
+    <path d="M49 105H343" stroke="#E4EAF5"/>
+    <g fill="#CBD4E8">
+      <circle cx="67" cy="87" r="3.5"/>
+      <circle cx="80" cy="87" r="3.5"/>
+      <circle cx="93" cy="87" r="3.5"/>
+    </g>
+    <path d="M315 82L320 87L315 92M302 82L297 87L302 92" stroke="#8191B6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="91" y="149" width="220" height="23" rx="6" fill="#6355DB" opacity=".08"/>
+    <rect x="91" y="199" width="186" height="23" rx="6" fill="#6355DB" opacity=".08"/>
+    <g stroke="#E4EAF5" stroke-width="3" stroke-linecap="round">
+      <path d="M68 126H73M68 143H73M68 160H73M68 177H73M68 194H73M68 211H73M68 228H73"/>
+    </g>
+    <g stroke-width="6" stroke-linecap="round">
+      <path d="M92 126H125M138 126H198M210 126H271" stroke="#8191B6"/>
+      <path d="M104 143H160M173 143H241" stroke="#CBD4E8"/>
+      <path d="M104 160H137M150 160H207M220 160H298" stroke="#6355DB"/>
+      <path d="M117 177H179M193 177H277" stroke="#CBD4E8"/>
+      <path d="M117 194H146M159 194H240" stroke="#CBD4E8"/>
+      <path d="M104 211H148M162 211H263" stroke="#6355DB"/>
+      <path d="M92 228H123M137 228H192" stroke="#8191B6"/>
+    </g>
+
+    <!-- A faceted minimization core, with an inset compression mark. -->
+    <ellipse cx="540" cy="175" rx="108" ry="41" transform="rotate(-30 540 175)" stroke="#B6BDE8" opacity=".55"/>
+    <ellipse cx="540" cy="175" rx="108" ry="41" transform="rotate(30 540 175)" stroke="#B6BDE8" opacity=".35"/>
+    <g filter="url(#coreShadow)">
+      <path d="M468 209L540 251L612 209V220L540 262L468 220Z" fill="#312887"/>
+      <path d="M540 91L612 133V209L540 251L468 209V133Z" fill="url(#core)"/>
+      <path d="M540 91L612 133V209L540 251L468 209V133Z" stroke="#F3F1FF" stroke-opacity=".55"/>
+      <path d="M540 102L602 139V203L540 239L478 203V139Z" fill="url(#sheen)" stroke="#FFFFFF" stroke-opacity=".24"/>
+      <path d="M468 133L540 176L612 133L540 91Z" fill="#FFFFFF" opacity=".07"/>
+      <path d="M540 251V239M468 209L478 203M612 209L602 203" stroke="#C8C0FF" stroke-opacity=".3"/>
+      <path d="M498 148L516 171L498 194M582 148L564 171L582 194" stroke="#EDF0FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M534 157H546M530 171H550M534 185H546" stroke="#EDF0FF" stroke-width="4" stroke-linecap="round"/>
+    </g>
+    <g stroke="#6355DB" stroke-linecap="round" opacity=".65">
+      <path d="M629 96V106M624 101H634"/>
+      <path d="M445 249V255M442 252H448"/>
+    </g>
+    <circle cx="460" cy="91" r="2" fill="#6355DB" opacity=".45"/>
+    <circle cx="634" cy="247" r="2" fill="#6355DB" opacity=".45"/>
+
+    <!-- The reduced panel keeps the highlighted statements. -->
+    <rect x="725" y="111" width="296" height="137" rx="15" transform="rotate(3 873 179)" fill="#EEF2FF" stroke="#CBD5ED" opacity=".7"/>
+    <g filter="url(#panelShadow)">
+      <rect x="718" y="100" width="296" height="137" rx="15" fill="url(#panel)" stroke="#6355DB" stroke-opacity=".6"/>
+    </g>
+    <path d="M719 135H1013" stroke="#E4EAF5"/>
+    <g fill="#6355DB" opacity=".5">
+      <circle cx="737" cy="117" r="3.5"/>
+      <circle cx="750" cy="117" r="3.5"/>
+      <circle cx="763" cy="117" r="3.5"/>
+    </g>
+    <path d="M985 112L990 117L985 122M972 112L967 117L972 122" stroke="#6355DB" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="761" y="172" width="220" height="23" rx="6" fill="#6355DB" opacity=".08"/>
+    <rect x="761" y="199" width="186" height="23" rx="6" fill="#6355DB" opacity=".08"/>
+    <g stroke="#E4EAF5" stroke-width="3" stroke-linecap="round">
+      <path d="M738 157H743M738 184H743M738 211H743"/>
+    </g>
+    <g stroke-width="6" stroke-linecap="round">
+      <path d="M762 157H795M808 157H868M880 157H941" stroke="#8191B6"/>
+      <path d="M774 184H807M820 184H877M890 184H968" stroke="#6355DB"/>
+      <path d="M774 211H818M832 211H933" stroke="#6355DB"/>
+    </g>
+
+    <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="28" font-weight="600" letter-spacing="-.6">
+      <text x="48" y="48" fill="#34425F">Original harness</text>
+      <text x="718" y="78" fill="#343479">Minimized harness</text>
+    </g>
+    <rect x="728" y="265" width="276" height="44" rx="22" fill="#F0EEFF" stroke="#CFCBF1"/>
+    <path d="M748 287H755L760 278L766 297L772 282L776 287H783" stroke="#5144AB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="794" y="295" fill="#5144AB" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="24" font-weight="600" letter-spacing="-.35">Crash preserved</text>
+  </g>
+  <rect x="1" y="1" width="1078" height="338" rx="24" stroke="#DEE5F5"/>
+</svg>

@@ -1,8 +1,31 @@
-# HarnessMinimizer
+<h1 align="center">HarnessMinimizer</h1>
 
-HarnessMinimizer minimizes crashing C/C++ fuzz harnesses while preserving the crash.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harnessminimizer-banner-dark.svg">
+    <img src="docs/assets/harnessminimizer-banner-light.svg" alt="Layered code panels are condensed into a smaller harness, with the crash preserved." width="1000">
+  </picture>
+</p>
+
+<p align="center">
+HarnessMinimizer minimizes crashing C/C++ fuzz harnesses while preserving the crash.<br>
 It can be used through a command-line interface
 (CLI) and a Python API.
+</p>
+
+<p align="center">
+  <a href="#reduce-a-harness"><img src="https://img.shields.io/badge/harnesses-C%2FC%2B%2B-4f46e5?style=flat-square" alt="C/C++ harnesses"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%2B-2563eb?style=flat-square" alt="Python 3.12 or newer"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only%20%2F%20commercial-475569?style=flat-square" alt="License: AGPL-3.0-only or commercial"></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> &middot;
+  <a href="#reduce-a-harness">CLI&nbsp;usage</a> &middot;
+  <a href="#arguments">Arguments</a> &middot;
+  <a href="#python-api">Python&nbsp;API</a> &middot;
+  <a href="#license">License</a>
+</p>
 
 ## Installation
 
@@ -61,6 +84,11 @@ uses **treereduce** and **60 workers** by default. Replace `--tool treereduce`
 with `--tool perses`, `--tool wdd`, or `--tool cdd` to use an optional engine.
 Profiling and stable mode are **off** unless explicitly enabled.
 
+<a id="arguments"></a>
+
+<details>
+<summary><strong>Command-line arguments</strong></summary>
+
 | Argument | Purpose |
 | --- | --- |
 | `harness` | Required path to the original harness source. |
@@ -82,6 +110,9 @@ Choose only one of `--direct`, `--split`, and `--pch`. `--amortize-link` require
 split or PCH mode and shared or static target libraries in the link flags.
 Use the `--compile-flags="..."` and `--link-flags="..."` spelling shown above for
 values beginning with `-`. See `harnessminimizer --help` for the full option list.
+
+</details>
+
 The CLI copies any required generated header files beside the output harness.
 
 ### Python API
