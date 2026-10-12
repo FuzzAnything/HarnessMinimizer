@@ -173,9 +173,9 @@ remain applicable under either option. See
 
 **Optional Perses engines.** Perses is a separate external program under
 [GPL-3.0-or-later](https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE).
-It is **not part of the HarnessMinimizer distribution**: users obtain and build
-it separately, and HarnessMinimizer invokes its command-line interface.
-Our installer and adapter use HarnessMinimizer's license; a commercial license
+It is **not bundled in HarnessMinimizer's source repository or Python packages**:
+users obtain and build it separately, or the Docker build downloads and installs
+it automatically. HarnessMinimizer invokes its command-line interface. A commercial license
 for HarnessMinimizer does not grant exceptions to Perses's license.
 
 If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
