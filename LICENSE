@@ -17,7 +17,7 @@ You may use HarnessMinimizer under either:
    intended use of HarnessMinimizer, obtain a separate commercial license
    before proceeding.
 
-Commercial licensing contact: [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com)
+Commercial licensing contact: fuzzanything@gmail.com
 
 Applicable upstream license conditions continue to apply to included
 third-party code under either option. Upstream copyright notices, license
@@ -93,7 +93,7 @@ modification follow.
 
                        TERMS AND CONDITIONS
 
-  0. Definitions.
+  1. Definitions.
 
   "This License" refers to version 3 of the GNU Affero General Public License.
 
@@ -700,4 +700,4 @@ For more information on this, and how to apply and follow the GNU AGPL, see
 If you cannot comply with the requirements of AGPL-3.0-only for your intended
 use of HarnessMinimizer, obtain a separate commercial license before proceeding.
 
-To obtain a commercial license, contact [fuzzanything@gmail.com](mailto:fuzzanything@gmail.com).
+To obtain a commercial license, contact fuzzanything@gmail.com.

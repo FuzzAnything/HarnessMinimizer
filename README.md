@@ -86,8 +86,10 @@ Profiling and stable mode are **off** unless explicitly enabled.
 
 <a id="arguments"></a>
 
+## Command-line arguments
+
 <details>
-<summary><strong>Command-line arguments</strong></summary>
+<summary><strong>Show available arguments</strong></summary>
 
 | Argument | Purpose |
 | --- | --- |
@@ -115,7 +117,7 @@ values beginning with `-`. See `harnessminimizer --help` for the full option lis
 
 The CLI copies any required generated header files beside the output harness.
 
-### Python API
+## Python API
 
 Run the same reduction from Python and check that it succeeded before using the result.
 
@@ -153,7 +155,7 @@ Supported reduction engines:
 HarnessMinimizer is distributed as a whole under a **dual-license model**.
 You can choose either option:
 
-1. **Free, under AGPL-3.0-only.** Use, modify, and share HarnessMinimizer,
+1. **Open-source license (AGPL-3.0-only).** Use, modify, and share HarnessMinimizer
    under the AGPL's terms. If you distribute covered
    binaries, provide the corresponding source as required by the license.
    If you run a modified version as a network service, offer its corresponding
@@ -178,4 +180,4 @@ users obtain and build it separately, or the Docker build downloads and installs
 it automatically. HarnessMinimizer invokes its command-line interface. A commercial license
 for HarnessMinimizer does not grant exceptions to Perses's license.
 
-If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
+**Acknowledgment.** If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
