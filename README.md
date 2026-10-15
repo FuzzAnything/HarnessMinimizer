@@ -24,6 +24,7 @@ It can be used through a command-line interface
   <a href="#reduce-a-harness">CLI&nbsp;usage</a> &middot;
   <a href="#arguments">Arguments</a> &middot;
   <a href="#python-api">Python&nbsp;API</a> &middot;
+  <a href="https://github.com/FuzzAnything/HarnessMinimizer-evaluation">Paper&nbsp;Experiments</a> &middot;
   <a href="#license">License</a>
 </p>
 
