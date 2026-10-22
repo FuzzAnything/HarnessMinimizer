@@ -181,4 +181,23 @@ users obtain and build it separately, or the Docker build downloads and installs
 it automatically. HarnessMinimizer invokes its command-line interface. A commercial license
 for HarnessMinimizer does not grant exceptions to Perses's license.
 
-**Acknowledgment.** If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications.
+## Citation
+
+**Acknowledgment.** If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications. Please consider citing:
+
+```bibtex
+@misc{HarnessMinimizer,
+      title={Efficient Program Reduction for Library Fuzzing Harnesses},
+      author={Haiying Li and Yunlong Lyu and Peng Chen and Hao Chen},
+      year={2026},
+      eprint={2610.23054},
+      archivePrefix={arXiv},
+      primaryClass={cs.SE},
+      url={https://arxiv.org/abs/2610.23054},
+}
+```
+
+---
+
+> [!NOTE]
+> To reproduce the experimental results reported in the paper, visit [FuzzAnything/HarnessMinimizer-evaluation](https://github.com/FuzzAnything/HarnessMinimizer-evaluation).
