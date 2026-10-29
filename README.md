@@ -183,7 +183,7 @@ for HarnessMinimizer does not grant exceptions to Perses's license.
 
 ## Citation
 
-**Acknowledgment.** If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications. Please consider citing:
+**Acknowledgment.** If you use or integrate HarnessMinimizer, we appreciate an acknowledgment in your project documentation or research publications. Please consider citing our [paper](https://arxiv.org/abs/2610.23054):
 
 ```bibtex
 @misc{HarnessMinimizer,
