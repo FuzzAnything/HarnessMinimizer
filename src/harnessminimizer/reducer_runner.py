@@ -1464,32 +1464,35 @@ def plan_static_archive_runner_link(
             root_symbols.difference_update(defined_symbols_from_static_libraries(
                 link_inputs.object_files,
             ))
+        # An empty result is a valid selection: the harness may get every
+        # target symbol from a DSO that already contains these dependencies.
+        # Whole-archiving here would introduce competing copies in the runner.
         root_symbols = tuple(sorted(root_symbols))
-        if root_symbols or link_inputs.object_files:
-            (
-                static_libraries,
-                visibility_exported_libraries,
-                visibility_exported_symbol_count,
-            ) = _prepare_visibility_exported_static_libraries(
-                link_inputs.static_libraries,
-                root_symbols,
-                export_dir=export_dir,
-            )
-            flags: list[str] = [
-                "-no-pie",
-                "-Wl,--export-dynamic",
-                *(f"-Wl,-u,{symbol}" for symbol in root_symbols),
-                *static_libraries,
-            ]
-            return StaticArchiveLinkPlan(
-                flags=tuple(flags),
-                root_symbols=root_symbols,
-                uses_whole_archive=False,
-                visibility_exported_libraries=visibility_exported_libraries,
-                visibility_exported_symbol_count=visibility_exported_symbol_count,
-                static_libraries=static_libraries,
-            )
+        (
+            static_libraries,
+            visibility_exported_libraries,
+            visibility_exported_symbol_count,
+        ) = _prepare_visibility_exported_static_libraries(
+            link_inputs.static_libraries,
+            root_symbols,
+            export_dir=export_dir,
+        )
+        flags: list[str] = [
+            "-no-pie",
+            "-Wl,--export-dynamic",
+            *(f"-Wl,-u,{symbol}" for symbol in root_symbols),
+            *static_libraries,
+        ]
+        return StaticArchiveLinkPlan(
+            flags=tuple(flags),
+            root_symbols=root_symbols,
+            uses_whole_archive=False,
+            visibility_exported_libraries=visibility_exported_libraries,
+            visibility_exported_symbol_count=visibility_exported_symbol_count,
+            static_libraries=static_libraries,
+        )
 
+    # Retain the fallback for callers that provide no harness-object analysis.
     return StaticArchiveLinkPlan(
         flags=(
             "-no-pie",
@@ -1515,25 +1518,31 @@ def amortized_runner_link_tail(
         static_root_object,
         export_dir=export_dir,
     )
-    if link_inputs.object_files:
-        # Export fixed helper definitions just like rooted archive definitions.
-        # Work on copies: uploaded/built object files remain untouched.
-        object_symbols = _nm_posix_symbols(
-            ["nm", "-g", "--defined-only", "--format=posix", *link_inputs.object_files],
-            "Failed to inspect fixed object symbols",
-        )
-        objects, _, _ = _prepare_visibility_exported_static_libraries(
-            link_inputs.object_files, tuple(sorted(object_symbols)), export_dir=export_dir,
-        )
-        replacements = dict(zip(link_inputs.object_files, objects))
+    if link_inputs.object_files or (
+        static_root_object is not None and link_inputs.ordered_link_flags
+    ):
+        replacements: dict[str, str] = {}
+        if link_inputs.object_files:
+            # Export fixed helper definitions just like rooted archive definitions.
+            # Work on copies: uploaded/built object files remain untouched.
+            object_symbols = _nm_posix_symbols(
+                ["nm", "-g", "--defined-only", "--format=posix", *link_inputs.object_files],
+                "Failed to inspect fixed object symbols",
+            )
+            objects, _, _ = _prepare_visibility_exported_static_libraries(
+                link_inputs.object_files, tuple(sorted(object_symbols)), export_dir=export_dir,
+            )
+            replacements.update(zip(link_inputs.object_files, objects))
         replacements.update(zip(link_inputs.static_libraries, static_plan.static_libraries))
         flags = [
             "-no-pie", "-Wl,--export-dynamic",
             *(f"-Wl,-u,{symbol}" for symbol in static_plan.root_symbols),
         ]
-        # Keep the user's object/archive ordering and linker-state scopes. The
-        # reference executable already selected the DSOs that must be retained;
-        # runner source itself need not reference them, so force retention here.
+        # Let the linker resolve roots in the original DSO/archive order and
+        # grouping. Moving archives ahead of DSOs would root duplicate symbols
+        # and lose helpers needed only by a DSO. The validated reference already
+        # selected the DSOs that must be retained; the runner source itself
+        # need not reference them, so force their retention here.
         for flag in link_inputs.ordered_link_flags:
             value = replacements.get(flag, flag)
             if flag in link_inputs.shared_libraries:
