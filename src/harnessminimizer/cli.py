@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Flags used only while linking, e.g. "
-            "'-L/path/lib -lfoo /path/libfoo.a'."
+            "'-L/path/lib -lfoo /path/libfoo.a /path/helper.o'."
         ),
     )
     parser.add_argument(
@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--amortize-link",
         action="store_true",
         help=(
-            "Reuse a persistent runner and shared/static target libraries during reduction. "
+            "Reuse a persistent runner, shared/static target libraries, and fixed object files during reduction. "
             "Requires split or PCH mode; when used alone, the default split mode applies."
         ),
     )

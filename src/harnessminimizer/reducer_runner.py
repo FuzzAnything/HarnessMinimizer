@@ -182,6 +182,8 @@ class AmortizedLinkInputs:
     runner_link_flags: tuple[str, ...]
     plugin_link_flags: tuple[str, ...] = ()
     shared_library_inputs: tuple[SharedLibraryInput, ...] = ()
+    object_files: tuple[str, ...] = ()
+    ordered_link_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,7 @@ class StaticArchiveLinkPlan:
     uses_whole_archive: bool
     visibility_exported_libraries: tuple[str, ...] = ()
     visibility_exported_symbol_count: int = 0
+    static_libraries: tuple[str, ...] = ()
 
 
 def cleanup() -> None:
@@ -902,7 +905,7 @@ def extract_first_dynamic_library_crash_site(
 def resolve_amortized_link_inputs(
     link_flags: str | None,
 ) -> AmortizedLinkInputs:
-    """Classify target libraries for the persistent amortized-link runner."""
+    """Classify fixed link inputs for the persistent amortized-link runner."""
     tokens = _split_flags(link_flags)
     library_dirs: list[Path] = []
     for index, token in enumerate(tokens):
@@ -915,6 +918,38 @@ def resolve_amortized_link_inputs(
     shared_aliases: dict[str, list[str]] = {}
     static_libraries: list[str] = []
     runner_link_flags: list[str] = []
+    object_files: list[str] = []
+    object_token_indexes: set[int] = set()
+    ordered_link_flags: list[str] = []
+
+    def add_runner_flags(*flags: str) -> None:
+        runner_link_flags.extend(flags)
+        ordered_link_flags.extend(flags)
+
+    def add_object_file(path: Path, start: int, end: int) -> None:
+        candidate = path.expanduser().resolve()
+        try:
+            with candidate.open("rb") as handle:
+                header = handle.read(18)
+        except OSError as exc:
+            raise ValueError(f"Could not read object file {candidate}: {exc}") from exc
+        byteorder = "little" if len(header) > 5 and header[5] == 1 else "big"
+        if (
+            len(header) < 18 or header[:4] != b"\x7fELF"
+            or header[5] not in (1, 2)
+            or int.from_bytes(header[16:18], byteorder) != 1  # ET_REL
+        ):
+            raise ValueError(
+                "--amortize-link requires an ELF relocatable object file: "
+                f"{candidate}. Compile it without LTO; libtool .lo metadata "
+                "must be replaced by its actual .o file."
+            )
+        # Objects are unconditional inputs, unlike lazily selected archive
+        # members. Preserve repeated operands so normal duplicate-definition
+        # diagnostics still apply, and never include them in candidate DSOs.
+        object_files.append(str(candidate))
+        ordered_link_flags.append(str(candidate))
+        object_token_indexes.update(range(start, end))
 
     def add_shared_library(
         path: Path,
@@ -953,13 +988,14 @@ def resolve_amortized_link_inputs(
                     "runner link flags for amortized-link: "
                     f"{candidate} -> {' '.join(fallback_flags)}"
                 )
-                runner_link_flags.extend(fallback_flags)
+                add_runner_flags(*fallback_flags)
                 return
             raise ValueError(
                 "--amortize-link requires a loadable ELF shared library, but "
                 f"{candidate} appears to be a linker script or another file type."
             )
         value = str(candidate)
+        ordered_link_flags.append(value)
         if value not in shared_libraries:
             shared_libraries.append(value)
         recorded = shared_aliases.setdefault(value, [])
@@ -984,6 +1020,7 @@ def resolve_amortized_link_inputs(
                 f"{candidate} does not have an ar archive header."
             )
         value = str(candidate)
+        ordered_link_flags.append(value)
         if value not in static_libraries:
             static_libraries.append(value)
 
@@ -1009,24 +1046,25 @@ def resolve_amortized_link_inputs(
     index = 0
     prefer_static = False
     while index < len(tokens):
+        flag_start = index
         token = tokens[index]
         if token == "-Wl,-Bstatic":
             prefer_static = True
+            ordered_link_flags.append(token)
             index += 1
             continue
         if token == "-Wl,-Bdynamic":
             prefer_static = False
+            ordered_link_flags.append(token)
             index += 1
             continue
         if token == "-L":
             if index + 1 < len(tokens):
-                runner_link_flags.extend(
-                    ["-L", str(Path(tokens[index + 1]).expanduser().resolve())]
-                )
+                add_runner_flags("-L", str(Path(tokens[index + 1]).expanduser().resolve()))
             index += 2
             continue
         if token.startswith("-L") and len(token) > 2:
-            runner_link_flags.append(
+            add_runner_flags(
                 "-L" + str(Path(token[2:]).expanduser().resolve())
             )
             index += 1
@@ -1042,16 +1080,13 @@ def resolve_amortized_link_inputs(
         else:
             path = Path(token)
             if token.endswith((".o", ".lo")):
-                raise ValueError(
-                    "--amortize-link does not support standalone object files: "
-                    f"{token}"
-                )
-            if _is_shared_library_path(path):
+                add_object_file(path, index, index + 1)
+            elif _is_shared_library_path(path):
                 add_shared_library(path)
             elif _is_static_library_path(path):
                 add_static_library(path)
             else:
-                runner_link_flags.append(token)
+                add_runner_flags(token)
             index += 1
             continue
 
@@ -1065,10 +1100,13 @@ def resolve_amortized_link_inputs(
                 runner_link_flags.append("-Wl,-Bdynamic")
             else:
                 runner_link_flags.extend(original_library_flags)
+            ordered_link_flags.extend(original_library_flags)
         elif _is_static_library_path(found):
             add_static_library(found)
         elif _is_shared_library_path(found):
             add_shared_library(found, fallback_flags=original_library_flags)
+        elif found.suffix in {".o", ".lo"}:
+            add_object_file(found, flag_start, index)
         else:
             raise ValueError(f"Unsupported library input resolved from -l: {found}")
 
@@ -1076,12 +1114,14 @@ def resolve_amortized_link_inputs(
     # original flags are only used if a specific candidate fails to dlopen with
     # an unresolved symbol, which covers hidden static APIs without penalizing
     # candidates that never reference them.
-    plugin_link_flags = tuple(tokens) if static_libraries else ()
+    plugin_link_flags = tuple(
+        token for index, token in enumerate(tokens) if index not in object_token_indexes
+    ) if static_libraries else ()
 
-    if not shared_libraries and not static_libraries:
+    if not shared_libraries and not static_libraries and not object_files:
         raise ValueError(
-            "--amortize-link requires at least one target library in --link-flags."
-            " Pass a full .so/.a path or use -L/path -ltarget."
+            "--amortize-link requires at least one target library or object in --link-flags."
+            " Pass a full .so/.a/.o path or use -L/path -ltarget."
         )
     return AmortizedLinkInputs(
         shared_libraries=tuple(shared_libraries),
@@ -1092,10 +1132,16 @@ def resolve_amortized_link_inputs(
             SharedLibraryInput(library, tuple(shared_aliases[library]))
             for library in shared_libraries
         ),
+        object_files=tuple(object_files),
+        ordered_link_flags=tuple(ordered_link_flags),
     )
 
 
 def _print_amortized_link_classification(link_inputs: AmortizedLinkInputs) -> None:
+    if link_inputs.object_files:
+        print("[+] Amortized-link fixed object files (linked once into runner):")
+        for object_file in link_inputs.object_files:
+            print(f"    {object_file}")
     print("[+] Amortized-link target shared libraries:")
     if link_inputs.shared_libraries:
         for library in link_inputs.shared_libraries:
@@ -1218,6 +1264,11 @@ def filter_amortized_shared_libraries_for_reference(
             shared for shared in link_inputs.shared_library_inputs
             if shared.load_path in retained
         ),
+        object_files=link_inputs.object_files,
+        ordered_link_flags=tuple(
+            flag for flag in link_inputs.ordered_link_flags
+            if flag not in link_inputs.shared_libraries or flag in retained
+        ),
     )
 
 
@@ -1325,6 +1376,7 @@ def _prepare_visibility_exported_static_libraries(
     *,
     export_dir: str | Path | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+    """Export selected symbols from copies of archives or native objects."""
     if not static_libraries or not root_symbols:
         return static_libraries, (), 0
 
@@ -1341,7 +1393,7 @@ def _prepare_visibility_exported_static_libraries(
 
     for index, library in enumerate(static_libraries):
         library_path = Path(library)
-        if _archive_magic(library_path) != b"!<arch>\n":
+        if _archive_magic(library_path) != b"!<arch>\n" and not _has_elf_magic(library_path):
             rewritten_libraries.append(library)
             continue
 
@@ -1397,11 +1449,23 @@ def plan_static_archive_runner_link(
         return StaticArchiveLinkPlan(flags=(), root_symbols=(), uses_whole_archive=False)
 
     if static_root_object is not None:
-        root_symbols = static_archive_root_symbols_from_object(
+        root_symbols = set(static_archive_root_symbols_from_object(
             static_root_object,
             link_inputs.static_libraries,
-        )
-        if root_symbols:
+        ))
+        if link_inputs.object_files:
+            # Fixed objects can both supply harness references and introduce
+            # their own archive dependencies. Do not pull a second definition
+            # from an archive for a symbol already supplied by a direct object.
+            for object_file in link_inputs.object_files:
+                root_symbols.update(static_archive_root_symbols_from_object(
+                    object_file, link_inputs.static_libraries,
+                ))
+            root_symbols.difference_update(defined_symbols_from_static_libraries(
+                link_inputs.object_files,
+            ))
+        root_symbols = tuple(sorted(root_symbols))
+        if root_symbols or link_inputs.object_files:
             (
                 static_libraries,
                 visibility_exported_libraries,
@@ -1423,6 +1487,7 @@ def plan_static_archive_runner_link(
                 uses_whole_archive=False,
                 visibility_exported_libraries=visibility_exported_libraries,
                 visibility_exported_symbol_count=visibility_exported_symbol_count,
+                static_libraries=static_libraries,
             )
 
     return StaticArchiveLinkPlan(
@@ -1435,6 +1500,7 @@ def plan_static_archive_runner_link(
         ),
         root_symbols=(),
         uses_whole_archive=True,
+        static_libraries=link_inputs.static_libraries,
     )
 
 
@@ -1449,6 +1515,34 @@ def amortized_runner_link_tail(
         static_root_object,
         export_dir=export_dir,
     )
+    if link_inputs.object_files:
+        # Export fixed helper definitions just like rooted archive definitions.
+        # Work on copies: uploaded/built object files remain untouched.
+        object_symbols = _nm_posix_symbols(
+            ["nm", "-g", "--defined-only", "--format=posix", *link_inputs.object_files],
+            "Failed to inspect fixed object symbols",
+        )
+        objects, _, _ = _prepare_visibility_exported_static_libraries(
+            link_inputs.object_files, tuple(sorted(object_symbols)), export_dir=export_dir,
+        )
+        replacements = dict(zip(link_inputs.object_files, objects))
+        replacements.update(zip(link_inputs.static_libraries, static_plan.static_libraries))
+        flags = [
+            "-no-pie", "-Wl,--export-dynamic",
+            *(f"-Wl,-u,{symbol}" for symbol in static_plan.root_symbols),
+        ]
+        # Keep the user's object/archive ordering and linker-state scopes. The
+        # reference executable already selected the DSOs that must be retained;
+        # runner source itself need not reference them, so force retention here.
+        for flag in link_inputs.ordered_link_flags:
+            value = replacements.get(flag, flag)
+            if flag in link_inputs.shared_libraries:
+                flags.extend(["-Wl,--push-state,--no-as-needed", value, "-Wl,--pop-state"])
+            elif flag in link_inputs.static_libraries and static_plan.uses_whole_archive:
+                flags.extend(["-Wl,--push-state,--whole-archive", value, "-Wl,--pop-state"])
+            else:
+                flags.append(value)
+        return flags
     return [
         *static_plan.flags,
         *runner_dynamic_dependency_link_flags(link_inputs),
@@ -1493,7 +1587,7 @@ def _compile_harness_runner(
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
     static_root_object = (
         compile_static_archive_root_object(static_root_config)
-        if static_root_config is not None and link_inputs.static_libraries
+        if static_root_config is not None and (link_inputs.static_libraries or link_inputs.object_files)
         else None
     )
     link_tail = amortized_runner_link_tail(link_inputs, static_root_object)
