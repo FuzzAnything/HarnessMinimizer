@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install patched treereduce with its notices and rebuildable source archive."""
+"""Install patched treereduce with its notices and rebuildable source archive.
+
+The tools/treereduce directory can be copied and installed on its own, including
+in an image build. Repository-level notices are included when available, but
+are not prerequisites for installing the reducer.
+"""
 import argparse
 import hashlib
 import json
@@ -101,17 +106,23 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
     notices = work / "notices"
     notices.mkdir()
     shutil.copyfile(tree / "LICENSE", notices / "LICENSE")
-    shutil.copyfile(PROJECT / "LICENSE", notices / "LICENSE.HarnessMinimizer")
-    shutil.copyfile(PROJECT / "THIRD_PARTY_NOTICES", notices / "THIRD_PARTY_NOTICES")
-    shutil.copytree(PROJECT / "THIRD_PARTY_LICENSES", notices / "THIRD_PARTY_LICENSES")
+    for name, destination in (("LICENSE", "LICENSE.HarnessMinimizer"),
+                              ("THIRD_PARTY_NOTICES", "THIRD_PARTY_NOTICES")):
+        if (PROJECT / name).is_file():
+            shutil.copyfile(PROJECT / name, notices / destination)
+    if (PROJECT / "THIRD_PARTY_LICENSES").is_dir():
+        shutil.copytree(PROJECT / "THIRD_PARTY_LICENSES", notices / "THIRD_PARTY_LICENSES")
     records = dependency_notices(tree, notices)
     (notices / "dependencies.json").write_text(json.dumps(records, indent=2) + "\n")
     rust_notices(notices, tree)
     (notices / "README.txt").write_text(
         "This is the HarnessMinimizer-patched treereduce-c executable.\n"
         "Upstream treereduce remains MIT-licensed (LICENSE). HarnessMinimizer's\n"
-        "patch additions are covered by LICENSE.HarnessMinimizer: AGPL-3.0-only\n"
-        "or a separately negotiated commercial license. The patched executable\n"
+        "patch additions are AGPL-3.0-only or covered by a separately negotiated\n"
+        "commercial license, as specified in the HarnessMinimizer repository's\n"
+        "LICENSE. Repository-level notices are included when available:\n"
+        "LICENSE.HarnessMinimizer, THIRD_PARTY_NOTICES and THIRD_PARTY_LICENSES/.\n"
+        "The patched executable\n"
         "is not offered as MIT-only. Third-party terms remain in effect.\n\n"
         "dependencies.json identifies the locked crates and their notices in\n"
         "dependencies/. This includes additional workspace/target dependencies\n"
@@ -129,8 +140,8 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
         f"Upstream archive SHA-256: {SHA256}\n\n"
         "Modified in 2026 by HarnessMinimizer Authors: process-group cleanup\n"
         "and supervisor version probe. The patch is already applied here.\n"
-        "See harnessminimizer/THIRD_PARTY_NOTICES and notices/README.txt for\n"
-        "licensing; the upstream Cargo manifests describe upstream code only.\n\n"
+        "See notices/README.txt for licensing and the included notices;\n"
+        "the upstream Cargo manifests describe upstream code only.\n\n"
         "From this extracted directory, with Rust/Cargo and a C/C++ toolchain:\n"
         "cargo install --frozen --path crates/treereduce-c --root /chosen/prefix --jobs 2 --force\n"
         "/chosen/prefix/bin/treereduce-c --harnessminimizer-supervisor-version\n\n"
@@ -143,8 +154,12 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
         bundle.add(tree, arcname="treereduce-source", filter=archive_metadata)
         bundle.add(building, arcname="treereduce-source/BUILDING.txt", filter=archive_metadata)
         bundle.add(notices, arcname="treereduce-source/notices", filter=archive_metadata)
-        for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "THIRD_PARTY_LICENSES", "tools/treereduce/install.py",
-                         "tools/treereduce/process-cleanup.patch", "tools/treereduce/licenses"):
+        for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "THIRD_PARTY_LICENSES"):
+            if (PROJECT / relative).exists():
+                bundle.add(PROJECT / relative, arcname=f"treereduce-source/harnessminimizer/{relative}",
+                           filter=archive_metadata)
+        for relative in ("tools/treereduce/install.py", "tools/treereduce/process-cleanup.patch",
+                         "tools/treereduce/licenses"):
             bundle.add(PROJECT / relative, arcname=f"treereduce-source/harnessminimizer/{relative}",
                        filter=archive_metadata)
     return notices, archive
@@ -157,10 +172,6 @@ def main(argv=None):
     parser.add_argument("--archive", type=Path, help="Use an already downloaded pinned archive")
     args = parser.parse_args(argv)
     install_root = args.root.resolve()
-    # These accompany the installer in the repository, sdist, and Docker context.
-    for relative in ("LICENSE", "THIRD_PARTY_NOTICES", "THIRD_PARTY_LICENSES", "tools/treereduce/licenses/sources.json"):
-        if not (PROJECT / relative).exists():
-            raise SystemExit(f"Missing licensing input: {relative}")
     with tempfile.TemporaryDirectory(prefix="harnessminimizer-treereduce-build-") as work:
         work = Path(work)
         archive = args.archive
