@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Install patched treereduce with its notices and rebuildable source archive.
-
-The tools/treereduce directory can be copied and installed on its own, including
-in an image build. Repository-level notices are included when available, but
-are not prerequisites for installing the reducer.
-"""
+"""Install patched treereduce with its notices and rebuildable source archive."""
 import argparse
 import hashlib
 import json
@@ -120,9 +115,7 @@ def prepare_distribution(tree: Path, work: Path) -> tuple[Path, Path]:
         "Upstream treereduce remains MIT-licensed (LICENSE). HarnessMinimizer's\n"
         "patch additions are AGPL-3.0-only or covered by a separately negotiated\n"
         "commercial license, as specified in the HarnessMinimizer repository's\n"
-        "LICENSE. Repository-level notices are included when available:\n"
-        "LICENSE.HarnessMinimizer, THIRD_PARTY_NOTICES and THIRD_PARTY_LICENSES/.\n"
-        "The patched executable\n"
+        "LICENSE. The patched executable\n"
         "is not offered as MIT-only. Third-party terms remain in effect.\n\n"
         "dependencies.json identifies the locked crates and their notices in\n"
         "dependencies/. This includes additional workspace/target dependencies\n"
