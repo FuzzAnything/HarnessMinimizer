@@ -295,9 +295,15 @@ def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -
     except FileNotFoundError:
         pass
 
-    tmp_snapshot = snapshot.with_suffix(snapshot.suffix + ".tmp")
-    shutil.copyfile(source_path, tmp_snapshot)
-    os.replace(tmp_snapshot, snapshot)
+    # treereduce runs many testers concurrently. Each writer needs its own
+    # temporary file so another tester cannot rename or truncate its copy.
+    with tempfile.NamedTemporaryFile(dir=snapshot.parent, delete=False) as temporary:
+        tmp_snapshot = Path(temporary.name)
+    try:
+        shutil.copyfile(source_path, tmp_snapshot)
+        os.replace(tmp_snapshot, snapshot)
+    finally:
+        tmp_snapshot.unlink(missing_ok=True)
 
 
 def compile_error_mentions_uninitialized(error_text: str | None) -> bool:

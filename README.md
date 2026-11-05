@@ -1,5 +1,11 @@
 <h1 align="center">HarnessMinimizer</h1>
 
+API callers using TreeReduce may set `ReductionConfig.reduction_timeout_seconds`
+to bound tree reduction. At the deadline the reducer and its testers stop,
+and a current-run atomic interesting-candidate snapshot goes through normal
+PoC finalization. This does not claim global minimality; callers must still
+verify the exported PoC against the original crash.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harnessminimizer-banner-dark.svg">

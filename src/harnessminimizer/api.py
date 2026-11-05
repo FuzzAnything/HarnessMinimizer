@@ -119,6 +119,7 @@ class ReductionConfig:
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
     tool: str = "treereduce"
+    reduction_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1208,6 +1209,7 @@ def _reduction_attempt(
         profile=config.profile,
         auto_var_init_pattern=config.auto_var_init_pattern,
         tool=config.tool,
+        reduction_timeout_seconds=config.reduction_timeout_seconds,
     )
     if protection is not None:
         protection.restore_file(reduced_harness)
@@ -1274,6 +1276,13 @@ def _reduction_attempt(
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    if config.reduction_timeout_seconds is not None:
+        import math
+
+        if not math.isfinite(config.reduction_timeout_seconds) or config.reduction_timeout_seconds <= 0:
+            raise ValueError("Reduction timeout must be finite and positive.")
+        if config.tool != "treereduce":
+            raise ValueError("A reduction budget is supported only for treereduce.")
     return _reduce_with_config(config)
 
 

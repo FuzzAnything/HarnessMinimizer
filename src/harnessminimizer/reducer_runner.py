@@ -3718,10 +3718,13 @@ def run_treereducer(
     profile: bool = False,
     auto_var_init_pattern: bool = False,
     tool: str = "treereduce",
+    reduction_timeout_seconds: float | None = None,
 ) -> str:
     from harnessminimizer.reduction_engines import prepare_reducer_invocation, validate_tool
 
     validate_tool(tool)
+    if reduction_timeout_seconds is not None and tool != "treereduce":
+        raise ValueError("A reduction budget is supported only for treereduce.")
 
     # Reducers change cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -3819,7 +3822,7 @@ def run_treereducer(
     append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
-    if snapshot:
+    if snapshot or reduction_timeout_seconds is not None:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
@@ -3905,7 +3908,15 @@ def run_treereducer(
         print(f"[+] Running reduction engine: {tool}")
         reduction_started_ns = time.perf_counter_ns()
         try:
-            proc = invocation.run(run_supervised)
+            if reduction_timeout_seconds is None:
+                proc = invocation.run(run_supervised)
+            else:
+                from harnessminimizer.reduction_budget import run_bounded_reduction
+
+                proc = run_bounded_reduction(
+                    invocation.command, reduced_harness,
+                    reduction_timeout_seconds, get_last_interesting_file(),
+                )
         except (OSError, subprocess.SubprocessError) as exc:
             # Preserve spent work in the profile even when a supervised reducer
             # invocation times out or cannot complete normally.
@@ -3998,7 +4009,7 @@ def run_treereducer(
             crash_pattern_symbolize_1=get_reference_crash_pattern_symbolize_1(),
             retry_oom_without_rss_limit=True,
         )
-        if snapshot:
+        if snapshot or reduction_timeout_seconds is not None:
             last_interesting_file = get_last_interesting_file()
             if os.path.exists(last_interesting_file):
                 restore_pch_includes(last_interesting_file, pch_artifacts)

@@ -278,6 +278,7 @@ class TestApiPipeline(unittest.TestCase):
             start_id=123,
             marker="M",
             slice_enabled=True,
+            reduction_timeout_seconds=37,
         )
 
         result = reduce_with_config(config)
@@ -338,6 +339,7 @@ class TestApiPipeline(unittest.TestCase):
             profile=False,
             auto_var_init_pattern=False,
             tool="treereduce",
+            reduction_timeout_seconds=37,
         )
         mock_format.assert_called_once_with("/tmp/reduced.cpp")
         mock_inline.assert_called_once_with(
@@ -629,6 +631,7 @@ class TestApiPipeline(unittest.TestCase):
             profile=False,
             auto_var_init_pattern=False,
             tool="treereduce",
+            reduction_timeout_seconds=None,
         )
 
     @patch("harnessminimizer.api.validate_stack_trace")
@@ -773,6 +776,7 @@ class TestApiPipeline(unittest.TestCase):
             profile=False,
             auto_var_init_pattern=False,
             tool="treereduce",
+            reduction_timeout_seconds=None,
         )
         mock_inline.assert_called_once_with(
             "/tmp/reduced.cpp",
