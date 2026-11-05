@@ -1,5 +1,11 @@
 # HarnessReducer
 
+API callers may set `ReductionConfig.reduction_timeout_seconds` to bound tree
+reduction. At the deadline the reducer and its testers stop, and an atomic
+interesting-candidate snapshot goes through normal PoC finalization. This does
+not claim global minimality or crash verification; callers must still verify
+the final PoC against the original crash.
+
 HarnessReducer minimizes crashing C/C++ fuzz harnesses while preserving the crash.
 It is designed for `FuzzedDataProvider`-based harnesses and combines:
 

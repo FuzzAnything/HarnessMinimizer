@@ -3124,6 +3124,7 @@ def run_treereducer(
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = False,
+    reduction_timeout_seconds: float | None = None,
 ) -> str:
     # treereduce changes cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -3227,7 +3228,7 @@ def run_treereducer(
     append_exec_timeout_tester_args(cmd, exec_timeout_ms)
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
-    if snapshot:
+    if snapshot or reduction_timeout_seconds is not None:
         cmd.extend(["--last-interesting-file", get_last_interesting_file()])
     cmd.extend(pch_tester_args(pch_artifacts, phase3_mode))
     cmd.extend(debug_tester_args("reduction_candidate"))
@@ -3294,12 +3295,19 @@ def run_treereducer(
             if not symbolize:
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
-        proc = subprocess.run(
-            cmd,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
+        if reduction_timeout_seconds is None:
+            proc = subprocess.run(
+                cmd,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        else:
+            from harnessreducer.reduction_budget import run_bounded_reduction
+
+            proc = run_bounded_reduction(
+                cmd, reduced_harness, reduction_timeout_seconds, get_last_interesting_file()
+            )
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
     if not os.path.exists(reduced_harness):

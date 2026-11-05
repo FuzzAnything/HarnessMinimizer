@@ -112,6 +112,7 @@ class ReductionConfig:
     snapshot: bool = False
     amortize_link: bool = False
     symbolize: bool = False
+    reduction_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -765,6 +766,13 @@ def inline_literals_in_reduced_harness(
 
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    if config.reduction_timeout_seconds is not None:
+        import math
+
+        if not math.isfinite(config.reduction_timeout_seconds) or config.reduction_timeout_seconds <= 0:
+            raise ValueError("Reduction timeout must be finite and positive.")
+        if config.check:
+            raise ValueError("A reduction budget is not supported in check mode.")
     configure_work_dir(config.work_dir)
     if config.debug and config.check:
         raise ValueError("debug and check modes cannot be enabled together.")
@@ -942,6 +950,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             snapshot=config.snapshot,
             amortize_link=config.amortize_link,
             symbolize=config.symbolize,
+            reduction_timeout_seconds=config.reduction_timeout_seconds,
         )
     format_reduced_harness(reduced_harness)
     if config.debug:
