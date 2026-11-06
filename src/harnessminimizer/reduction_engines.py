@@ -20,6 +20,7 @@ import tempfile
 
 from harnessminimizer.process_supervisor import run_supervised, treereduce_binary
 from harnessminimizer.macro_headers import MacroPreparation, prepare_macro_headers
+from harnessminimizer.source_language import CPP, SourceLanguage, language_for_path
 
 
 TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd")
@@ -34,7 +35,9 @@ def validate_tool(tool: str) -> None:
         raise ValueError(f"Unknown reduction tool {tool!r}; choose from {', '.join(TOOL_CHOICES)}")
 
 
-def perses_flags(tool: str, *, stable: bool, jobs: int) -> list[str]:
+def perses_flags(
+    tool: str, *, stable: bool, jobs: int, language: SourceLanguage = CPP,
+) -> list[str]:
     validate_tool(tool)
     if tool == "treereduce":
         raise ValueError("treereduce does not use Perses settings")
@@ -42,7 +45,7 @@ def perses_flags(tool: str, *, stable: bool, jobs: int) -> list[str]:
         "--alg": "node_priority",
         "--cleanup-alg": "node_priority",
         "--default-list-minimizer-for-kleene": LIST_MINIMIZERS[tool],
-        "--lang": "cpp",
+        "--lang": language.perses_language,
         "--code-format": "ORIG_FORMAT",
         "--threads": str(jobs),
         "--fixpoint": str(stable).lower(),
@@ -182,8 +185,10 @@ def check_perses() -> PersesRuntime:
 def write_perses_test_script(
     path: Path, checker_command: list[str], *, timeout_seconds: float = 300,
     checker_cwd: Path | None = None,
+    language: SourceLanguage = CPP,
 ) -> None:
-    if checker_command.count(CANDIDATE_PLACEHOLDER) != 1:
+    placeholder = "@@" + language.suffix
+    if checker_command.count(placeholder) != 1:
         raise ValueError("The checker command must contain exactly one candidate placeholder")
     if timeout_seconds <= 0:
         raise ValueError("The candidate timeout must be positive")
@@ -205,7 +210,7 @@ def write_perses_test_script(
     # Expand only the candidate placeholder. All other arguments remain quoted
     # literals, including strings that contain shell syntax or the placeholder.
     shell_command = " ".join(
-        '"$hm_candidate"' if part == CANDIDATE_PLACEHOLDER else shlex.quote(part)
+        '"$hm_candidate"' if part == placeholder else shlex.quote(part)
         for part in command
     )
     path.write_text(
@@ -214,7 +219,7 @@ def write_perses_test_script(
         # /bin/sh initializes PWD to its working directory. Capture it before
         # cd so we keep testing the current candidate, without a realpath/pwd
         # subprocess. Neither the parent process nor other workers change cwd.
-        'hm_candidate="$PWD/candidate.cpp"\n'
+        f'hm_candidate="$PWD/candidate{language.suffix}"\n'
         'if ! test -f "$hm_candidate"; then\n'
         '  printf "Missing Perses candidate: %s\\n" "$hm_candidate" >&2\n'
         "  exit 1\n"
@@ -230,7 +235,9 @@ def write_perses_test_script(
     path.chmod(0o700)
 
 
-def absolute_checker_paths(command: list[str]) -> list[str]:
+def absolute_checker_paths(
+    command: list[str], *, language: SourceLanguage = CPP,
+) -> list[str]:
     """Freeze setup paths before Perses changes the checker's working directory."""
     path_options = {
         "--crash-input", "--fdp-trace", "--pch-path", "--last-interesting-file",
@@ -239,7 +246,7 @@ def absolute_checker_paths(command: list[str]) -> list[str]:
         "--dynamic-crash-site-library", "--crash-location-file",
     }
     result = list(command)
-    candidate_index = result.index(CANDIDATE_PLACEHOLDER)
+    candidate_index = result.index("@@" + language.suffix)
     for i in range(candidate_index):
         if result[i].endswith(".py") or (i == 0 and "/" in result[i]):
             result[i] = str(Path(result[i]).resolve())
@@ -300,6 +307,7 @@ def prepare_reducer_invocation(
     tool: str = "treereduce",
 ) -> ReducerInvocation:
     validate_tool(tool)
+    language = language_for_path(source)
     if not 1 <= jobs <= 63:
         raise ValueError("Reducer jobs must be between 1 and 63")
     if candidate_timeout_seconds <= 0:
@@ -330,18 +338,21 @@ def prepare_reducer_invocation(
         )
     checker_cwd = Path.cwd()
     runtime = check_perses()
-    checker_command = absolute_checker_paths(checker_command)
+    checker_command = absolute_checker_paths(checker_command, language=language)
     # A fresh subdirectory prevents a stale result being published after a failed
     # run, and allows reusing a user-supplied --work-dir without deleting artifacts.
     root = Path(tempfile.mkdtemp(prefix=f"perses-{tool}-", dir=destination.resolve().parent))
     inputs = root / "input"
     inputs.mkdir()
-    candidate = inputs / "candidate.cpp"
+    candidate = inputs / ("candidate" + language.suffix)
     shutil.copy2(prepared_source, candidate)
     script = inputs / "interesting.sh"
-    write_perses_test_script(script, checker_command, checker_cwd=checker_cwd, timeout_seconds=candidate_timeout_seconds)
+    write_perses_test_script(
+        script, checker_command, checker_cwd=checker_cwd,
+        timeout_seconds=candidate_timeout_seconds, language=language,
+    )
     output_dir = root / "output"
-    flags = perses_flags(tool, stable=stable, jobs=jobs)
+    flags = perses_flags(tool, stable=stable, jobs=jobs, language=language)
     command = [
         *runtime.command, *flags,
         "--input-file", str(candidate), "--test-script", str(script),

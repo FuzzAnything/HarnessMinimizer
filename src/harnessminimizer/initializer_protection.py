@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 
-from harnessminimizer.fdp_transform import PARSER, _iter_nodes
+from harnessminimizer.source_language import language_for_path, iter_nodes as _iter_nodes
 from harnessminimizer.macro_headers import _directives
 from harnessminimizer.process_supervisor import run_supervised
 
@@ -129,7 +129,8 @@ def prepare_initializer_protection(source: Path, directory: Path) -> Initializer
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     original = source.read_bytes()
-    tree = PARSER.parse(original)
+    language = language_for_path(source)
+    tree = language.parser().parse(original)
     prefix = "HM_KEEP_INIT_" + uuid.uuid4().hex + "_"
     header = directory / "initializer_definitions.h"
     declarations = []
@@ -189,7 +190,7 @@ def prepare_initializer_protection(source: Path, directory: Path) -> Initializer
         for item in declarations
     ]
     header.write_text("\n".join(definitions) + "\n", encoding="utf-8")
-    output = directory / "protected.cpp"
+    output = directory / ("protected" + language.suffix)
     output.write_bytes(
         ('#include ' + json.dumps(str(header), ensure_ascii=False) + "\n").encode() + prepared
     )
@@ -247,12 +248,13 @@ def verify_preparation(
     """One-time compiler preprocessing check; no object build or execution."""
     commands = []
     outputs = []
+    language = language_for_path(protection.original_source)
     with tempfile.TemporaryDirectory(prefix="initializer-preprocess-") as tmp:
         for index, source in enumerate((protection.original_source, protection.source)):
-            output = Path(tmp) / f"{index}.ii"
+            output = Path(tmp) / f"{index}{'.i' if language.name == 'c' else '.ii'}"
             command = [
-                "clang++", *phase_flags(compile_flags, replay=replay, plugin=plugin),
-                "-E", "-P", "-x", "c++", str(source), "-o", str(output),
+                language.compiler, *phase_flags(compile_flags, replay=replay, plugin=plugin),
+                "-E", "-P", "-x", language.name, str(source), "-o", str(output),
             ]
             commands.append(command)
             proc = run_supervised(

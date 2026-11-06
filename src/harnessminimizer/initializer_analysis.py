@@ -10,6 +10,7 @@ import subprocess
 import time
 
 from harnessminimizer.initializer_protection import phase_flags
+from harnessminimizer.source_language import language_for_path
 from harnessminimizer.process_supervisor import run_supervised
 
 
@@ -32,9 +33,10 @@ def analyze_uninitialized(
     # report if this helper is explicitly called twice on the same directory.
     if report.exists():
         raise ValueError(f"Analyzer report already exists: {report}")
+    language = language_for_path(source_path)
     command = [
-        "clang++", *phase_flags(compile_flags, replay=replay), "--analyze",
-        "-Xclang", "-analyzer-output=plist", "-x", "c++", str(source_path),
+        language.compiler, *phase_flags(compile_flags, replay=replay), "--analyze",
+        "-Xclang", "-analyzer-output=plist", "-x", language.name, str(source_path),
         "-o", str(report),
     ]
     started = time.perf_counter_ns()
@@ -63,6 +65,9 @@ def analyze_uninitialized(
                     checker.startswith("core.uninitialized.")
                     or (checker == "core.CallAndMessage"
                         and re.search(r"uninitiali[sz]ed|uninitiali[sz]ation", description, re.I))
+                    or (language.name == "c"
+                        and checker == "core.UndefinedBinaryOperatorResult"
+                        and re.search(r"garbage value|uninitiali[sz]ed", description, re.I))
                 ):
                     continue
                 relevant.append({"checker": checker, "description": description, "location": location})

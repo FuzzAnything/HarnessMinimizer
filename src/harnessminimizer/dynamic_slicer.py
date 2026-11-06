@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import tree_sitter_cpp as ts_cpp
-from tree_sitter import Language, Node, Parser
-
-CPP_LANGUAGE = Language(ts_cpp.language())
-PARSER = Parser(CPP_LANGUAGE)
+from tree_sitter import Node
+from harnessminimizer.source_language import CPP, SourceLanguage
 
 
 @dataclass(frozen=True)
@@ -238,9 +235,9 @@ def _collect_tail_prune_edits(source: str, tree: Node, coverage: CoverageMap) ->
     return edits
 
 
-def _collect_slice_edits(source: str, coverage: CoverageMap) -> list[SliceEdit]:
+def _collect_slice_edits(source: str, coverage: CoverageMap, language: SourceLanguage = CPP) -> list[SliceEdit]:
     source_bytes = source.encode("utf-8")
-    tree = PARSER.parse(source_bytes).root_node
+    tree = language.parser().parse(source_bytes).root_node
     edits: list[SliceEdit] = []
     removable_statement_types = {
         "expression_statement",
@@ -331,9 +328,9 @@ def _overlaps_any(start: int, end: int, ranges: list[tuple[int, int]]) -> bool:
     return any(not (end <= lo or start >= hi) for lo, hi in ranges)
 
 
-def _filter_declaration_edits(source: str, edits: list[SliceEdit]) -> list[SliceEdit]:
+def _filter_declaration_edits(source: str, edits: list[SliceEdit], language: SourceLanguage = CPP) -> list[SliceEdit]:
     source_bytes = source.encode("utf-8")
-    tree = PARSER.parse(source_bytes).root_node
+    tree = language.parser().parse(source_bytes).root_node
     non_decl_ranges = [(edit.start, edit.end) for edit in edits if edit.kind != "declaration"]
     filtered: list[SliceEdit] = []
 
@@ -361,9 +358,11 @@ def _filter_declaration_edits(source: str, edits: list[SliceEdit]) -> list[Slice
     return filtered
 
 
-def slice_source_by_coverage(source: str, coverage: CoverageMap) -> SliceResult:
-    edits = _select_non_overlapping_edits(_collect_slice_edits(source, coverage))
-    edits = _filter_declaration_edits(source, edits)
+def slice_source_by_coverage(
+    source: str, coverage: CoverageMap, *, language: SourceLanguage = CPP,
+) -> SliceResult:
+    edits = _select_non_overlapping_edits(_collect_slice_edits(source, coverage, language))
+    edits = _filter_declaration_edits(source, edits, language)
     if not edits:
         return SliceResult(source=source, removed_nodes=0)
 

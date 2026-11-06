@@ -33,6 +33,7 @@ from harnessminimizer.source_alias import (
 )
 from harnessminimizer.symbolized_trace import TRACE_SET_ENV, SymbolizedTraceReference, extract_stack_trace
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
+from harnessminimizer.source_language import C, CPP, language_for_path
 
 from harnessminimizer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
@@ -394,17 +395,24 @@ def auto_var_init_flags(args: argparse.Namespace) -> list[str]:
     return [AUTO_VAR_INIT_PATTERN_FLAG] if getattr(args, "auto_var_init_pattern", False) else []
 
 
+def source_language(args: argparse.Namespace):
+    selected = getattr(args, "source_language", None)
+    if selected is not None:
+        return C if selected == "c" else CPP
+    return language_for_path(args.source)
+
+
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     _reset_compile_failure_state(args)
     compile_cmd = [
-        "clang++",
+        source_language(args).compiler,
         *phase3_replay_flags(args.fdp_trace),
         *PHASE3_SANITIZER_FLAGS,
         *PHASE3_DIRECT_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
         *auto_var_init_flags(args),
         *split_flags(args.compile_flags),
-        args.source,
+        *source_language(args).source_args(args.source),
         "-o",
         output_path,
         *split_flags(args.link_flags),
@@ -434,7 +442,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         object_path = obj_file.name
 
     compile_cmd = [
-        "clang++",
+        source_language(args).compiler,
         "-Qunused-arguments",
         *phase3_replay_flags(args.fdp_trace),
         *PHASE3_SANITIZER_FLAGS,
@@ -443,7 +451,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         *auto_var_init_flags(args),
         "-c",
         *split_flags(args.compile_flags),
-        args.source,
+        *source_language(args).source_args(args.source),
         "-o",
         object_path,
     ]
@@ -464,7 +472,7 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
         return -1, object_path
 
     link_cmd = [
-        "clang++",
+        source_language(args).compiler,
         "-Qunused-arguments",
         *PHASE3_SANITIZER_FLAGS,
         object_path,
@@ -492,14 +500,14 @@ def compile_split(args: argparse.Namespace, output_path: str) -> tuple[int, str 
 def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
     _reset_compile_failure_state(args)
     if not args.pch_path:
-        _remember_compile_failure(args, err_msg="--pch requires --pch-path", compile_cmd=["clang++"])
+        _remember_compile_failure(args, err_msg="--pch requires --pch-path", compile_cmd=[source_language(args).compiler])
         print("Compilation failed: --pch requires --pch-path", file=sys.stderr)
         return -1, None
     if not os.path.exists(args.pch_path):
         _remember_compile_failure(
             args,
             err_msg=f"PCH file does not exist: {args.pch_path}",
-            compile_cmd=["clang++", "-include-pch", args.pch_path],
+            compile_cmd=[source_language(args).compiler, "-include-pch", args.pch_path],
         )
         print(f"Compilation failed: PCH file does not exist: {args.pch_path}", file=sys.stderr)
         return -1, None
@@ -515,7 +523,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
     )
 
     compile_cmd = [
-        "clang++",
+        source_language(args).compiler,
         "-Qunused-arguments",
         "-include-pch",
         args.pch_path,
@@ -533,7 +541,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         *(["-fPIC"] if getattr(args, "pch_amortized_link", False) else []),
         "-c",
         *split_flags(args.compile_flags),
-        args.source,
+        *source_language(args).source_args(args.source),
         "-o",
         object_path,
     ]
@@ -554,7 +562,7 @@ def compile_with_pch(args: argparse.Namespace, output_path: str) -> tuple[int, s
         return -1, object_path
 
     link_cmd = [
-        "clang++",
+        source_language(args).compiler,
         "-Qunused-arguments",
         *PHASE3_SANITIZER_FLAGS,
         object_path,
@@ -593,7 +601,7 @@ def compile_amortized_plugin(
     ) as obj_file:
         object_path = obj_file.name
 
-    compile_cmd = ["clang++", "-Qunused-arguments"]
+    compile_cmd = [source_language(args).compiler, "-Qunused-arguments"]
     if args.pch:
         if not args.pch_path or not os.path.exists(args.pch_path):
             err_msg = f"PCH file does not exist: {args.pch_path}"
@@ -617,7 +625,7 @@ def compile_amortized_plugin(
             "-fPIC",
             "-c",
             *split_flags(args.compile_flags),
-            args.source,
+            *source_language(args).source_args(args.source),
             "-o",
             object_path,
         ]
@@ -650,7 +658,7 @@ def link_amortized_plugin(
     link_flags: str | None = None,
 ) -> int:
     link_cmd = [
-        "clang++",
+        source_language(args).compiler,
         "-Qunused-arguments",
         "-shared",
         *PHASE3_PLUGIN_SANITIZER_FLAGS,
@@ -1145,7 +1153,15 @@ def main() -> int:
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument("--source-language", choices=("c", "c++"), default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.source_language is None:
+        try:
+            args.source_language = language_for_path(args.source).name
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.source_language == "c" and args.fdp_trace:
+        parser.error("C harnesses use direct input, not C++ FDP replay")
     args._reference_traces = None
     if args.require_reference_traces:
         if not args.symbolize:

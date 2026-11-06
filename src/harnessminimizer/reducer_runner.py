@@ -22,6 +22,7 @@ from harnessminimizer.crash_evidence import (
 
 from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessminimizer.pch_prefix import split_source_for_pch
+from harnessminimizer.source_language import C, CPP, SourceLanguage, language_for_path, current_language
 from harnessminimizer.reduction_profile import write_profile_summary
 from harnessminimizer.source_alias import (
     SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
@@ -1571,7 +1572,7 @@ def amortized_runner_link_tail(
 
 def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
     output = Path(get_work_dir()) / f"amortized_static_roots_{time.time_ns()}.o"
-    cmd = ["clang++", "-Qunused-arguments"]
+    cmd = [language_for_path(config.source).compiler, "-Qunused-arguments"]
     if config.pch_path is not None:
         cmd.extend(["-include-pch", config.pch_path])
         opt_flags = PHASE3_PCH_OPT_FLAGS
@@ -1589,7 +1590,7 @@ def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
             "-fPIC",
             "-c",
             *_split_flags(config.compile_flags),
-            config.source,
+            *language_for_path(config.source).source_args(config.source),
             "-o",
             str(output),
         ]
@@ -1815,12 +1816,13 @@ def _build_pch_compile_command(
     use_replay: bool,
     amortize_link: bool = False,
     auto_var_init_pattern: bool = False,
+    language: SourceLanguage = CPP,
 ) -> list[str]:
     sanitizer_flags = (
         PHASE3_PLUGIN_SANITIZER_FLAGS if amortize_link else PHASE3_SANITIZER_FLAGS
     )
     cmd = [
-        "clang++",
+        language.compiler,
         "-Qunused-arguments",
         *_phase3_replay_flags(
             use_replay,
@@ -1831,9 +1833,9 @@ def _build_pch_compile_command(
         *PHASE3_WARNING_FLAGS,
         *([AUTO_VAR_INIT_PATTERN_FLAG] if auto_var_init_pattern else []),
         *(["-fPIC"] if amortize_link else []),
-        "-x",
-        "c++-header",
         *_split_flags(compile_flags),
+        "-x",
+        language.pch_language,
         prefix_header,
         "-o",
         pch_file,
@@ -1841,9 +1843,11 @@ def _build_pch_compile_command(
     return cmd
 
 
-def _split_source_for_pch(source: str, source_dir: Path) -> tuple[str, str, str]:
-    """Return (PCH header, restorable prefix, body) from the C++ syntax tree."""
-    return split_source_for_pch(source, source_dir)
+def _split_source_for_pch(
+    source: str, source_dir: Path, *, language: SourceLanguage = CPP,
+) -> tuple[str, str, str]:
+    """Return (PCH header, restorable prefix, body) from the source syntax tree."""
+    return split_source_for_pch(source, source_dir, language=language)
 
 
 def prepare_phase3_pch_harness(
@@ -1862,7 +1866,10 @@ def prepare_phase3_pch_harness(
 
     source_path = Path(harness_path)
     source = source_path.read_text(encoding="utf-8", errors="ignore")
-    pch_prefix, restore_prefix, body = _split_source_for_pch(source, source_path.parent)
+    language = language_for_path(source_path)
+    pch_prefix, restore_prefix, body = _split_source_for_pch(
+        source, source_path.parent, language=language,
+    )
 
     work_dir = Path(get_work_dir())
     prefix_header = work_dir / PCH_PREFIX_HEADER_NAME
@@ -1880,6 +1887,7 @@ def prepare_phase3_pch_harness(
         use_replay=use_replay,
         amortize_link=amortize_link,
         auto_var_init_pattern=auto_var_init_pattern,
+        language=language,
     )
     print(f"[+] Precompiling Phase 3 header: {prefix_header} -> {pch_file}")
     run_command(compile_cmd, "Failed to precompile Phase 3 PCH header")
@@ -2151,12 +2159,12 @@ def reference_harness_compile_command(
     output_bin: str,
 ) -> list[str]:
     return [
-        "clang++",
+        language_for_path(harness_path).compiler,
         "-fsanitize=address,fuzzer,undefined",
         *PHASE3_DIRECT_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
         *_split_flags(compile_flags),
-        harness_path,
+        *language_for_path(harness_path).source_args(harness_path),
         "-o",
         output_bin,
         *_split_flags(link_flags),
@@ -2226,6 +2234,24 @@ int main(int argc, char **argv) {
 """.lstrip(),
         encoding="utf-8",
     )
+    if language_for_path(harness_path) == C:
+        # The C harness and C++ driver are distinct translation units. In
+        # particular, -std=c11 and harness macros must not reach the driver.
+        harness_object = str(Path(work_dir) / "coverage_harness.o")
+        coverage_flags = [
+            "-fsanitize=address,undefined,fuzzer-no-link",
+            "-fprofile-instr-generate", "-fcoverage-mapping",
+            *PHASE3_DIRECT_OPT_FLAGS, *PHASE3_WARNING_FLAGS,
+        ]
+        run_command([
+            "clang", *coverage_flags, *_split_flags(compile_flags),
+            "-c", *C.source_args(harness_path), "-o", harness_object,
+        ], "Failed to compile coverage-enabled C harness")
+        run_command([
+            "clang++", *coverage_flags, str(driver_source), harness_object,
+            "-o", output_bin, *_split_flags(link_flags),
+        ], "Failed to link coverage-enabled C harness")
+        return output_bin
     compile_cmd = [
         "clang++",
         "-fsanitize=address,undefined,fuzzer-no-link",
@@ -2537,8 +2563,10 @@ def reference_trace_environment(environment: dict[str, str] | None = None) -> di
     return result
 
 
-def get_last_interesting_file() -> str:
-    return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
+def get_last_interesting_file(language: SourceLanguage | None = None) -> str:
+    language = language or current_language()
+    name = "last_interesting.c" if language == C else LAST_INTERESTING_FILE_NAME
+    return os.path.join(get_work_dir(), name)
 
 
 def get_candidate_profile_events_file() -> str:
@@ -2779,7 +2807,8 @@ def apply_coverage_guided_slice(
             return harness_path
 
         source = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
-        slice_result = slice_source_by_coverage(source, coverage)
+        language_kwargs = {"language": C} if language_for_path(harness_path) == C else {}
+        slice_result = slice_source_by_coverage(source, coverage, **language_kwargs)
         if slice_result.removed_nodes == 0 or slice_result.source == source:
             print("[*] Coverage-guided slicing found no removable uncovered blocks.")
             return harness_path
@@ -3737,6 +3766,7 @@ def run_treereducer(
     from harnessminimizer.reduction_engines import prepare_reducer_invocation, validate_tool
 
     validate_tool(tool)
+    language = language_for_path(harness_path)
     if reduction_timeout_seconds is not None and tool != "treereduce":
         raise ValueError("A reduction budget is supported only for treereduce.")
 
@@ -3824,10 +3854,10 @@ def run_treereducer(
         )
         reducer_source = pch_artifacts.body_source
 
-    reduced_harness = os.path.join(get_work_dir(), "reduced_harness.cpp")
+    reduced_harness = os.path.join(get_work_dir(), f"reduced_harness{language.suffix}")
     cmd = [
         get_crash_tester_path(),
-        "@@.cpp",
+        "@@" + language.suffix,
         crash_pattern,
         "--crash-input", crash_input or "",
         f"--compile-flags={compile_flags or ''}",
@@ -3837,7 +3867,9 @@ def run_treereducer(
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if snapshot or reduction_timeout_seconds is not None:
-        cmd.extend(["--last-interesting-file", get_last_interesting_file()])
+        cmd.extend(["--last-interesting-file", get_last_interesting_file(language)])
+    if language == C:
+        cmd.append("--source-language=c")
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(debug_tester_args("reduction_candidate"))
@@ -3938,7 +3970,7 @@ def run_treereducer(
 
                 proc = run_bounded_reduction(
                     invocation.command, reduced_harness,
-                    reduction_timeout_seconds, get_last_interesting_file(),
+                    reduction_timeout_seconds, get_last_interesting_file(language),
                     **({"env": trace_env} if trace_env is not None else {}),
                 )
         except (OSError, subprocess.SubprocessError) as exc:
@@ -4034,7 +4066,7 @@ def run_treereducer(
             retry_oom_without_rss_limit=True,
         )
         if snapshot or reduction_timeout_seconds is not None:
-            last_interesting_file = get_last_interesting_file()
+            last_interesting_file = get_last_interesting_file(language)
             if os.path.exists(last_interesting_file):
                 restore_pch_includes(last_interesting_file, pch_artifacts)
 

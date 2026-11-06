@@ -85,6 +85,28 @@ harnessminimizer /path/to/harness.cpp \
   -o /path/to/output/reduced.cpp
 ```
 
+Native C harnesses use the same command and API. HarnessMinimizer selects C for
+an input ending in `.c` and C++ for `.cpp`, `.cc`, `.cxx`, `.c++`, or `.C`;
+other suffixes are rejected. Name the output with the same language suffix.
+Supply compiler flags appropriate for that language. For example:
+
+```bash
+harnessminimizer /path/to/harness.c \
+  --compile-flags="-std=c11 -I/path/to/library/include" \
+  --link-flags="-L/path/to/library/lib -ltarget" \
+  --crash-input /path/to/inputs/crash-input \
+  --pch --amortize-link \
+  -o /path/to/output/reduced.c
+```
+
+A C harness defines `LLVMFuzzerTestOneInput` and may define
+`LLVMFuzzerInitialize`. C reduction uses the original crash input during
+candidate checks. After reduction, HarnessMinimizer embeds its bytes in the
+verified output when it can safely map the entry-point parameters, and copies
+the generated header alongside CLI output. If embedding is unsupported, a
+verified reduced harness can still require the original crash input. The C++
+FuzzedDataProvider transformation remains specific to C++ harnesses.
+
 The default is the **unoptimized configuration**: **split compilation** with
 **symbolization on**, **PCH off**, and **amortized linking off**. HarnessMinimizer
 uses **treereduce** and **60 workers** by default. Replace `--tool treereduce`

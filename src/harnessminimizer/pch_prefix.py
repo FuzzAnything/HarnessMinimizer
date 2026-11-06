@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-import tree_sitter_cpp
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Node
+from harnessminimizer.source_language import CPP, SourceLanguage
 
 
-_CPP_LANGUAGE = Language(tree_sitter_cpp.language())
 _CONDITIONALS = frozenset({
     "preproc_if", "preproc_ifdef", "preproc_elif", "preproc_elifdef", "preproc_else",
 })
@@ -42,9 +41,9 @@ def _header_includes(node: Node) -> list[Node] | None:
     return includes
 
 
-def _prefix_region(source: bytes) -> tuple[int, int, list[Node]]:
+def _prefix_region(source: bytes, language: SourceLanguage = CPP) -> tuple[int, int, list[Node]]:
     # The grammar expects a newline after a directive, but C++ also accepts EOF.
-    tree = Parser(_CPP_LANGUAGE).parse(source if source.endswith(b"\n") else source + b"\n")
+    tree = language.parser().parse(source if source.endswith(b"\n") else source + b"\n")
     nodes = tree.root_node.named_children
     includes: list[Node] = []
     insertion = end = 0
@@ -90,7 +89,9 @@ def _apply_edits(source: bytes, edits: list[tuple[int, int, bytes]]) -> str:
     return result.decode("utf-8")
 
 
-def split_source_for_pch(source: str, source_dir: Path) -> tuple[str, str, str]:
+def split_source_for_pch(
+    source: str, source_dir: Path, *, language: SourceLanguage = CPP,
+) -> tuple[str, str, str]:
     """Return (PCH header, restorable prefix, body) using original byte ranges.
 
     Only the leading directive region through its last include is fixed.
@@ -99,7 +100,7 @@ def split_source_for_pch(source: str, source_dir: Path) -> tuple[str, str, str]:
     source keeps their original spelling.
     """
     data = source.encode("utf-8")
-    end, insertion, includes = _prefix_region(data)
+    end, insertion, includes = _prefix_region(data, language)
     prefix = data[:end]
     separator = b"\n" if insertion and data[insertion - 1:insertion] != b"\n" else b""
     shared_edits = [(insertion, insertion, separator + _STANDARD_HEADERS)]

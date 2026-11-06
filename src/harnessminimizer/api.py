@@ -3,18 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
 from harnessminimizer.process_supervisor import termination_guard
 from harnessminimizer.source_cleanup import clean_reduced_source
+from harnessminimizer.source_language import (
+    C, CPP, SourceLanguage, language_for_path, language_scope,
+    iter_nodes as _iter_nodes, node_text as _node_text,
+)
 from harnessminimizer.reduction_engines import check_perses, validate_tool
 from harnessminimizer.fdp_transform import (
-    PARSER,
     VALUES_HEADER_NAME,
     count_fdp_calls,
-    _iter_nodes,
-    _node_text,
     inline_source_with_report,
     inject_ids,
     load_trace,
@@ -174,7 +176,10 @@ def tag_harness_with_fdp_ids(
 ) -> TaggedHarness:
     source_path = Path(harness_path)
     source = source_path.read_text(encoding="utf-8")
-    transformed, count = inject_ids(source, start_id, marker)
+    if language_for_path(source_path) == C:
+        transformed, count = source, 0
+    else:
+        transformed, count = inject_ids(source, start_id, marker)
 
     # Keep the instrumented source separate from the input even when the user
     # chooses the input's directory as --work-dir.
@@ -197,6 +202,8 @@ def _tagged_harness_fdp_count(tagged: TaggedHarness | str) -> int:
 
 
 def _prepend_additional_headers(harness_path: str) -> None:
+    if language_for_path(harness_path) == C:
+        return  # Generated C declarations include their own required headers.
     content = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
     missing = [header for header in ADDITIONAL_HEADERS if header not in content]
     if not missing:
@@ -206,6 +213,8 @@ def _prepend_additional_headers(harness_path: str) -> None:
 
 
 def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None) -> str:
+    if language_for_path(reduced_harness_path) == C:
+        return reduced_harness_path
     fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
     cleaned_source, removed = (strip_injected_ids(fallback_source, start_id=start_id)
                                if start_id is not None else (fallback_source, 0))
@@ -550,7 +559,11 @@ def _cpp_byte(value: int) -> str:
     return f"0x{value & 0xFF:02x}"
 
 
-def _direct_input_header_source(data: bytes) -> str:
+def _direct_input_header_source(
+    data: bytes, *, language: SourceLanguage = CPP,
+    input_names: tuple[str, str] = ("fuzz_values", "fuzz_index"),
+) -> str:
+    data_name, size_name = input_names
     byte_values = list(data)
     if byte_values:
         lines = ["{"]
@@ -561,10 +574,10 @@ def _direct_input_header_source(data: bytes) -> str:
             lines.append("    " + byte_text + suffix)
         lines.append("}")
         initializer = "\n".join(lines)
-        size_expression = "sizeof(fuzz_values)"
-        declaration = f"static uint8_t fuzz_values[] = {initializer};"
+        size_expression = f"sizeof({data_name})"
+        declaration = f"static uint8_t {data_name}[] = {initializer};"
     else:
-        declaration = "static uint8_t fuzz_values[1] = {0x00};"
+        declaration = f"static uint8_t {data_name}[1] = {{0x00}};"
         size_expression = "0"
 
     return (
@@ -572,7 +585,7 @@ def _direct_input_header_source(data: bytes) -> str:
         "#include <stddef.h>\n"
         "#include <stdint.h>\n\n"
         f"{declaration}\n"
-        f"static constexpr size_t fuzz_index = {size_expression};\n"
+        f"static {'const' if language == C else 'constexpr'} size_t {size_name} = {size_expression};\n"
     )
 
 
@@ -701,7 +714,7 @@ def _prepare_fuzzer_entry_return(
 
     source = source_path.read_text(encoding="utf-8", errors="ignore")
     source_bytes = source.encode("utf-8")
-    tree = PARSER.parse(source_bytes)
+    tree = language_for_path(source_path).parser().parse(source_bytes)
     matches = []
     for node in _iter_nodes(tree.root_node):
         if node.type != "function_definition":
@@ -749,9 +762,11 @@ def _prepare_fuzzer_entry_return(
     return PreparedHarnessSource(str(prepared_path), prepared_flags)
 
 
-def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
+def _find_fuzzer_entry_for_direct_input(
+    source: str, *, language: SourceLanguage = CPP,
+) -> DirectInputEntry:
     source_bytes = source.encode("utf-8")
-    tree = PARSER.parse(source_bytes)
+    tree = language.parser().parse(source_bytes)
 
     entries = []
     for node in _iter_nodes(tree.root_node):
@@ -797,8 +812,22 @@ def _find_fuzzer_entry_for_direct_input(source: str) -> DirectInputEntry:
     )
 
 
-def _inline_direct_input_source(source: str, header_name: str) -> str:
-    entry = _find_fuzzer_entry_for_direct_input(source)
+def _c_input_names(source: str) -> tuple[str, str]:
+    # Include preprocessor names and inactive branches, not just parsed locals.
+    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z_0-9]*", source))
+    index = 0
+    while True:
+        names = (f"hm_input_bytes_{index}", f"hm_input_size_{index}")
+        if not identifiers.intersection(names):
+            return names
+        index += 1
+
+
+def _inline_direct_input_source(
+    source: str, header_name: str, *, language: SourceLanguage = CPP,
+    input_names: tuple[str, str] | None = None,
+) -> str:
+    entry = _find_fuzzer_entry_for_direct_input(source, language=language)
     if entry.data_name is None and entry.size_name is None:
         return source
     data_value = (
@@ -811,6 +840,8 @@ def _inline_direct_input_source(source: str, header_name: str) -> str:
         if entry.size_uses_canonical_type
         else f"static_cast<decltype({entry.size_name})>(::fuzz_index)"
     )
+    if language == C:
+        data_value, size_value = input_names or _c_input_names(source)
     assignments = []
     if entry.data_name is not None:
         assignments.append(f"    {entry.data_name} = {data_value};")
@@ -863,6 +894,7 @@ def _inline_direct_input_in_reduced_harness(
         )
 
     crash_bytes = crash_input_path.read_bytes()
+    language = language_for_path(reduced_harness_path)
 
     def _attempt_direct_inline(
         base_harness_path: str,
@@ -870,13 +902,17 @@ def _inline_direct_input_in_reduced_harness(
         attempt_label: str,
     ) -> tuple[str, tuple[str, ...]] | None:
         source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
-        inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
+        inline_harness_path = str(Path(base_harness_path).with_suffix(f".inline{language.suffix}"))
         header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
         generated_headers: tuple[str, ...] = ()
+        language_kwargs = (
+            {"language": language, "input_names": _c_input_names(source)} if language == C else {}
+        )
         try:
             transformed = _inline_direct_input_source(
                 source,
                 DIRECT_INPUT_HEADER_NAME,
+                **language_kwargs,
             )
         except ValueError as exc:
             transformed = source
@@ -893,7 +929,7 @@ def _inline_direct_input_in_reduced_harness(
 
         if transformed != source:
             header_path.write_text(
-                _direct_input_header_source(crash_bytes),
+                _direct_input_header_source(crash_bytes, **language_kwargs),
                 encoding="utf-8",
             )
             generated_headers = (str(header_path),)
@@ -1316,7 +1352,10 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             raise ValueError("Reduction timeout must be finite and positive.")
         if config.tool != "treereduce":
             raise ValueError("A reduction budget is supported only for treereduce.")
-    return _reduce_with_config(config)
+    language = language_for_path(config.harness_path)
+    language.parser()  # Check the grammar dependency before expensive setup.
+    with language_scope(language):
+        return _reduce_with_config(config)
 
 
 def _reduce_with_config(config: ReductionConfig) -> ReductionResult:

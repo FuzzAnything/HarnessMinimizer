@@ -1,13 +1,11 @@
-"""Remove standalone comments from a reduced C++ source."""
+"""Remove standalone comments from a reduced C or C++ source."""
 
 from collections import deque
 from pathlib import Path
 
-import tree_sitter_cpp
-from tree_sitter import Language, Parser
+from harnessminimizer.source_language import language_for_path
 
 
-_CPP_LANGUAGE = Language(tree_sitter_cpp.language())
 _WHITESPACE = frozenset(b" \t\r\f\v")
 
 
@@ -27,7 +25,7 @@ def clean_reduced_source(path: str) -> None:
     if not lines:
         return
 
-    tree = Parser(_CPP_LANGUAGE).parse(source)
+    tree = language_for_path(source_path).parser().parse(source)
     comment_bytes = bytearray(len(source))
     line_comments: list[list[int]] = [[] for _ in lines]
     comments: list[tuple[int, int]] = []
