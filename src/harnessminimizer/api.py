@@ -7,6 +7,7 @@ import shutil
 import tempfile
 
 from harnessminimizer.process_supervisor import termination_guard
+from harnessminimizer.source_cleanup import clean_reduced_source
 from harnessminimizer.reduction_engines import check_perses, validate_tool
 from harnessminimizer.fdp_transform import (
     PARSER,
@@ -1235,6 +1236,13 @@ def _reduction_attempt(
         protection.restore_file(reduced_harness)
         if config.snapshot:
             protection.restore_file(get_last_interesting_file())
+    # PCH includes and temporary macro definitions have been restored by the
+    # reducer runner. Clean the source before formatting and crash validation.
+    clean_reduced_source(reduced_harness)
+    if config.snapshot:
+        last_interesting = Path(get_last_interesting_file())
+        if last_interesting.is_file() and not last_interesting.is_symlink():
+            clean_reduced_source(str(last_interesting))
     format_reduced_harness(reduced_harness)
     if config.debug:
         print(

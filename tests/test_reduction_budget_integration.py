@@ -42,7 +42,10 @@ class BudgetPipelineTests(unittest.TestCase):
                     'extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {\n'
                     '  FuzzedDataProvider fdp(data, size);\n'
                     '  int consumed = fdp.ConsumeIntegral<int>();\n'
-                    '  int unused = 0; target(); return consumed;\n}\n'
+                    '  int unused = 0;\n'
+                    '  // A comment in the saved candidate must be removed.\n'
+                    '\n\n\n'
+                    '  target(); return consumed;\n}\n'
                 )
             else:
                 harness.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" void target();\nextern "C" int LLVMFuzzerTestOneInput(const uint8_t*, size_t) { int unused = 0; target(); return 0; }\n')
@@ -87,6 +90,8 @@ time.sleep(60)
             self.assertNotIn("int unused = 0;", Path(result.reduced_harness).read_text())
             if with_fdp:
                 exported = Path(result.reduced_harness).read_text()
+                self.assertNotIn("A comment in the saved candidate", exported)
+                self.assertNotIn("\n\n\n", exported)
                 checkpoint = root / "work" / "last_interesting.cpp"
                 self.assertEqual(checkpoint.read_text(), exported)
                 self.assertNotIn("FDP_ID:", exported)
