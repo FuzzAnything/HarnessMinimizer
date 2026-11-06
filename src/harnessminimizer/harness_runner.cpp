@@ -19,6 +19,7 @@
 namespace {
 
 using RunOneFn = int (*)(const uint8_t *, size_t);
+using InitializeFn = int (*)(int *, char ***);
 
 void CloseHandles(std::vector<void *> &handles) {
   for (void *handle : handles) {
@@ -80,6 +81,7 @@ bool LoadTargetLibrariesWithRetry(const std::vector<std::string> &paths,
 
 void HandleRequest(int connection, int listen_fd,
                    const std::vector<uint8_t> &crash_data,
+                   const std::string &crash_input_path,
                    int exec_timeout_seconds) {
   close(listen_fd);
   const uint64_t deadline = hmprocess::NowNs() + uint64_t(exec_timeout_seconds) * 1000000000;
@@ -126,6 +128,20 @@ void HandleRequest(int connection, int listen_fd,
       _exit(125);
     }
 
+    auto initialize = reinterpret_cast<InitializeFn>(
+        dlsym(plugin, "LLVMFuzzerInitialize"));
+    dlerror(); // This callback is optional; a missing symbol is expected.
+    // Supply writable harness arguments, not the server's internal arguments.
+    // Keep their storage alive through run_one for initializers retaining argv.
+    std::string program_name = plugin_path;
+    std::string input_name = crash_input_path;
+    char *init_args[] = {program_name.data(),
+                         input_name.empty() ? nullptr : input_name.data(), nullptr};
+    int init_argc = input_name.empty() ? 1 : 2;
+    char **init_argv = init_args;
+    if (initialize != nullptr)
+      initialize(&init_argc, &init_argv); // libFuzzer ignores the return value.
+
     const uint8_t *data = crash_data.empty() ? nullptr : crash_data.data();
     const int result = run_one(data, crash_data.size());
     _exit(result & 0xff);
@@ -170,6 +186,7 @@ int main(int argc, char **argv) {
     return 2;
 
   std::vector<uint8_t> crash_data;
+  const std::string crash_input_path = argv[2];
   if (argv[2][0] != '\0') {
     std::ifstream input(argv[2], std::ios::binary);
     if (!input) {
@@ -222,7 +239,8 @@ int main(int argc, char **argv) {
     const pid_t monitor = fork();
     if (monitor == 0) {
       if (!hmprocess::PrepareMonitor(server)) _exit(125);
-      HandleRequest(connection, listen_fd, crash_data, exec_timeout_seconds);
+      HandleRequest(connection, listen_fd, crash_data, crash_input_path,
+                    exec_timeout_seconds);
     }
     close(connection);
   }

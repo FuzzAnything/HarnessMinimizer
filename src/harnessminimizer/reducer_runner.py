@@ -2352,6 +2352,7 @@ def compile_coverage_harness(
 
 extern "C" int __llvm_profile_write_file(void);
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
+extern "C" int LLVMFuzzerInitialize(int *argc, char ***argv) __attribute__((weak));
 
 static void coverageDeathCallback() {
     __llvm_profile_write_file();
@@ -2364,6 +2365,9 @@ int main(int argc, char **argv) {
         std::ifstream input(argv[1], std::ios::binary);
         data.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
     }
+    // Keep the selected input even if initialization consumes its argv entry.
+    if (LLVMFuzzerInitialize != nullptr)
+        LLVMFuzzerInitialize(&argc, &argv);
     const int result = LLVMFuzzerTestOneInput(data.empty() ? nullptr : data.data(), data.size());
     __llvm_profile_write_file();
     return result;
