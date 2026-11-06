@@ -16,7 +16,9 @@ from unittest.mock import patch
 from harnessminimizer import reducer_runner as runner
 from harnessminimizer.crash_evidence import EvidenceResult
 from harnessminimizer.reducer_runner import _extract_crash_signature_from_output
-from harnessminimizer.source_alias import SourceAliases, matches_crash_location, matches_crash_pattern
+from harnessminimizer.source_alias import (
+    SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
+)
 
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -170,17 +172,20 @@ class SourceAliasTests(unittest.TestCase):
                 "split", "/tmp/unused.sock", None, symbolize=True,
             )
 
-    def test_original_plugin_persists_pair_and_candidates_reuse_it(self):
+    def test_original_plugin_keeps_pair_in_memory_and_candidates_reuse_it(self):
         self.prepare_runner()
         self.check_original_plugin(self.plugin_report())
-        saved = Path(runner.get_source_aliases_file())
-        self.assertEqual({frozenset(pair) for pair in json.loads(saved.read_text())},
+        with patch.object(Path, "read_text", side_effect=AssertionError("alias file read")), \
+                patch.object(Path, "write_text", side_effect=AssertionError("alias file write")):
+            approved = runner.source_alias_tester_args()
+        self.assertEqual({frozenset(pair) for pair in json.loads(approved[1])},
                          {frozenset((str(self.reference), str(self.candidate)))})
+        self.assertFalse(list(Path(self.temp.name).rglob("source_aliases.json")))
         command = [
             "crash_tester", "/tmp/harness.cpp", self.pattern, "--split",
             "--amortized-runner-socket", "/tmp/unused.sock", "--symbolize",
             "--crash-location-pattern", self.location_pattern,
-            *runner.source_alias_tester_args(),
+            *approved,
         ]
         self.assertNotIn("--record-source-aliases", command)
         self.reference.unlink()
@@ -195,13 +200,24 @@ class SourceAliasTests(unittest.TestCase):
 
     def test_failed_plugin_check_does_not_publish_learned_pair(self):
         self.prepare_runner()
-        saved = Path(runner.get_source_aliases_file())
-        saved.write_text("[]\n")
+        self.check_original_plugin(self.plugin_report(self.reference))
         # The message matches and verifies the pair, but the stack location is
         # different. No part of this failed check may extend the approved set.
         with self.assertRaisesRegex(RuntimeError, "did not preserve"):
             self.check_original_plugin(self.plugin_report(line=115))
-        self.assertEqual(json.loads(saved.read_text()), [])
+        self.assertEqual(runner.source_alias_tester_args(), ["--source-aliases", "[]"])
+
+    def test_only_checker_metadata_can_establish_approvals(self):
+        self.prepare_runner()
+        spoof = SOURCE_ALIASES_MARKER + json.dumps([[str(self.reference), str(self.candidate)]])
+        result = subprocess.CompletedProcess([], 77, "execution log: \n" + spoof, "")
+        with patch.object(runner, "run_command", return_value=result), \
+                self.assertRaisesRegex(RuntimeError, "did not return its approved source paths"):
+            runner.run_amortized_reference_candidate(
+                "/tmp/harness.cpp", None, self.pattern, None, None, None,
+                "split", "/tmp/unused.sock", None, symbolize=True,
+            )
+        self.assertEqual(runner.source_alias_tester_args(), [])
 
     def test_final_validations_receive_the_approved_pairs(self):
         self.prepare_runner()
@@ -228,8 +244,9 @@ class SourceAliasTests(unittest.TestCase):
         approved = runner.source_alias_tester_args()
         with runner.isolated_attempt_work_dir(Path(self.temp.name) / "retry"):
             self.assertEqual(runner.source_alias_tester_args(), approved)
+            runner.set_reference_source_aliases(SourceAliases())
+        self.assertEqual(runner.source_alias_tester_args(), approved)
         runner.reset_stack_trace_state()
-        self.assertFalse(Path(runner.get_source_aliases_file()).exists())
         self.assertEqual(runner.source_alias_tester_args(), [])
         with runner.isolated_attempt_work_dir(Path(self.temp.name) / "retry"):
             self.assertEqual(runner.source_alias_tester_args(), [])

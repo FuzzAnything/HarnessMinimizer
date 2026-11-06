@@ -22,6 +22,7 @@ from harnessminimizer.crash_evidence import (
 
 from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessminimizer.reduction_profile import write_profile_summary
+from harnessminimizer.source_alias import SOURCE_ALIASES_MARKER, SourceAliases
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -74,7 +75,6 @@ CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
 CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 SYMBOLIZED_CRASH_LOCATION_FILE_NAME = "symbolized_crash_location.pattern"
-SOURCE_ALIASES_FILE_NAME = "source_aliases.json"
 SYMBOLIZATION_FAILURE_LOG_NAME = "reference_symbolization_failure.log"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
@@ -89,6 +89,7 @@ NORMAL_REFERENCE_STACK_DEPTH_STRICT = False
 SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT = False
 DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
+REFERENCE_SOURCE_ALIASES: str | None = None
 CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
 REDUCTION_DEBUG_LOG_PATH: str | None = None
 POC_RUNTIME_ARGS: list[str] = []
@@ -1780,6 +1781,7 @@ def run_amortized_reference_candidate(
             "The original harness did not preserve the crash in amortized-link mode.\n"
             f"{output}"
         )
+    _record_reference_source_aliases(proc.stdout)
     return output
 
 
@@ -2091,20 +2093,13 @@ def get_work_dir() -> str:
 @contextmanager
 def isolated_attempt_work_dir(path: Path):
     """Temporarily switch artifacts, preserving original reference globals."""
-    global TREEDUCER_DIR, _IS_USER_WORK_DIR
-    previous = TREEDUCER_DIR, _IS_USER_WORK_DIR
-    previous_aliases = Path(TREEDUCER_DIR, SOURCE_ALIASES_FILE_NAME) if TREEDUCER_DIR else None
+    global TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
+    previous = TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
     configure_work_dir(str(path))
     try:
-        aliases = Path(get_source_aliases_file())
-        if previous_aliases != aliases:
-            if previous_aliases is not None and previous_aliases.is_file():
-                shutil.copyfile(previous_aliases, aliases)
-            else:
-                aliases.unlink(missing_ok=True)
         yield
     finally:
-        TREEDUCER_DIR, _IS_USER_WORK_DIR = previous
+        TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES = previous
 
 
 def configure_debug_logging(enabled: bool) -> str | None:
@@ -2701,22 +2696,30 @@ def get_symbolized_crash_location_file() -> str:
     return os.path.join(get_work_dir(), SYMBOLIZED_CRASH_LOCATION_FILE_NAME)
 
 
-def get_source_aliases_file() -> str:
-    return os.path.join(get_work_dir(), SOURCE_ALIASES_FILE_NAME)
+def set_reference_source_aliases(aliases: SourceAliases | None) -> None:
+    global REFERENCE_SOURCE_ALIASES
+    REFERENCE_SOURCE_ALIASES = aliases.to_json() if aliases is not None else None
+
+
+def _record_reference_source_aliases(output: str) -> None:
+    # The checker reports approved pairs before printing raw target output.
+    # A marker printed by the target itself cannot establish an approval.
+    for line in output.splitlines():
+        if line.strip() == "execution log:":
+            break
+        if line.startswith(SOURCE_ALIASES_MARKER):
+            set_reference_source_aliases(SourceAliases.from_json(line[len(SOURCE_ALIASES_MARKER):]))
+            return
+    raise RuntimeError("The original plugin check did not return its approved source paths.")
 
 
 def source_alias_tester_args(*, record: bool = False) -> list[str]:
-    """Embed approved pairs so candidate processes never need to read headers."""
-    path = Path(get_source_aliases_file())
-    try:
-        pairs = path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        if not record:
-            return []
-        pairs = "[]"
-    args = ["--source-aliases", pairs]
+    """Pass the in-memory approvals directly to each checker process."""
+    if REFERENCE_SOURCE_ALIASES is None and not record:
+        return []
+    args = ["--source-aliases", REFERENCE_SOURCE_ALIASES or "[]"]
     if record:
-        args.extend(["--record-source-aliases", str(path)])
+        args.append("--record-source-aliases")
     return args
 
 
@@ -2751,6 +2754,7 @@ def reset_stack_trace_state() -> None:
     set_symbolized_reference_stack_depth_strict(False)
     set_dynamic_reference_crash_site(None)
     set_symbolized_reference_crash_location_pattern(None)
+    set_reference_source_aliases(None)
     for path in (
         get_stack_trace_file(),
         get_stack_depth_stability_file(),
@@ -2758,7 +2762,6 @@ def reset_stack_trace_state() -> None:
         get_crash_pattern_file(symbolized=True),
         get_dynamic_crash_site_file(),
         get_symbolized_crash_location_file(),
-        get_source_aliases_file(),
         str(Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME),
         str(Path(get_work_dir()) / "crash_reference.symbolize0.failure.log"),
         str(Path(get_work_dir()) / "crash_reference.symbolize1.failure.log"),

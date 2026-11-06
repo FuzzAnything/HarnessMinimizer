@@ -2,12 +2,11 @@
 
 import filecmp
 import json
-import os
 from pathlib import Path
 import re
-import tempfile
 
 
+SOURCE_ALIASES_MARKER = "HARNESSMINIMIZER_SOURCE_ALIASES="
 _PATTERN_PATH = re.compile(r"(?P<path>/(?:\\.|[^:\\])+):\d+(?::\d+)?")
 _OUTPUT_LOCATION = re.compile(r"(?P<path>/[^\s:]+):\d+(?::\d+)?")
 
@@ -32,18 +31,6 @@ class SourceAliases:
 
     def to_json(self) -> str:
         return json.dumps(sorted(self.pairs))
-
-    def save(self, path: str) -> None:
-        destination = Path(path)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
-                                         delete=False) as handle:
-            temporary = Path(handle.name)
-            try:
-                handle.write(self.to_json() + "\n")
-                handle.close()
-                os.replace(temporary, destination)
-            finally:
-                temporary.unlink(missing_ok=True)
 
     def accepts(self, reference: str, candidate: str) -> bool:
         pair = tuple(sorted((reference, candidate)))

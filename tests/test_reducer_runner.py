@@ -10,6 +10,7 @@ from unittest.mock import patch
 from harnessminimizer import reducer_runner
 from harnessminimizer.dynamic_slicer import CoverageMap
 from harnessminimizer.macro_headers import MacroPreparation
+from harnessminimizer.source_alias import SourceAliases
 
 
 class _Proc:
@@ -39,6 +40,7 @@ class TestReducerRunner(unittest.TestCase):
         reducer_runner.set_symbolized_reference_stack_depth_strict(False)
         reducer_runner.set_dynamic_reference_crash_site(None)
         reducer_runner.set_symbolized_reference_crash_location_pattern(None)
+        reducer_runner.set_reference_source_aliases(None)
         reducer_runner.configure_debug_logging(False)
 
     @patch("harnessminimizer.reducer_runner.run_supervised")
@@ -190,7 +192,7 @@ class TestReducerRunner(unittest.TestCase):
         )
         pairs = [["/reference/lib.c", "/plugin/lib.c"]]
         def record_reference(*args, **kwargs):
-            Path(reducer_runner.get_source_aliases_file()).write_text(json.dumps(pairs))
+            reducer_runner.set_reference_source_aliases(SourceAliases(pairs))
             return "#0 0x111111 in target\n#1 0x222222 in LLVMFuzzerTestOneInput\n"
         mock_reference.side_effect = record_reference
         reducer_runner.set_normal_reference_stack_depth_strict(True)
@@ -213,7 +215,10 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--stack-depth", cmd)
         self.assertIn("2", cmd)
         self.assertIn("--strict-stack-depth", cmd)
-        self.assertEqual(json.loads(cmd[cmd.index("--source-aliases") + 1]), pairs)
+        self.assertEqual(
+            {frozenset(pair) for pair in json.loads(cmd[cmd.index("--source-aliases") + 1])},
+            {frozenset(pair) for pair in pairs},
+        )
         self.assertNotIn("--record-source-aliases", cmd)
         mock_reference.assert_called_once()
 

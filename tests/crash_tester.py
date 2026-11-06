@@ -28,7 +28,9 @@ from harnessminimizer.process_supervisor import (
 from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
-from harnessminimizer.source_alias import SourceAliases, matches_crash_location, matches_crash_pattern
+from harnessminimizer.source_alias import (
+    SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
+)
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
 
 from harnessminimizer.reducer_runner import (
@@ -1127,7 +1129,7 @@ def main() -> int:
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
     parser.add_argument("--source-aliases", default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--record-source-aliases", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--record-source-aliases", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--strict-stack-depth", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
@@ -1269,7 +1271,7 @@ def main() -> int:
         # Publish new pairs only after the entire original-plugin check passes.
         # Reduction candidates receive a read-only set through --source-aliases.
         if args.record_source_aliases:
-            args._source_aliases.save(args.record_source_aliases)
+            print(SOURCE_ALIASES_MARKER + args._source_aliases.to_json())
         _update_last_interesting_file(args.source, args.last_interesting_file)
         print("execution log: ")
         print(run_log)
