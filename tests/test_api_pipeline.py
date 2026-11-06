@@ -40,11 +40,20 @@ class TestApiPipeline(unittest.TestCase):
         self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
         self.addCleanup(self.symbolized_pattern_patch.stop)
 
-        # Routing tests mock reduction with /tmp/reduced.cpp rather than
-        # create a real output. Source cleanup has separate filesystem tests.
-        cleanup_patch = patch("harnessminimizer.api.clean_reduced_source")
-        cleanup_patch.start()
-        self.addCleanup(cleanup_patch.stop)
+        output_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(output_dir.cleanup)
+        self.reduced_path = str(Path(output_dir.name) / "reduced.cpp")
+        self.cleaned_source = (
+            'const char *text = R"tag(\n'
+            '// keep this raw-string content\n'
+            ')tag";\n\n'
+            'int LLVMFuzzerTestOneInput(const unsigned char *, unsigned long) {\n'
+            '  return 0;\n}\n'
+        )
+        Path(self.reduced_path).write_text(
+            '// remove this comment-only line\n' + self.cleaned_source,
+            encoding="utf-8",
+        )
 
 
     def test_amortize_link_rejects_direct_mode(self):
@@ -268,8 +277,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.return_value = "/tmp/tagged.cpp"
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = PostReductionOutcome("/tmp/reduced.cpp", )
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = PostReductionOutcome(self.reduced_path, )
         mock_extract.return_value = "AddressSanitizer"
         self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
         mock_slice.return_value = "/tmp/sliced.cpp"
@@ -289,7 +298,8 @@ class TestApiPipeline(unittest.TestCase):
 
         result = reduce_with_config(config)
 
-        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        self.assertEqual(result.reduced_harness, self.reduced_path)
+        self.assertEqual(Path(result.reduced_harness).read_text(encoding="utf-8"), self.cleaned_source)
         self.assertEqual(result.tagged_harness, "/tmp/tagged.cpp")
         self.assertEqual(result.fdp_trace, "/tmp/fdp_trace.log")
 
@@ -347,9 +357,9 @@ class TestApiPipeline(unittest.TestCase):
             tool="treereduce",
             reduction_timeout_seconds=37,
         )
-        mock_format.assert_called_once_with("/tmp/reduced.cpp")
+        mock_format.assert_called_once_with(self.reduced_path)
         mock_inline.assert_called_once_with(
-            "/tmp/reduced.cpp",
+            self.reduced_path,
             "/tmp/fdp_trace.log",
             "SymbolizedPattern",
             "seed.bin",
@@ -396,8 +406,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.return_value = "/tmp/tagged.cpp"
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
@@ -447,8 +457,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.return_value = "/tmp/tagged.cpp"
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "AddressSanitizer"
         mock_slice.return_value = "/tmp/sliced.cpp"
 
@@ -557,8 +567,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.return_value = "/tmp/tagged.cpp"
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
@@ -605,8 +615,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_inline,
     ):
         mock_tag.return_value = TaggedHarness("/tmp/tagged.cpp", 0)
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
@@ -676,8 +686,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_tag.return_value = "/tmp/tagged.cpp"
         mock_compile.return_value = "/tmp/tagged.out"
         mock_dump.return_value = "/tmp/fdp_trace.log"
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "AddressSanitizer"
 
         config = ReductionConfig(
@@ -692,7 +702,8 @@ class TestApiPipeline(unittest.TestCase):
 
         result = reduce_with_config(config)
 
-        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        self.assertEqual(result.reduced_harness, self.reduced_path)
+        self.assertEqual(Path(result.reduced_harness).read_text(encoding="utf-8"), self.cleaned_source)
         mock_validate_crash_pattern.assert_called_once()
         mock_validate_stack_trace.assert_called_once()
         self.assertTrue(
@@ -735,8 +746,8 @@ class TestApiPipeline(unittest.TestCase):
         mock_inline,
     ):
         mock_tag.return_value = TaggedHarness("/tmp/tagged.cpp", 0)
-        mock_reduce.return_value = "/tmp/reduced.cpp"
-        mock_inline.return_value = ("/tmp/reduced.cpp", ())
+        mock_reduce.return_value = self.reduced_path
+        mock_inline.return_value = (self.reduced_path, ())
         mock_extract.return_value = "FastPattern"
         self.mock_get_symbolized_pattern.return_value = "SymbolizedPattern"
 
@@ -748,7 +759,8 @@ class TestApiPipeline(unittest.TestCase):
 
         result = reduce_with_config(config)
 
-        self.assertEqual(result.reduced_harness, "/tmp/reduced.cpp")
+        self.assertEqual(result.reduced_harness, self.reduced_path)
+        self.assertEqual(Path(result.reduced_harness).read_text(encoding="utf-8"), self.cleaned_source)
         mock_extract.assert_called_once_with(
             "seed.bin",
             harness_path="a.cpp",
@@ -785,7 +797,7 @@ class TestApiPipeline(unittest.TestCase):
             reduction_timeout_seconds=None,
         )
         mock_inline.assert_called_once_with(
-            "/tmp/reduced.cpp",
+            self.reduced_path,
             None,
             "SymbolizedPattern",
             "seed.bin",
