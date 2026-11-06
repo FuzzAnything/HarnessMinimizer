@@ -28,6 +28,7 @@ from harnessminimizer.process_supervisor import (
 from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
+from harnessminimizer.source_alias import matches_crash_location, matches_crash_pattern
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
 
 from harnessminimizer.reducer_runner import (
@@ -952,7 +953,7 @@ def _classify_crash_location_pattern(
         print("[-] No symbolized crash location found in the first stack trace.")
         return EvidenceResult.MISSING_EVIDENCE
 
-    if re.fullmatch(pattern, location) is not None:
+    if matches_crash_location(pattern, location):
         print("[+] Symbolized crash-location validation passed.")
         return EvidenceResult.MATCH
 
@@ -1004,7 +1005,7 @@ def _evaluate_candidate_crash(
         args._debug_crash_pattern_matched = (
             None
             if args.skip_crash_pattern
-            else re.search(args.crash_pattern, run_log) is not None
+            else matches_crash_pattern(args.crash_pattern, run_log)
         )
         args._debug_dynamic_crash_site = extract_first_dynamic_library_crash_site(
             run_log,
@@ -1031,7 +1032,7 @@ def _evaluate_candidate_crash(
 
     # First: crash pattern must match unless a caller intentionally uses
     # this run only for symbolized stack/depth validation.
-    if not args.skip_crash_pattern and re.search(args.crash_pattern, run_log) is None:
+    if not args.skip_crash_pattern and not matches_crash_pattern(args.crash_pattern, run_log):
         print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
         return EvidenceResult.MISMATCH, None
 
