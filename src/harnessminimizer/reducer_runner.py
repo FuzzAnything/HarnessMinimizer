@@ -74,6 +74,7 @@ CRASH_PATTERN_SYMBOLIZE_0_FILE_NAME = "crash_pattern.symbolize0"
 CRASH_PATTERN_SYMBOLIZE_1_FILE_NAME = "crash_pattern.symbolize1"
 DYNAMIC_CRASH_SITE_FILE_NAME = "dynamic_crash_site.json"
 SYMBOLIZED_CRASH_LOCATION_FILE_NAME = "symbolized_crash_location.pattern"
+SOURCE_ALIASES_FILE_NAME = "source_aliases.json"
 SYMBOLIZATION_FAILURE_LOG_NAME = "reference_symbolization_failure.log"
 LAST_INTERESTING_FILE_NAME = "last_interesting.cpp"
 HARNESS_RUNNER_SOURCE_NAME = "harness_runner.cpp"
@@ -1766,6 +1767,7 @@ def run_amortized_reference_candidate(
         cmd.append("--skip-crash-pattern")
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args(record=True))
     append_exec_timeout_tester_args(cmd)
     proc = run_command(
         cmd,
@@ -2091,8 +2093,15 @@ def isolated_attempt_work_dir(path: Path):
     """Temporarily switch artifacts, preserving original reference globals."""
     global TREEDUCER_DIR, _IS_USER_WORK_DIR
     previous = TREEDUCER_DIR, _IS_USER_WORK_DIR
+    previous_aliases = Path(TREEDUCER_DIR, SOURCE_ALIASES_FILE_NAME) if TREEDUCER_DIR else None
     configure_work_dir(str(path))
     try:
+        aliases = Path(get_source_aliases_file())
+        if previous_aliases != aliases:
+            if previous_aliases is not None and previous_aliases.is_file():
+                shutil.copyfile(previous_aliases, aliases)
+            else:
+                aliases.unlink(missing_ok=True)
         yield
     finally:
         TREEDUCER_DIR, _IS_USER_WORK_DIR = previous
@@ -2194,6 +2203,7 @@ def _run_restore_transition_stack_diagnostic(
     cmd.extend(debug_tester_args(debug_stage))
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
@@ -2691,6 +2701,25 @@ def get_symbolized_crash_location_file() -> str:
     return os.path.join(get_work_dir(), SYMBOLIZED_CRASH_LOCATION_FILE_NAME)
 
 
+def get_source_aliases_file() -> str:
+    return os.path.join(get_work_dir(), SOURCE_ALIASES_FILE_NAME)
+
+
+def source_alias_tester_args(*, record: bool = False) -> list[str]:
+    """Embed approved pairs so candidate processes never need to read headers."""
+    path = Path(get_source_aliases_file())
+    try:
+        pairs = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        if not record:
+            return []
+        pairs = "[]"
+    args = ["--source-aliases", pairs]
+    if record:
+        args.extend(["--record-source-aliases", str(path)])
+    return args
+
+
 def get_last_interesting_file() -> str:
     return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
 
@@ -2729,6 +2758,7 @@ def reset_stack_trace_state() -> None:
         get_crash_pattern_file(symbolized=True),
         get_dynamic_crash_site_file(),
         get_symbolized_crash_location_file(),
+        get_source_aliases_file(),
         str(Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME),
         str(Path(get_work_dir()) / "crash_reference.symbolize0.failure.log"),
         str(Path(get_work_dir()) / "crash_reference.symbolize1.failure.log"),
@@ -3567,6 +3597,7 @@ def check_reducer_crash_pattern(
     cmd.extend(stack_depth_tester_args(symbolized=False))
     cmd.extend(dynamic_crash_site_tester_args())
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
     proc = run_command(cmd, "Invalid crash pattern.", ignore_errors=True)
     if proc.returncode != 77:
@@ -3902,6 +3933,9 @@ def run_treereducer(
             if not symbolize:
                 cmd.extend(stack_depth_tester_args(symbolized=False))
 
+        # The original plugin check above is the only writer. Freeze its
+        # approved pairs into the command inherited by every candidate.
+        cmd.extend(source_alias_tester_args())
         invocation = prepare_reducer_invocation(
             source=reducer_source, output=reduced_harness,
             checker_command=cmd, stable=stable, jobs=jobs,
@@ -4146,6 +4180,7 @@ def validate_crash_pattern(
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
@@ -4249,6 +4284,7 @@ def validate_stack_trace(
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))
@@ -4306,6 +4342,7 @@ def validate_symbolized_crash_pattern_depth_location(
     cmd.extend(evidence_attempt_tester_args(evidence_attempts))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
     if debug_stage:
         cmd.extend(debug_tester_args(debug_stage))

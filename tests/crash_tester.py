@@ -28,7 +28,7 @@ from harnessminimizer.process_supervisor import (
 from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
-from harnessminimizer.source_alias import matches_crash_location, matches_crash_pattern
+from harnessminimizer.source_alias import SourceAliases, matches_crash_location, matches_crash_pattern
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
 
 from harnessminimizer.reducer_runner import (
@@ -942,6 +942,8 @@ def _classify_crash_location_pattern(
     run_log: str,
     stored_pattern: str,
     source_path: str,
+    *,
+    aliases: SourceAliases | None = None,
 ) -> EvidenceResult:
     pattern = stored_pattern.strip()
     if not pattern:
@@ -953,7 +955,7 @@ def _classify_crash_location_pattern(
         print("[-] No symbolized crash location found in the first stack trace.")
         return EvidenceResult.MISSING_EVIDENCE
 
-    if matches_crash_location(pattern, location):
+    if matches_crash_location(pattern, location, aliases):
         print("[+] Symbolized crash-location validation passed.")
         return EvidenceResult.MATCH
 
@@ -1000,12 +1002,13 @@ def _evaluate_candidate_crash(
 ) -> tuple[EvidenceResult, str | None]:
     """Evaluate one report without combining evidence or finalizing the candidate."""
     use_symbolize = args.symbolize
+    aliases = getattr(args, "_source_aliases", None)
     if args.debug_log:
         args._debug_execution_return_code = status
         args._debug_crash_pattern_matched = (
             None
             if args.skip_crash_pattern
-            else matches_crash_pattern(args.crash_pattern, run_log)
+            else matches_crash_pattern(args.crash_pattern, run_log, aliases)
         )
         args._debug_dynamic_crash_site = extract_first_dynamic_library_crash_site(
             run_log,
@@ -1032,7 +1035,7 @@ def _evaluate_candidate_crash(
 
     # First: crash pattern must match unless a caller intentionally uses
     # this run only for symbolized stack/depth validation.
-    if not args.skip_crash_pattern and not matches_crash_pattern(args.crash_pattern, run_log):
+    if not args.skip_crash_pattern and not matches_crash_pattern(args.crash_pattern, run_log, aliases):
         print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
         return EvidenceResult.MISMATCH, None
 
@@ -1051,7 +1054,9 @@ def _evaluate_candidate_crash(
     if not location_pattern and args.crash_location_file and os.path.exists(args.crash_location_file):
         location_pattern = Path(args.crash_location_file).read_text(encoding="utf-8").strip()
     if location_pattern:
-        result = _classify_crash_location_pattern(run_log, location_pattern, args.source)
+        result = _classify_crash_location_pattern(
+            run_log, location_pattern, args.source, aliases=aliases,
+        )
         if result is EvidenceResult.MISMATCH:
             return result, None
         if result is EvidenceResult.MISSING_EVIDENCE:
@@ -1121,6 +1126,8 @@ def main() -> int:
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
+    parser.add_argument("--source-aliases", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--record-source-aliases", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
     parser.add_argument("--strict-stack-depth", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dynamic-crash-site-library", type=str, default=None, help="Expected target shared library in the first stack trace")
@@ -1149,6 +1156,10 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    args._source_aliases = SourceAliases.from_json(
+        args.source_aliases or "[]",
+        allow_verification=bool(args.record_source_aliases) or args.source_aliases is None,
+    )
     args.evidence_attempts = max(1, args.evidence_attempts)
     args._profile_main_started_ns = main_started_ns
     args._profile_compile_ns = 0
@@ -1255,6 +1266,10 @@ def main() -> int:
                 _add_profile_duration(args, "_profile_oracle_ns", args._profile_oracle_started_ns)
                 args._profile_oracle_started_ns = None
 
+        # Publish new pairs only after the entire original-plugin check passes.
+        # Reduction candidates receive a read-only set through --source-aliases.
+        if args.record_source_aliases:
+            args._source_aliases.save(args.record_source_aliases)
         _update_last_interesting_file(args.source, args.last_interesting_file)
         print("execution log: ")
         print(run_log)

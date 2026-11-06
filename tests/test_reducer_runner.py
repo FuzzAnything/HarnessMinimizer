@@ -1,4 +1,5 @@
 import unittest
+import json
 import tempfile
 import os
 from contextlib import nullcontext
@@ -187,10 +188,11 @@ class TestReducerRunner(unittest.TestCase):
         mock_start_runner.return_value = nullcontext(
             SimpleNamespace(socket_path="/tmp/harness-runner.sock")
         )
-        mock_reference.return_value = (
-            "#0 0x111111 in target\n"
-            "#1 0x222222 in LLVMFuzzerTestOneInput\n"
-        )
+        pairs = [["/reference/lib.c", "/plugin/lib.c"]]
+        def record_reference(*args, **kwargs):
+            Path(reducer_runner.get_source_aliases_file()).write_text(json.dumps(pairs))
+            return "#0 0x111111 in target\n#1 0x222222 in LLVMFuzzerTestOneInput\n"
+        mock_reference.side_effect = record_reference
         reducer_runner.set_normal_reference_stack_depth_strict(True)
 
         reducer_runner.run_treereducer(
@@ -211,6 +213,8 @@ class TestReducerRunner(unittest.TestCase):
         self.assertIn("--stack-depth", cmd)
         self.assertIn("2", cmd)
         self.assertIn("--strict-stack-depth", cmd)
+        self.assertEqual(json.loads(cmd[cmd.index("--source-aliases") + 1]), pairs)
+        self.assertNotIn("--record-source-aliases", cmd)
         mock_reference.assert_called_once()
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")

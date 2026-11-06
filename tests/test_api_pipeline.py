@@ -40,6 +40,12 @@ class TestApiPipeline(unittest.TestCase):
         self.mock_get_symbolized_pattern = self.symbolized_pattern_patch.start()
         self.addCleanup(self.symbolized_pattern_patch.stop)
 
+        # Routing tests mock reduction with /tmp/reduced.cpp rather than
+        # create a real output. Source cleanup has separate filesystem tests.
+        cleanup_patch = patch("harnessminimizer.api.clean_reduced_source")
+        cleanup_patch.start()
+        self.addCleanup(cleanup_patch.stop)
+
 
     def test_amortize_link_rejects_direct_mode(self):
         with self.assertRaisesRegex(ValueError, "requires split or PCH"):

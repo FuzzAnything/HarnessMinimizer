@@ -57,6 +57,7 @@ from harnessminimizer.reducer_runner import (
     run_treereducer,
     run_command,
     set_current_exec_timeout_ms,
+    source_alias_tester_args,
     validate_crash_pattern,
     validate_symbolized_crash_pattern_depth_location,
     validate_crash_pattern_and_stack_trace,
@@ -464,6 +465,7 @@ def _run_inline_stack_diagnostic(
         cmd.extend(["--fdp-trace", fdp_trace_file])
     if symbolize:
         cmd.append("--symbolize")
+    cmd.extend(source_alias_tester_args())
     append_exec_timeout_tester_args(cmd)
 
     proc = run_command(
