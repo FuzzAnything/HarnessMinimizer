@@ -10,10 +10,17 @@ fails normally. Explicit `snapshot=True` without a time budget continues to
 save accepted candidates throughout reduction; snapshot-based inline retries
 remain controlled by that flag.
 
-At the deadline the reducer and its testers stop,
-and a current-run atomic interesting-candidate snapshot goes through normal
-PoC finalization. This does not claim global minimality; callers must still
-verify the exported PoC against the original crash.
+At the deadline the reducer and its testers stop, and the saved interesting
+candidate goes through normal PoC finalization. While reduction runs, the
+checkpoint may contain injected FDP IDs. After successful final validation,
+the checkpoint is replaced atomically with the finalized source. Use
+`ReductionResult.reduced_harness` and its `generated_headers` for export:
+finalization inlines recorded FDP values, removes any remaining injected IDs,
+and validates the source without FDP replay. Calls without usable trace
+records can remain as ordinary FDP calls after their private IDs are removed.
+If final validation fails, the raw checkpoint is not a verified output.
+This does not claim global minimality; callers must still verify the exported
+PoC against the original crash.
 
 <p align="center">
   <picture>

@@ -24,7 +24,10 @@ class BudgetPipelineTests(unittest.TestCase):
     def test_timeout_recovers_without_optional_snapshot_retries(self):
         self._check_timeout_recovery(snapshot=False)
 
-    def _check_timeout_recovery(self, *, snapshot):
+    def test_timeout_inlines_fdp_values_without_snapshot_retries(self):
+        self._check_timeout_recovery(snapshot=False, with_fdp=True)
+
+    def _check_timeout_recovery(self, *, snapshot, with_fdp=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             library = root / "library.cpp"
@@ -32,7 +35,17 @@ class BudgetPipelineTests(unittest.TestCase):
             subprocess.run(["clang++", "-fsanitize=address,undefined", "-g", "-O0", "-c", str(library), "-o", str(root / "library.o")], check=True)
             subprocess.run(["ar", "rcs", str(root / "libtarget.a"), str(root / "library.o")], check=True)
             harness = root / "harness.cpp"
-            harness.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" void target();\nextern "C" int LLVMFuzzerTestOneInput(const uint8_t*, size_t) { int unused = 0; target(); return 0; }\n')
+            if with_fdp:
+                harness.write_text(
+                    '#include <cstddef>\n#include <cstdint>\n#include <fuzzer/FuzzedDataProvider.h>\n'
+                    'extern "C" void target();\n'
+                    'extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {\n'
+                    '  FuzzedDataProvider fdp(data, size);\n'
+                    '  int consumed = fdp.ConsumeIntegral<int>();\n'
+                    '  int unused = 0; target(); return consumed;\n}\n'
+                )
+            else:
+                harness.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" void target();\nextern "C" int LLVMFuzzerTestOneInput(const uint8_t*, size_t) { int unused = 0; target(); return 0; }\n')
             seed = root / "seed"
             seed.write_bytes(b"fixture")
             tools = root / "bin"
@@ -62,7 +75,9 @@ time.sleep(60)
             # oracle; all compile/replay/inline checks below remain real.
             with patch.dict(os.environ, environment), patch("harnessminimizer.api.format_reduced_harness"):
                 result = reduce_with_config(ReductionConfig(
-                    harness_path=str(harness), link_flags=str(root / "libtarget.a"),
+                    harness_path=str(harness),
+                    compile_flags=f"-I{Path(__file__).resolve().parents[1] / 'include'}" if with_fdp else None,
+                    link_flags=str(root / "libtarget.a"),
                     crash_input=str(seed), work_dir=str(root / "work"),
                     compilation_mode="pch", stable=True, snapshot=snapshot,
                     reduction_timeout_seconds=10,
@@ -70,3 +85,26 @@ time.sleep(60)
             self.assertTrue(result.success)
             self.assertTrue(Path(result.reduced_harness).is_file())
             self.assertNotIn("int unused = 0;", Path(result.reduced_harness).read_text())
+            if with_fdp:
+                exported = Path(result.reduced_harness).read_text()
+                checkpoint = root / "work" / "last_interesting.cpp"
+                self.assertEqual(checkpoint.read_text(), exported)
+                self.assertNotIn("FDP_ID:", exported)
+                self.assertNotIn("fdp.ConsumeIntegral", exported)
+                # The reduced source must compile against Clang's public FDP
+                # header, without HarnessMinimizer's private include directory.
+                public_binary = root / "public-poc"
+                public_compile = subprocess.run(
+                    ["clang++", "-fsanitize=address,fuzzer,undefined", "-g", "-O0",
+                     result.reduced_harness, str(root / "libtarget.a"),
+                     "-o", str(public_binary)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                self.assertEqual(public_compile.returncode, 0, public_compile.stderr)
+                public_replay = subprocess.run(
+                    [str(public_binary), str(seed)],
+                    capture_output=True, text=True, timeout=30,
+                    env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"},
+                )
+                self.assertNotEqual(public_replay.returncode, 0)
+                self.assertIn("division by zero", public_replay.stderr)

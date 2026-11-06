@@ -228,6 +228,31 @@ def test_zero_replacements_retry_snapshot(tmp_path: Path, capsys, fdp_trace, sym
         assert "Cleaned fallback harness did not pass final validation" in output
 
 
+def test_snapshot_retry_inlines_fdp_before_returning_saved_candidate(tmp_path: Path):
+    reduced = tmp_path / "reduced.cpp"
+    reduced.write_text("int unrelated;\n")
+    snapshot = tmp_path / "last_interesting.cpp"
+    snapshot.write_text(
+        "auto value = fdp.ConsumeIntegral<int>(/*FDP_ID:100000*/ 100000);\n"
+    )
+    trace = tmp_path / "trace.log"
+    trace.write_text("S 100000 42\n")
+    with patch.object(api, "_validate_post_reduction_harness", side_effect=[False, True]) as validate, \
+            patch.object(api, "_append_inline_stack_diagnostics"), \
+            patch.object(api, "get_last_interesting_file", return_value=str(snapshot)):
+        outcome = api.inline_literals_in_reduced_harness(
+            str(reduced), str(trace), None, "seed", None, None,
+            snapshot=True, crash_pattern_symbolize_0="AddressSanitizer",
+        )
+    self_contained = Path(outcome[0]).read_text()
+    assert outcome[0] == str(snapshot.with_suffix(".inline.cpp"))
+    assert outcome.validated
+    assert "FDP_ID:" not in self_contained
+    assert "ConsumeIntegral" not in self_contained
+    assert "42" in self_contained
+    assert validate.call_count == 2
+
+
 def test_empty_direct_input_still_embeds_zero_length(tmp_path: Path):
     reduced = tmp_path / "reduced.cpp"
     reduced.write_text(harness("const uint8_t *, size_t count"))

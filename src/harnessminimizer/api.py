@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import shutil
+import tempfile
 
 from harnessminimizer.process_supervisor import termination_guard
 from harnessminimizer.reduction_engines import check_perses, validate_tool
@@ -210,6 +212,22 @@ def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None) 
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
     _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
+
+
+def _finalize_budget_checkpoint(final_source: str) -> None:
+    """Replace a raw timed checkpoint with the validated, portable source."""
+    checkpoint = Path(get_last_interesting_file())
+    if not checkpoint.is_file() or checkpoint.is_symlink() or checkpoint == Path(final_source):
+        return
+    # The reducer and its testers have stopped. Keep the checkpoint atomic for
+    # anyone inspecting it while finalization finishes.
+    with tempfile.NamedTemporaryFile(dir=checkpoint.parent, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        shutil.copyfile(final_source, temporary_path)
+        os.replace(temporary_path, checkpoint)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _append_validation_summary(
@@ -1260,7 +1278,7 @@ def _reduction_attempt(
                 retry_oom_without_rss_limit=True,
             )
     reset_poc_runtime_args()
-    return inline_literals_in_reduced_harness(
+    outcome = inline_literals_in_reduced_harness(
         reduced_harness,
         fdp_trace_file,
         recorded_symbolized_pattern,
@@ -1274,6 +1292,9 @@ def _reduction_attempt(
         symbolize=config.symbolize,
         auto_var_init_pattern_fallback=config.auto_var_init_pattern,
     )
+    if config.reduction_timeout_seconds is not None and getattr(outcome, "validated", True):
+        _finalize_budget_checkpoint(outcome[0])
+    return outcome
 
 
 @termination_guard()
