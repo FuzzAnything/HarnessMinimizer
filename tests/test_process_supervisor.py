@@ -179,6 +179,23 @@ def running_runner(binary, tmp_path, env=None):
         terminate_process_group(process)
 
 
+def test_runner_preserves_binary_output_and_checker_decodes_it(runner_binary, tmp_path):
+    from tests.crash_tester import run_with_amortized_runner
+
+    plugin = compile_plugin(tmp_path, (
+        r'const char output[] = "\215\377\nSUMMARY: AddressSanitizer: heap-buffer-overflow\n";'
+        'write(2, output, sizeof(output)-1); _exit(77);'
+    ))
+    expected = b"\x8d\xff\nSUMMARY: AddressSanitizer: heap-buffer-overflow\n"
+    with running_runner(runner_binary, tmp_path) as (_, sock):
+        header, output = runner_request(sock, plugin, timeout=3)
+        assert int(header[0]) == 77
+        assert output == expected
+        status, decoded = run_with_amortized_runner(str(sock), str(plugin), exec_timeout_ms=1000)
+        assert status == 77
+        assert decoded == expected.decode("utf-8", "replace")
+
+
 @pytest.mark.parametrize("body,status", [
     ("return 77;", 77),
     ("close(1);close(2);sleep(8);return 0;", 124),

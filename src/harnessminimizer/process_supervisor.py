@@ -7,7 +7,6 @@ are not a sandbox: a descendant can escape by creating another session.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import locale
 import math
 import os
 from pathlib import Path
@@ -164,6 +163,8 @@ def run_supervised(
     Preserve CompletedProcess/TimeoutExpired and stdout/stderr semantics so
     profiling stays around the same compile/link/execute regions. stdout and
     stderr limits apply only to PIPEs, not inherited output or caller files.
+    Text output defaults to UTF-8 with replacement for arbitrary target bytes;
+    binary output and explicitly requested decoding policies remain unchanged.
     """
     if private_tmpdir:
         with tempfile.TemporaryDirectory(prefix="harnessminimizer_checks_") as tmp:
@@ -174,8 +175,8 @@ def run_supervised(
                 cwd=cwd, check=check, timeout=timeout,
                 max_output_bytes=max_output_bytes, **kwargs,
             )
-    encoding = kwargs.pop("encoding", None) or locale.getpreferredencoding(False)
-    errors = kwargs.pop("errors", None) or "strict"
+    encoding = kwargs.pop("encoding", None) or "utf-8"
+    errors = kwargs.pop("errors", None) or "replace"
     kwargs.setdefault("start_new_session", True)
     started = time.monotonic()
     deadline = None if timeout is None else started + timeout
