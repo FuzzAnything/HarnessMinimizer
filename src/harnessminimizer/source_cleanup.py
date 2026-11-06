@@ -1,4 +1,4 @@
-"""Remove standalone comments and excess blank lines from a reduced C++ source."""
+"""Remove standalone comments from a reduced C++ source."""
 
 from collections import deque
 from pathlib import Path
@@ -8,12 +8,11 @@ from tree_sitter import Language, Parser
 
 
 _CPP_LANGUAGE = Language(tree_sitter_cpp.language())
-_MULTILINE_LITERAL_TYPES = {"raw_string_literal", "string_literal", "char_literal"}
 _WHITESPACE = frozenset(b" \t\r\f\v")
 
 
 def clean_reduced_source(path: str) -> None:
-    """Delete whole comment lines and keep at most one blank line between code.
+    """Delete whole comment lines, leaving all existing blank lines untouched.
 
     Tree-sitter distinguishes comments from comment-shaped text in raw strings.
     A block comment touching code on either end is kept intact, including its
@@ -32,7 +31,6 @@ def clean_reduced_source(path: str) -> None:
     comment_bytes = bytearray(len(source))
     line_comments: list[list[int]] = [[] for _ in lines]
     comments: list[tuple[int, int]] = []
-    protected_blanks = set()
     nodes = [tree.root_node]
     while nodes:
         node = nodes.pop()
@@ -46,8 +44,6 @@ def clean_reduced_source(path: str) -> None:
             comment_bytes[node.start_byte:node.end_byte] = b"\x01" * (node.end_byte - node.start_byte)
             for row in range(first, last + 1):
                 line_comments[row].append(comment_id)
-        elif node.type in _MULTILINE_LITERAL_TYPES and last > first:
-            protected_blanks.update(range(first, last + 1))
         nodes.extend(node.children)
 
     line_starts = []
@@ -83,31 +79,7 @@ def clean_reduced_source(path: str) -> None:
                     removable[row] = False
                     queue.append(row)
 
-    for first, last in comments:
-        if any(not removable[row] for row in range(first, last + 1)):
-            protected_blanks.update(range(first, last + 1))
-    # A blank physical line can end a backslash-continued macro. Keep it.
-    protected_blanks.update(continued_rows)
-
-    retained = [(row, line) for row, line in enumerate(lines) if not removable[row]]
-    cleaned = []
-    row = 0
-    while row < len(retained):
-        original_row, line = retained[row]
-        if line.strip() or original_row in protected_blanks:
-            cleaned.append(line)
-            row += 1
-            continue
-        end = row + 1
-        while (end < len(retained) and not retained[end][1].strip()
-               and retained[end][0] not in protected_blanks):
-            end += 1
-        # The requested blank-line limit applies between nonblank code lines.
-        between_code = bool(cleaned and cleaned[-1].strip() and end < len(retained)
-                            and retained[end][1].strip())
-        cleaned.extend([line] if between_code else [item[1] for item in retained[row:end]])
-        row = end
-
-    result = b"\n".join(cleaned) + (b"\n" if final_newline else b"")
+    retained = [line for row, line in enumerate(lines) if not removable[row]]
+    result = b"\n".join(retained) + (b"\n" if final_newline and retained else b"")
     if result != source:
         source_path.write_bytes(result)

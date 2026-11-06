@@ -91,7 +91,6 @@ time.sleep(60)
             if with_fdp:
                 exported = Path(result.reduced_harness).read_text()
                 self.assertNotIn("A comment in the saved candidate", exported)
-                self.assertNotIn("\n\n\n", exported)
                 checkpoint = root / "work" / "last_interesting.cpp"
                 self.assertEqual(checkpoint.read_text(), exported)
                 self.assertNotIn("FDP_ID:", exported)

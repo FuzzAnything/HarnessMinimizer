@@ -29,13 +29,13 @@ def test_cleanup_removes_comment_only_lines_without_touching_raw_string(tmp_path
     assert source.read_bytes() == (
         b'#include <vector>\n'
         b'int first = 1; // attached comment\n'
-        b'\n'
+        b'\n\n\n'
         b'const char *text = R"tag(\n'
         b'// this is data, not a comment\n'
         b'\n\n\n'
         b'/* this is also data */\n'
         b')tag";\n'
-        b'\n'
+        b'\n\n\n'
         b'int second = 2;\n'
     )
     # A second pass should leave the exported source unchanged.
@@ -64,7 +64,16 @@ def test_cleanup_keeps_mixed_block_comments_and_macro_continuations(tmp_path: Pa
     assert b'// a continued directive' in cleaned
     assert b'/* block begins\n * this line belongs to the mixed block\n */' in cleaned
     assert b'// removable' not in cleaned
-    assert b'\n\n\n' not in cleaned
+    assert b'\n\n\n' in cleaned
+
+
+def test_cleanup_does_not_leave_a_blank_line_for_an_all_comment_file(tmp_path: Path):
+    source = tmp_path / "reduced.cpp"
+    source.write_bytes(b"// first\n/* second */\n")
+
+    clean_reduced_source(str(source))
+
+    assert source.read_bytes() == b""
 
 
 @pytest.mark.parametrize("budget", [None, 10.0])
@@ -82,7 +91,7 @@ def test_cleanup_runs_before_format_and_inline_for_finished_or_timed_reduction(
     def formatted(path):
         order.append("format")
         assert path == str(source)
-        assert source.read_text() == '#include <vector>\n\nint value = 1;\n'
+        assert source.read_text() == '#include <vector>\n\n\nint value = 1;\n'
 
     def inlined(*_args, **_kwargs):
         order.append("inline")
