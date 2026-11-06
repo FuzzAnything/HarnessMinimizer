@@ -1,7 +1,16 @@
 <h1 align="center">HarnessMinimizer</h1>
 
 API callers using TreeReduce may set `ReductionConfig.reduction_timeout_seconds`
-to bound tree reduction. At the deadline the reducer and its testers stop,
+to bound tree reduction. Checkpoints are written only for accepted candidates
+during the final four minutes of that budget (throughout searches whose budget
+is four minutes or less). No initial candidate is saved. Earlier accepted
+candidates incur no checkpoint comparisons or writes. If no candidate is saved
+before the deadline and the reducer has no completed output, timeout recovery
+fails normally. Explicit `snapshot=True` without a time budget continues to
+save accepted candidates throughout reduction; snapshot-based inline retries
+remain controlled by that flag.
+
+At the deadline the reducer and its testers stop,
 and a current-run atomic interesting-candidate snapshot goes through normal
 PoC finalization. This does not claim global minimality; callers must still
 verify the exported PoC against the original crash.

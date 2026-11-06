@@ -28,6 +28,7 @@ from harnessminimizer.process_supervisor import (
 from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
+from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
 
 from harnessminimizer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
@@ -285,6 +286,12 @@ def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> N
 
 def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -> None:
     if not snapshot_path:
+        return
+    # Budgeted searches checkpoint only during their final four minutes. Check
+    # before mkdir/comparison/copy so earlier accepted candidates do no snapshot
+    # filesystem work. Unbounded explicit snapshots retain their usual behavior.
+    checkpoint_start = os.environ.get(CHECKPOINT_START_ENV)
+    if checkpoint_start is not None and time.monotonic() < float(checkpoint_start):
         return
 
     snapshot = Path(snapshot_path)

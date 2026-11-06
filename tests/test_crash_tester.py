@@ -184,6 +184,31 @@ class TestCrashTester(unittest.TestCase):
             crash_tester._update_last_interesting_file(str(source), str(snapshot))
             self.assertEqual(snapshot.read_text(encoding="utf-8"), "int a = 2;\n")
 
+    def test_checkpoint_before_window_does_no_filesystem_work(self):
+        with patch.dict(crash_tester.os.environ, {crash_tester.CHECKPOINT_START_ENV: "2160"}), \
+                patch.object(crash_tester.time, "monotonic", return_value=2159.99), \
+                patch.object(crash_tester, "Path") as path, \
+                patch.object(crash_tester.filecmp, "cmp") as compare, \
+                patch.object(crash_tester.shutil, "copyfile") as copy:
+            crash_tester._update_last_interesting_file("candidate.cpp", "checkpoint.cpp")
+        path.assert_not_called()
+        compare.assert_not_called()
+        copy.assert_not_called()
+
+    def test_checkpoint_window_opens_at_cutoff_and_updates_atomically(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "candidate.cpp"
+            snapshot = Path(tmpdir) / "checkpoints" / "last_interesting.cpp"
+            with patch.dict(crash_tester.os.environ, {crash_tester.CHECKPOINT_START_ENV: "2160"}), \
+                    patch.object(crash_tester.os, "replace", wraps=crash_tester.os.replace) as replace:
+                for index, now in enumerate((2160, 2200)):
+                    source.write_text(f"int value = {index};\n")
+                    with patch.object(crash_tester.time, "monotonic", return_value=now):
+                        crash_tester._update_last_interesting_file(str(source), str(snapshot))
+                    self.assertEqual(snapshot.read_bytes(), source.read_bytes())
+                self.assertEqual(replace.call_count, 2)
+                self.assertEqual(list(snapshot.parent.iterdir()), [snapshot])
+
     def test_amortized_fallback_state_uses_countdown_before_fast_probe(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             args = Namespace(

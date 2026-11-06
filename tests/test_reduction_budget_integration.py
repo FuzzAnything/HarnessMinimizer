@@ -19,6 +19,12 @@ from harnessminimizer.api import ReductionConfig, reduce_with_config
 @unittest.skipUnless(shutil.which("clang++") and shutil.which("ar"), "C++ toolchain required")
 class BudgetPipelineTests(unittest.TestCase):
     def test_timeout_snapshot_survives_pch_restoration_and_inline_validation(self):
+        self._check_timeout_recovery(snapshot=True)
+
+    def test_timeout_recovers_without_optional_snapshot_retries(self):
+        self._check_timeout_recovery(snapshot=False)
+
+    def _check_timeout_recovery(self, *, snapshot):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             library = root / "library.cpp"
@@ -58,7 +64,7 @@ time.sleep(60)
                 result = reduce_with_config(ReductionConfig(
                     harness_path=str(harness), link_flags=str(root / "libtarget.a"),
                     crash_input=str(seed), work_dir=str(root / "work"),
-                    compilation_mode="pch", stable=True, snapshot=True,
+                    compilation_mode="pch", stable=True, snapshot=snapshot,
                     reduction_timeout_seconds=10,
                 ))
             self.assertTrue(result.success)

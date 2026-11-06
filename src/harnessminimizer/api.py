@@ -119,6 +119,8 @@ class ReductionConfig:
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
     tool: str = "treereduce"
+    # Budget recovery checkpoints accepted candidates only in the final four
+    # minutes; no initial candidate is saved. None leaves snapshot behavior alone.
     reduction_timeout_seconds: float | None = None
 
 

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 from harnessminimizer.process_supervisor import run_supervised
+
+
+CHECKPOINT_WINDOW_SECONDS = 4 * 60
+CHECKPOINT_START_ENV = "HARNESSMINIMIZER_CHECKPOINT_START_MONOTONIC"
 
 
 def run_bounded_reduction(
@@ -20,10 +26,16 @@ def run_bounded_reduction(
     candidate.unlink(missing_ok=True)
     checkpoint = Path(snapshot)
     checkpoint.unlink(missing_ok=True)
+    # All tester processes share this cutoff, measured from the actual search
+    # launch rather than harness preparation. Do not seed an initial snapshot.
+    environment = dict(os.environ)
+    environment[CHECKPOINT_START_ENV] = str(
+        time.monotonic() + max(0, timeout_seconds - CHECKPOINT_WINDOW_SECONDS)
+    )
     try:
         return run_supervised(
             command, stderr=subprocess.STDOUT, text=True,
-            timeout=timeout_seconds, private_tmpdir=True,
+            timeout=timeout_seconds, private_tmpdir=True, env=environment,
         )
     except subprocess.TimeoutExpired:
         # The existing supervisor has stopped the reducer and its descendants
