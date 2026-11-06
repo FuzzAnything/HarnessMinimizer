@@ -31,6 +31,7 @@ from harnessminimizer.crash_evidence import (
 from harnessminimizer.source_alias import (
     SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
 )
+from harnessminimizer.symbolized_trace import TRACE_SET_ENV, SymbolizedTraceReference, extract_stack_trace
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
 
 from harnessminimizer.reducer_runner import (
@@ -185,31 +186,6 @@ def phase3_replay_flags(
     if external_replay_runtime:
         flags.append("-DFDP_MIN_EXTERNAL_REPLAY_RUNTIME")
     return flags
-
-
-def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
-    """Extract the first stack trace from symbolized sanitizer output.
-
-    Parses stack frames, truncates at the first harness frame when
-    ``harness_path`` is provided, otherwise falls back to LLVMFuzzerTestOneInput.
-    Only the first stack trace is kept.
-    Returns None if no stack frames are found.
-    """
-    frames: list[str] = []
-    in_first_trace = False
-    for line in output.splitlines():
-        if STACK_FRAME_COUNT_PATTERN.match(line):
-            in_first_trace = True
-            if _frame_matches_harness_source(line, harness_path):
-                break
-            if LLVMFuzzerTestOneInput_PATTERN.search(line):
-                break
-            frames.append(line)
-        elif in_first_trace:
-            break
-    if not frames:
-        return None
-    return "\n".join(frames)
 
 
 def _finalize_result(args: argparse.Namespace, result_code: int) -> int:
@@ -1005,6 +981,7 @@ def _evaluate_candidate_crash(
     """Evaluate one report without combining evidence or finalizing the candidate."""
     use_symbolize = args.symbolize
     aliases = getattr(args, "_source_aliases", None)
+    trace_reference = getattr(args, "_reference_traces", None)
     if args.debug_log:
         args._debug_execution_return_code = status
         args._debug_crash_pattern_matched = (
@@ -1068,7 +1045,17 @@ def _evaluate_candidate_crash(
     # anchor is available (symbolized crash location or fast-path DSO+offset),
     # depth is advisory.  In fast non-symbolized mode without a dynamic
     # crash-site anchor, depth becomes part of the hard equivalence check.
-    if args.stack_depth is not None:
+    if use_symbolize and trace_reference is not None:
+        result, variant = trace_reference.evaluate(run_log, args.source, aliases)
+        if result is EvidenceResult.MISMATCH:
+            print("[-] Unrecorded symbolized reference trace; rejecting candidate.")
+            return result, None
+        if result is EvidenceResult.MISSING_EVIDENCE:
+            missing = "symbolized reference-trace evidence"
+        else:
+            print(f"[+] Symbolized reference trace matched variant {variant}/{len(trace_reference.normalized_patterns)}.")
+
+    if trace_reference is None and args.stack_depth is not None:
         candidate_stack_depth = count_first_stack_trace_frames(run_log)
         if candidate_stack_depth != args.stack_depth:
             if _stack_depth_is_advisory(args, use_symbolize=use_symbolize):
@@ -1095,7 +1082,7 @@ def _evaluate_candidate_crash(
     # reaches the crash first, different intermediate frames), so a regex
     # mismatch is logged as a warning rather than rejecting the candidate.
     # The crash-location anchor above is the authoritative gate.
-    if use_symbolize and args.stack_trace_file and os.path.exists(args.stack_trace_file):
+    if use_symbolize and trace_reference is None and args.stack_trace_file and os.path.exists(args.stack_trace_file):
         if not _check_stack_trace(run_log, args.stack_trace_file, args.source):
             print(
                 "[!] Warning: full symbolized stack trace did not match the "
@@ -1126,6 +1113,7 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--require-reference-traces", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
     parser.add_argument("--source-aliases", default=None, help=argparse.SUPPRESS)
@@ -1158,9 +1146,17 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args()
+    args._reference_traces = None
+    if args.require_reference_traces:
+        if not args.symbolize:
+            parser.error("--require-reference-traces requires --symbolize")
+        try:
+            args._reference_traces = SymbolizedTraceReference.from_json(os.environ.get(TRACE_SET_ENV, ""))
+        except (ValueError, TypeError, re.error) as exc:
+            parser.error(f"Missing or invalid symbolized reference traces: {exc}")
     args._source_aliases = SourceAliases.from_json(
         args.source_aliases or "[]",
-        allow_verification=bool(args.record_source_aliases) or args.source_aliases is None,
+        allow_verification=bool(args.record_source_aliases) or (args.source_aliases is None and not args.require_reference_traces),
     )
     args.evidence_attempts = max(1, args.evidence_attempts)
     args._profile_main_started_ns = main_started_ns

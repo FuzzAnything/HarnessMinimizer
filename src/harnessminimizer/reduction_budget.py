@@ -17,7 +17,8 @@ CHECKPOINT_START_ENV = "HARNESSMINIMIZER_CHECKPOINT_START_MONOTONIC"
 
 
 def run_bounded_reduction(
-    command: list[str], output: str, timeout_seconds: float, snapshot: str
+    command: list[str], output: str, timeout_seconds: float, snapshot: str,
+    *, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("Reduction timeout must be finite and positive.")
@@ -28,7 +29,7 @@ def run_bounded_reduction(
     checkpoint.unlink(missing_ok=True)
     # All tester processes share this cutoff, measured from the actual search
     # launch rather than harness preparation. Do not seed an initial snapshot.
-    environment = dict(os.environ)
+    environment = dict(os.environ if env is None else env)
     environment[CHECKPOINT_START_ENV] = str(
         time.monotonic() + max(0, timeout_seconds - CHECKPOINT_WINDOW_SECONDS)
     )

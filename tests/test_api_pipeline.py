@@ -769,6 +769,7 @@ class TestApiPipeline(unittest.TestCase):
             compile_flags=None,
             link_flags=None,
             record_symbolized_crash_location=True,
+            record_symbolized_trace_set=True,
         )
         mock_symbolized_oracle.assert_called_once_with(
             "a.cpp",

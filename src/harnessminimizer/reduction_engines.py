@@ -263,9 +263,12 @@ class ReducerInvocation:
     snapshot_paths: tuple[Path, ...] = ()
     cwd: Path | None = None
     log_path: Path | None = None
+    env: dict[str, str] | None = None
 
     def run(self, supervisor=run_supervised) -> subprocess.CompletedProcess:
         kwargs = dict(stderr=subprocess.STDOUT, text=True, check=False, timeout=None, private_tmpdir=True)
+        if self.env is not None:
+            kwargs["env"] = self.env
         if self.log_path is None:
             return supervisor(self.command, **kwargs)
         with self.log_path.open("w", encoding="utf-8") as log:

@@ -1359,6 +1359,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     crash_pattern_kwargs = {}
     if config.symbolize:
         crash_pattern_kwargs["record_symbolized_crash_location"] = True
+        crash_pattern_kwargs["record_symbolized_trace_set"] = True
     try:
         crash_pattern_symbolize_0 = extract_crash_pattern_from_output(
             config.crash_input,

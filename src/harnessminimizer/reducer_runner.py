@@ -17,13 +17,17 @@ from harnessminimizer.process_supervisor import (
     run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
 )
 from harnessminimizer.crash_evidence import (
-    CANDIDATE_EVIDENCE_ATTEMPTS, REFERENCE_EVIDENCE_ATTEMPTS, retry_missing_evidence,
+    CANDIDATE_EVIDENCE_ATTEMPTS, REFERENCE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
 )
 
 from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessminimizer.reduction_profile import write_profile_summary
 from harnessminimizer.source_alias import (
     SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
+)
+from harnessminimizer.symbolized_trace import (
+    TRACE_SET_ENV, SymbolizedTraceReference, extract_stack_trace,
+    normalize_crash_signature, _frame_matches_harness_source,
 )
 
 TREEDUCER_DIR: str | None = None
@@ -92,6 +96,8 @@ SYMBOLIZED_REFERENCE_STACK_DEPTH_STRICT = False
 DYNAMIC_REFERENCE_CRASH_SITE = None
 SYMBOLIZED_REFERENCE_CRASH_LOCATION_PATTERN: str | None = None
 REFERENCE_SOURCE_ALIASES: str | None = None
+SYMBOLIZED_TRACE_REFERENCE: SymbolizedTraceReference | None = None
+SYMBOLIZED_TRACE_REQUIRED = False
 CURRENT_EXEC_TIMEOUT_MS: int | None = DEFAULT_EXEC_TIMEOUT_MS
 REDUCTION_DEBUG_LOG_PATH: str | None = None
 POC_RUNTIME_ARGS: list[str] = []
@@ -1764,6 +1770,7 @@ def run_amortized_reference_candidate(
     if symbolize:
         cmd.append("--symbolize")
         cmd.extend(symbolized_crash_location_tester_args())
+        cmd.extend(reference_trace_tester_args())
     else:
         cmd.extend(dynamic_crash_site_tester_args())
     if not require_crash_pattern:
@@ -2096,12 +2103,15 @@ def get_work_dir() -> str:
 def isolated_attempt_work_dir(path: Path):
     """Temporarily switch artifacts, preserving original reference globals."""
     global TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
+    global SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED
     previous = TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
+    previous_traces = SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED
     configure_work_dir(str(path))
     try:
         yield
     finally:
         TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES = previous
+        SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED = previous_traces
 
 
 def configure_debug_logging(enabled: bool) -> str | None:
@@ -2155,6 +2165,8 @@ def auto_var_init_tester_args(enabled: bool) -> list[str]:
 
 
 def run_command(cmd: list[str], error_prefix: str, env: dict[str, str] | None = None, ignore_errors: bool = False) -> subprocess.CompletedProcess[str]:
+    if "--require-reference-traces" in cmd:
+        env = reference_trace_environment(env)
     proc = run_supervised(
         cmd,
         stdout=subprocess.PIPE,
@@ -2392,37 +2404,6 @@ int main(int argc, char **argv) {
     run_command(compile_cmd, "Failed to compile coverage-enabled harness")
     return output_bin
 
-def normalize_crash_signature(signature: str, escape: bool = False) -> str:
-    signature = signature.strip()
-    if escape:
-        placeholder = "__ADDR__"
-        signature = MEMORY_ADDRESS_PATTERN.sub(placeholder, signature)
-        signature = re.escape(signature)
-        return signature.replace(re.escape(placeholder), r"0x[0-9a-fA-F]+")
-
-    return MEMORY_ADDRESS_PATTERN.sub(r"0x[0-9a-fA-F]+", signature)
-
-def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> bool:
-    if not harness_path:
-        return False
-
-    harness_resolved = str(Path(harness_path).resolve())
-    if harness_resolved in frame_line:
-        return True
-
-    match = SOURCE_LOCATION_PATTERN.search(frame_line)
-    if not match:
-        return Path(harness_path).name in frame_line
-
-    frame_source = match.group(1)
-    try:
-        if Path(frame_source).resolve() == Path(harness_path).resolve():
-            return True
-    except OSError:
-        pass
-    return Path(frame_source).name == Path(harness_path).name
-
-
 def _source_location_matches_harness(location: str, harness_path: str | None) -> bool:
     if not harness_path:
         return False
@@ -2430,41 +2411,6 @@ def _source_location_matches_harness(location: str, harness_path: str | None) ->
     if not match:
         return False
     return _frame_matches_harness_source(match.group(0), harness_path)
-
-
-def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
-    """Extract the first stack trace from symbolized sanitizer output.
-
-    Parses sanitizer stack frames (lines beginning ``#N 0xADDR``) and returns
-    the first stack trace, truncated before the harness frames. Symbolized
-    reports can contain unsymbolized middle frames, so collection must not
-    require every frame to contain ``in``. When ``harness_path`` is provided,
-    truncation happens at the first frame whose source location belongs to that
-    harness file. Otherwise it falls back to truncating at
-    ``LLVMFuzzerTestOneInput``.
-
-    Only the *first* stack trace is kept (ASan may emit multiple — e.g., one
-    for the overflow and one for the allocation site).
-    Returns None if no stack frames are found.
-    """
-    frames: list[str] = []
-    in_first_trace = False
-    for line in output.splitlines():
-        if STACK_FRAME_COUNT_PATTERN.match(line):
-            in_first_trace = True
-            if _frame_matches_harness_source(line, harness_path):
-                break
-            # Backward-compatible / robustness fallback.
-            if LLVMFuzzerTestOneInput_PATTERN.search(line):
-                break
-            frames.append(line)
-        elif in_first_trace:
-            # A non-frame line after we started collecting means the first
-            # trace is over.  Do not continue into a second trace.
-            break
-    if not frames:
-        return None
-    return "\n".join(frames)
 
 
 def extract_first_sanitizer_stack_trace(output: str) -> str | None:
@@ -2729,6 +2675,29 @@ def source_alias_tester_args(*, record: bool = False) -> list[str]:
     return args
 
 
+def set_symbolized_reference_traces(reference: SymbolizedTraceReference | None, *, required: bool) -> None:
+    global SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED
+    SYMBOLIZED_TRACE_REFERENCE = reference
+    SYMBOLIZED_TRACE_REQUIRED = required
+
+
+def reference_trace_tester_args() -> list[str]:
+    if not SYMBOLIZED_TRACE_REQUIRED:
+        return []
+    if SYMBOLIZED_TRACE_REFERENCE is None:
+        raise ValueError("A symbolized reference trace set is required for this oracle")
+    return ["--require-reference-traces"]
+
+
+def reference_trace_environment(environment: dict[str, str] | None = None) -> dict[str, str]:
+    reference_trace_tester_args()
+    if SYMBOLIZED_TRACE_REFERENCE is None:
+        raise ValueError("No symbolized reference traces are available")
+    result = dict(os.environ if environment is None else environment)
+    result[TRACE_SET_ENV] = SYMBOLIZED_TRACE_REFERENCE.serialized
+    return result
+
+
 def get_last_interesting_file() -> str:
     return os.path.join(get_work_dir(), LAST_INTERESTING_FILE_NAME)
 
@@ -2761,6 +2730,7 @@ def reset_stack_trace_state() -> None:
     set_dynamic_reference_crash_site(None)
     set_symbolized_reference_crash_location_pattern(None)
     set_reference_source_aliases(None)
+    set_symbolized_reference_traces(None, required=False)
     for path in (
         get_stack_trace_file(),
         get_stack_depth_stability_file(),
@@ -2771,6 +2741,7 @@ def reset_stack_trace_state() -> None:
         str(Path(get_work_dir()) / SYMBOLIZATION_FAILURE_LOG_NAME),
         str(Path(get_work_dir()) / "crash_reference.symbolize0.failure.log"),
         str(Path(get_work_dir()) / "crash_reference.symbolize1.failure.log"),
+        str(Path(get_work_dir()) / "symbolized_trace_reference.failure.log"),
     ):
         try:
             os.remove(path)
@@ -3049,6 +3020,14 @@ def _update_stack_depth_stability_record(
     failed_stage: str | None = None,
     returncode: int | None = None,
 ) -> None:
+    _update_reference_stability_record(symbolize, {
+        "depths": depths, "stable": stable, "expected_depth": expected_depth,
+        "wall_ns": wall_ns, "failed_run": failed_run, "failed_stage": failed_stage,
+        "returncode": returncode,
+    })
+
+
+def _update_reference_stability_record(symbolize: bool, data: dict) -> None:
     path = Path(get_stack_depth_stability_file())
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -3060,15 +3039,7 @@ def _update_stack_depth_stability_record(
     if not isinstance(modes, dict):
         modes = {}
         record["modes"] = modes
-    modes[f"symbolize_{int(symbolize)}"] = {
-        "depths": depths,
-        "stable": stable,
-        "expected_depth": expected_depth,
-        "wall_ns": wall_ns,
-        "failed_run": failed_run,
-        "failed_stage": failed_stage,
-        "returncode": returncode,
-    }
+    modes[f"symbolize_{int(symbolize)}"] = data
     total_wall_ns = 0
     for mode in modes.values():
         if isinstance(mode, dict):
@@ -3205,6 +3176,80 @@ def _probe_reference_stack_depth_stability(
             f"{STACK_DEPTH_STABILITY_RUNS} compile+execute samples; reference depth is {expected_depth}."
         )
     return stable
+
+
+def _collect_symbolized_reference_traces(
+    harness_path: str | None, crash_input: str | None, *,
+    compile_flags: str | None, link_flags: str | None, initial_output: str,
+) -> SymbolizedTraceReference:
+    """Collect the initial report plus twenty valid compile/execution samples."""
+    patterns: dict[str, None] = {}
+    samples_completed = 0
+    started_ns = time.perf_counter_ns()
+    current_output = initial_output
+    failed_run = None
+    aliases = SourceAliases.from_json(REFERENCE_SOURCE_ALIASES or "[]")
+
+    def record(output: str) -> None:
+        pattern = get_reference_crash_pattern_symbolize_1()
+        location_pattern = get_symbolized_reference_crash_location_pattern()
+        if not pattern or not matches_crash_pattern(pattern, output, aliases):
+            raise ValueError("Crash pattern changed during symbolized trace collection")
+        harness_location = extract_harness_crash_location(output, harness_path)
+        if harness_location:
+            raise HarnessCrashDetected(harness_location)
+        location = extract_symbolized_crash_location(output, harness_path)
+        if not location_pattern or not location or not matches_crash_location(location_pattern, location, aliases):
+            raise ValueError("Missing or changed crash location during symbolized trace collection")
+        trace = extract_stack_trace(output, harness_path)
+        if not trace:
+            raise ValueError("Missing symbolized reference trace after evidence retries")
+        patterns[normalize_crash_signature(trace, escape=True)] = None
+
+    try:
+        if not harness_path:
+            raise ValueError("A harness path is required to collect symbolized reference traces")
+        record(initial_output)
+        probe_dir = Path(get_work_dir()) / "stack_depth_stability_probes"
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        for run_index in range(1, STACK_DEPTH_STABILITY_RUNS + 1):
+            failed_run = run_index
+            output_bin = probe_dir / f"symbolize1_{run_index}.out"
+            try:
+                compiled = run_command(
+                    reference_harness_compile_command(harness_path, compile_flags, link_flags, str(output_bin)),
+                    "Failed to compile harness for symbolized trace collection", ignore_errors=True,
+                )
+                current_output = compiled.stdout + "\n" + compiled.stderr
+                if compiled.returncode != 0:
+                    raise ValueError(f"Symbolized trace collection compilation failed (exit={compiled.returncode})")
+                proc = _capture_crash_reference_with_evidence(
+                    str(output_bin), crash_input, symbolize=True, link_flags=link_flags,
+                    harness_path=harness_path, require_location=True,
+                )
+                current_output = proc.stdout + "\n" + proc.stderr
+                if proc.returncode != 77:
+                    raise ValueError(f"Symbolized trace collection did not reproduce the crash (exit={proc.returncode})")
+                record(current_output)
+                samples_completed += 1
+            finally:
+                output_bin.unlink(missing_ok=True)
+        failed_run = None
+    except Exception:
+        diagnostic = Path(get_work_dir()) / "symbolized_trace_reference.failure.log"
+        diagnostic.write_text(current_output, encoding="utf-8")
+        print(f"[!] Symbolized trace collection failed; diagnostic: {diagnostic}")
+        raise
+    finally:
+        _update_reference_stability_record(True, {
+            "oracle": "trace-set", "samples_completed": samples_completed,
+            "distinct_traces": len(patterns), "stable": len(patterns) == 1,
+            "wall_ns": time.perf_counter_ns() - started_ns, "failed_run": failed_run,
+        })
+    reference = SymbolizedTraceReference(tuple(patterns), samples_completed)
+    print(f"[+] Collected {samples_completed} symbolized samples plus the initial reference; "
+          f"{len(patterns)} distinct normalized trace(s). Full trace matching is required.")
+    return reference
 
 
 def _capture_crash_reference_with_evidence(
@@ -3429,7 +3474,13 @@ def extract_crash_pattern_from_output(
     compile_flags: str | None = None,
     link_flags: str | None = None,
     record_symbolized_crash_location: bool = False,
+    record_symbolized_trace_set: bool = False,
 ) -> str | None:
+    set_symbolized_reference_traces(None, required=record_symbolized_trace_set)
+    if record_symbolized_trace_set:
+        set_symbolized_reference_stack_depth(None)
+        set_symbolized_reference_stack_depth_strict(False)
+        record_symbolized_crash_location = True
     work_dir = get_work_dir()
     if not record_symbolized_crash_location:
         set_symbolized_reference_crash_location_pattern(None)
@@ -3493,6 +3544,8 @@ def extract_crash_pattern_from_output(
     )
     symbolized_output = symbolized_proc.stdout + "\n" + symbolized_proc.stderr
     if symbolized_proc.returncode != 77:
+        if record_symbolized_trace_set:
+            raise ValueError("Symbolized reference execution did not reproduce the crash required for trace collection")
         set_reference_crash_patterns(symbolize_0=crash_pattern)
         set_symbolized_reference_stack_depth(None)
         set_symbolized_reference_stack_depth_strict(False)
@@ -3531,6 +3584,15 @@ def extract_crash_pattern_from_output(
             "[!] Warning: Could not extract a symbolized crash pattern; "
             "symbolized stack validations will not require a symbolized crash regex."
         )
+
+    if record_symbolized_trace_set:
+        _record_symbolized_reference_crash_location(symbolized_output, harness_path, required=True)
+        reference = _collect_symbolized_reference_traces(
+            harness_path, crash_input, compile_flags=compile_flags,
+            link_flags=link_flags, initial_output=symbolized_output,
+        )
+        set_symbolized_reference_traces(reference, required=True)
+        return crash_pattern
 
     symbolized_reference_stack_depth = count_first_stack_trace_frames(symbolized_output)
     set_symbolized_reference_stack_depth(symbolized_reference_stack_depth or None)
@@ -3662,6 +3724,12 @@ def _empty_fdp_dump_mismatch(
         location = extract_symbolized_crash_location(output, harness_path)
         if not location_pattern or not location or not matches_crash_location(location_pattern, location, aliases):
             return "the recording run is missing the matching symbolized crash location"
+        if SYMBOLIZED_TRACE_REQUIRED:
+            reference_trace_tester_args()
+            result, _ = SYMBOLIZED_TRACE_REFERENCE.evaluate(output, harness_path, aliases)
+            if result is not EvidenceResult.MATCH:
+                return "the recording run is missing a matching symbolized reference trace"
+            return None
         depth = get_symbolized_reference_stack_depth()
         strict_depth = get_symbolized_reference_stack_depth_strict()
     else:
@@ -3940,7 +4008,9 @@ def run_treereducer(
         cmd.extend(["--profile-file", profile_events_path])
     if symbolize:
         cmd.append("--symbolize")
-        if not amortize_link:
+        if SYMBOLIZED_TRACE_REQUIRED:
+            cmd.extend(reference_trace_tester_args())
+        elif not amortize_link:
             cmd.extend(required_stack_depth_tester_args(symbolized=True))
         cmd.extend(required_symbolized_crash_location_tester_args())
     else:
@@ -3981,20 +4051,21 @@ def run_treereducer(
                 symbolize=symbolize,
                 auto_var_init_pattern=auto_var_init_pattern,
             )
-            reference_depth = count_first_stack_trace_frames(reference_output)
-            if reference_depth:
-                cmd.extend(["--stack-depth", str(reference_depth)])
-                strict_depth = (
-                    get_symbolized_reference_stack_depth_strict()
-                    if symbolize
-                    else get_normal_reference_stack_depth_strict()
-                )
-                if strict_depth:
-                    cmd.append("--strict-stack-depth")
-            elif symbolize:
-                raise RuntimeError(
-                    "Could not extract a symbolized amortized-link reference stack depth."
-                )
+            if not (symbolize and SYMBOLIZED_TRACE_REQUIRED):
+                reference_depth = count_first_stack_trace_frames(reference_output)
+                if reference_depth:
+                    cmd.extend(["--stack-depth", str(reference_depth)])
+                    strict_depth = (
+                        get_symbolized_reference_stack_depth_strict()
+                        if symbolize
+                        else get_normal_reference_stack_depth_strict()
+                    )
+                    if strict_depth:
+                        cmd.append("--strict-stack-depth")
+                elif symbolize:
+                    raise RuntimeError(
+                        "Could not extract a symbolized amortized-link reference stack depth."
+                    )
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
@@ -4015,6 +4086,9 @@ def run_treereducer(
             checker_command=cmd, stable=stable, jobs=jobs,
             tool=tool,
         )
+        trace_env = reference_trace_environment() if symbolize and SYMBOLIZED_TRACE_REQUIRED else None
+        if trace_env is not None:
+            invocation.env = trace_env
         print(f"[+] Running reduction engine: {tool}")
         reduction_started_ns = time.perf_counter_ns()
         try:
@@ -4026,6 +4100,7 @@ def run_treereducer(
                 proc = run_bounded_reduction(
                     invocation.command, reduced_harness,
                     reduction_timeout_seconds, get_last_interesting_file(),
+                    **({"env": trace_env} if trace_env is not None else {}),
                 )
         except (OSError, subprocess.SubprocessError) as exc:
             # Preserve spent work in the profile even when a supervised reducer
@@ -4136,6 +4211,8 @@ def format_reduced_harness(reduced_harness_path: str) -> None:
 
 
 def stack_depth_tester_args(*, symbolized: bool = False) -> list[str]:
+    if symbolized and SYMBOLIZED_TRACE_REQUIRED:
+        return []
     depth = (
         get_symbolized_reference_stack_depth()
         if symbolized
@@ -4304,23 +4381,25 @@ def validate_stack_trace(
 ) -> bool:
     """Run a symbolize=1 crash-preservation check.
 
-    This always validates exit code 77 and first-stack-trace depth. It validates
-    the symbolized crash pattern when one is available. When a stored non-empty
-    ``stack_trace.pattern`` exists, it also validates the pre-harness stack trace
-    against that pattern.
+    A symbolized reduction requires membership in its in-memory trace set.
+    The unsymbolized workflow's supplemental check retains its legacy depth
+    and advisory stack-file behavior. Both preserve the crash-pattern checks.
     """
     if require_crash_pattern and not crash_pattern:
         raise ValueError("Symbolized crash pattern cannot be empty.")
-    stack_trace_file = get_stack_trace_file()
     stack_trace_arg: list[str] = []
-    if not os.path.exists(stack_trace_file):
-        print("[*] No stored stack trace pattern; running crash/depth validation only.")
+    if SYMBOLIZED_TRACE_REQUIRED:
+        stack_trace_arg = reference_trace_tester_args()
     else:
-        stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8")
-        if not stored_pattern.strip():
-            print("[*] Stored stack trace pattern is empty; running crash/depth validation only.")
+        stack_trace_file = get_stack_trace_file()
+        if not os.path.exists(stack_trace_file):
+            print("[*] No stored stack trace pattern; running crash/depth validation only.")
         else:
-            stack_trace_arg = ["--stack-trace-file", stack_trace_file]
+            stored_pattern = Path(stack_trace_file).read_text(encoding="utf-8")
+            if not stored_pattern.strip():
+                print("[*] Stored stack trace pattern is empty; running crash/depth validation only.")
+            else:
+                stack_trace_arg = ["--stack-trace-file", stack_trace_file]
 
     validate_compilation_mode(compilation_mode)
     pch_artifacts: PchArtifacts | None = None
@@ -4347,10 +4426,8 @@ def validate_stack_trace(
         cmd.append("--skip-crash-pattern")
     cmd.extend(stack_trace_arg)
     cmd.extend(stack_depth_tester_args(symbolized=True))
-    # The symbolized crash-location anchor is the authoritative gate on this
-    # path.  The full symbolized stack-trace match (stack_trace_arg above) is
-    # advisory: it can fluctuate for multithreaded targets whose worker thread
-    # wins the crash race nondeterministically.
+    # Trace-set mode requires both membership and the crash-location anchor.
+    # Legacy supplemental validation retains its advisory stack-file check.
     cmd.extend(symbolized_crash_location_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
@@ -4384,7 +4461,7 @@ def validate_symbolized_crash_pattern_depth_location(
     evidence_attempts: int | None = None,
     auto_var_init_pattern: bool = False,
 ) -> bool:
-    """Run a symbolize=1 crash-pattern/depth/location validation."""
+    """Validate crash identity and the active symbolized trace/depth oracle."""
     if not crash_pattern:
         raise ValueError("Symbolized crash pattern cannot be empty.")
     validate_compilation_mode(compilation_mode)
@@ -4408,7 +4485,8 @@ def validate_symbolized_crash_pattern_depth_location(
         f"--link-flags={link_flags or ''}",
         "--symbolize",
     ]
-    cmd.extend(required_stack_depth_tester_args(symbolized=True))
+    cmd.extend(reference_trace_tester_args() if SYMBOLIZED_TRACE_REQUIRED
+               else required_stack_depth_tester_args(symbolized=True))
     cmd.extend(required_symbolized_crash_location_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
