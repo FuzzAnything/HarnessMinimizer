@@ -22,7 +22,9 @@ from harnessminimizer.crash_evidence import (
 
 from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessminimizer.reduction_profile import write_profile_summary
-from harnessminimizer.source_alias import SOURCE_ALIASES_MARKER, SourceAliases
+from harnessminimizer.source_alias import (
+    SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
+)
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -3632,11 +3634,53 @@ def compile_dump_mode_harness(
     return tagged_harness_bin
 
 
+def _empty_fdp_dump_mismatch(
+    proc: subprocess.CompletedProcess[str], *, harness_path: str | None, symbolize: bool,
+) -> str | None:
+    """Check an empty recording against the existing crash oracle."""
+    if proc.returncode != 77:
+        return f"the recording run did not reproduce the crash (exit={proc.returncode})"
+    output = proc.stdout + "\n" + proc.stderr
+    pattern = (
+        get_reference_crash_pattern_symbolize_1() if symbolize
+        else get_reference_crash_pattern_symbolize_0()
+    )
+    if not pattern:
+        return "no reference crash pattern is available to verify the empty recording"
+    aliases = SourceAliases.from_json(REFERENCE_SOURCE_ALIASES) if REFERENCE_SOURCE_ALIASES is not None else None
+    if not matches_crash_pattern(pattern, output, aliases):
+        return "the recording run's crash pattern differs from the reference"
+    if extract_harness_crash_location(output, harness_path):
+        return "the recording run crashed inside the harness"
+
+    if symbolize:
+        location_pattern = get_symbolized_reference_crash_location_pattern()
+        location = extract_symbolized_crash_location(output, harness_path)
+        if not location_pattern or not location or not matches_crash_location(location_pattern, location, aliases):
+            return "the recording run is missing the matching symbolized crash location"
+        depth = get_symbolized_reference_stack_depth()
+        strict_depth = get_symbolized_reference_stack_depth_strict()
+    else:
+        site = get_dynamic_reference_crash_site()
+        if site is not None:
+            actual = extract_first_dynamic_library_crash_site(output, expected_library=site.library_path)
+            if actual is None or actual.offset.lower() != site.offset.lower():
+                return "the recording run is missing the matching dynamic crash site"
+        depth = get_normal_reference_stack_depth()
+        strict_depth = get_normal_reference_stack_depth_strict() or site is None
+    if strict_depth and depth is not None and count_first_stack_trace_frames(output) != depth:
+        return "the recording run's required stack depth differs from the reference"
+    return None
+
+
 def dump_fdp_trace(
     harness_bin: str,
     crash_input: str | None,
     link_flags: str | None = None,
-) -> str:
+    *,
+    harness_path: str | None = None,
+    symbolize: bool = True,
+) -> str | None:
     fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
     fdp_wide_trace_file = fdp_wide_trace_path(fdp_trace_file)
     # The dump runtime appends trace records, so remove any trace left by an
@@ -3647,19 +3691,42 @@ def dump_fdp_trace(
         except FileNotFoundError:
             pass
 
-    env = runtime_library_env(link_flags)
+    env = runtime_library_env(link_flags, symbolize=symbolize)
     env["FDP_TRACE_PATH"] = fdp_trace_file
     env["FDP_WIDE_TRACE_PATH"] = fdp_wide_trace_file
+    env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=symbolize)
+    env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={int(symbolize)}"
 
     exec_cmd = [harness_bin, crash_input] if crash_input else [harness_bin]
-    run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env, ignore_errors=True)
+    diagnostic = Path(get_work_dir()) / "fdp_dump.log"
+    try:
+        proc = run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env, ignore_errors=True)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        details = [f"FDP recording failed: {exc}\n"]
+        if isinstance(exc, subprocess.TimeoutExpired):
+            for stream in (exc.stdout, exc.stderr):
+                if stream:
+                    details.append(stream.decode("utf-8", "replace") if isinstance(stream, bytes) else stream)
+        diagnostic.write_text("\n".join(details), encoding="utf-8")
+        raise RuntimeError(f"FDP recording failed: {exc}. Diagnostic: {diagnostic}") from exc
+    output = proc.stdout + "\n" + proc.stderr
+    diagnostic.write_text(f"exit={proc.returncode}\n{output}", encoding="utf-8")
+    if "HARNESSMINIMIZER_FDP_TRACE_ERROR:" in output or proc.returncode == 86:
+        raise RuntimeError(f"FDP trace recording failed. Diagnostic: {diagnostic}\n{output}")
 
-    if not os.path.exists(fdp_trace_file):
-        if os.path.exists(fdp_wide_trace_file):
+    has_trace = any(Path(path).is_file() and Path(path).stat().st_size > 0
+                    for path in (fdp_trace_file, fdp_wide_trace_file))
+    if has_trace:
+        if not os.path.exists(fdp_trace_file):
             Path(fdp_trace_file).touch()
-            return fdp_trace_file
-        raise RuntimeError("FDP trace file was not created as expected.")
-    return fdp_trace_file
+        return fdp_trace_file
+
+    mismatch = _empty_fdp_dump_mismatch(proc, harness_path=harness_path, symbolize=symbolize)
+    if mismatch:
+        raise RuntimeError(f"No FDP values were recorded: {mismatch}. Diagnostic: {diagnostic}")
+    if not crash_input:
+        raise RuntimeError(f"No FDP values were recorded and no crash input is available. Diagnostic: {diagnostic}")
+    return None
 
 
 def calibrate_exec_timeout_ms(

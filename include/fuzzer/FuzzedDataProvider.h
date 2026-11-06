@@ -37,6 +37,7 @@
 #if defined(FDP_MIN_MODE_DUMP) || (defined(FDP_MIN_MODE_REPLAY) &&             \
                                    !defined(FDP_MIN_EXTERNAL_REPLAY_RUNTIME))
 #include <fstream>
+#include <cstdio>
 #include <iomanip>
 #include <mutex>
 #endif
@@ -138,7 +139,7 @@ public:
     std::lock_guard<std::mutex> lock(mu_);
     std::ofstream out(GetTracePath(), std::ios::app);
     if (!out)
-      return;
+      FailDump("open", GetTracePath());
     out << "S " << line << " ";
     if (std::isfinite(value) && std::truncl(value) == value) {
       out << std::fixed << std::setprecision(0) << value;
@@ -147,6 +148,7 @@ public:
           << value;
     }
     out << "\n";
+    FinishDump(out, GetTracePath());
   }
 
   void DumpRemaining(int line, size_t value) {
@@ -155,8 +157,9 @@ public:
     std::lock_guard<std::mutex> lock(mu_);
     std::ofstream out(GetTracePath(), std::ios::app);
     if (!out)
-      return;
+      FailDump("open", GetTracePath());
     out << "R " << line << " " << value << "\n";
+    FinishDump(out, GetTracePath());
   }
 
   void DumpPickIndex(int line, size_t index) {
@@ -165,8 +168,9 @@ public:
     std::lock_guard<std::mutex> lock(mu_);
     std::ofstream out(GetTracePath(), std::ios::app);
     if (!out)
-      return;
+      FailDump("open", GetTracePath());
     out << "P " << line << " " << index << "\n";
+    FinishDump(out, GetTracePath());
   }
 
   void DumpBytes(int line, const uint8_t *bytes, size_t size) {
@@ -175,11 +179,12 @@ public:
     std::lock_guard<std::mutex> lock(mu_);
     std::ofstream out(GetTracePath(), std::ios::app);
     if (!out)
-      return;
+      FailDump("open", GetTracePath());
     out << "B " << line << " " << size;
     for (size_t i = 0; i < size; ++i)
       out << " " << static_cast<unsigned>(bytes[i]);
     out << "\n";
+    FinishDump(out, GetTracePath());
   }
 
   template <typename T>
@@ -189,7 +194,7 @@ public:
     std::lock_guard<std::mutex> lock(mu_);
     std::ofstream out(GetWideTracePath(), std::ios::app);
     if (!out)
-      return;
+      FailDump("open", GetWideTracePath());
     out << "V " << line << " " << (std::is_signed_v<T> ? "S" : "U") << " "
         << (sizeof(T) * CHAR_BIT) << " " << count;
     for (size_t i = 0; i < count; ++i) {
@@ -200,6 +205,7 @@ public:
       }
     }
     out << "\n";
+    FinishDump(out, GetWideTracePath());
   }
 
   template <typename T> T ReplayScalar(int line, T fallback) {
@@ -306,6 +312,21 @@ public:
   }
 
 private:
+  [[noreturn]] static void FailDump(const char *operation,
+                                  const std::string &path) {
+    std::fprintf(stderr, "HARNESSMINIMIZER_FDP_TRACE_ERROR: cannot %s %s\n",
+                 operation, path.c_str());
+    std::fflush(stderr);
+    // A recorder failure must never look like the target's sanitizer exit 77.
+    std::_Exit(86);
+  }
+
+  static void FinishDump(std::ofstream &out, const std::string &path) {
+    out.close();
+    if (!out)
+      FailDump("write", path);
+  }
+
   TraceStore() {
     if (kMode != Mode::kReplay)
       return;

@@ -338,7 +338,9 @@ class TestApiPipeline(unittest.TestCase):
         )
         mock_tag.assert_called_once_with("/tmp/sliced.cpp", start_id=123, marker="M")
         mock_compile.assert_called_once_with("/tmp/tagged.cpp", "-std=c++17", "-lm")
-        mock_dump.assert_called_once_with("/tmp/tagged.out", "seed.bin", "-lm")
+        mock_dump.assert_called_once_with(
+            "/tmp/tagged.out", "seed.bin", "-lm", harness_path="/tmp/tagged.cpp", symbolize=False,
+        )
         mock_reduce.assert_called_once_with(
             "/tmp/tagged.cpp",
             "/tmp/fdp_trace.log",

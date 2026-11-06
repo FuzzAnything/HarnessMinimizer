@@ -1458,7 +1458,19 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             tagged_harness_bin,
             config.crash_input,
             config.link_flags,
+            harness_path=tagged_harness_file,
+            symbolize=config.symbolize,
         )
+        if fdp_trace_file is None:
+            # Restore the pre-tag source so calls on unexecuted branches remain
+            # compatible with the public FDP header during direct-input builds.
+            Path(tagged_harness_file).write_text(
+                Path(effective_harness_path).read_text(encoding="utf-8"), encoding="utf-8",
+            )
+            print(
+                "[+] No FDP values were recorded, but the expected crash was verified; "
+                "using the original input without FDP replay."
+            )
     else:
         print(
             "[+] No FDP callsites detected; using direct crash input during "
