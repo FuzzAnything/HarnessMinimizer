@@ -32,9 +32,11 @@ def clean_reduced_source(path: str) -> None:
     nodes = [tree.root_node]
     while nodes:
         node = nodes.pop()
-        first = node.start_point.row
-        last = node.end_point.row
-        if last > first and node.end_point.column == 0:
+        # Tuple access avoids tree-sitter 0.26.0's Point attribute over-decref
+        # (py-tree-sitter#472), which corrupts coordinates greater than 256.
+        first = node.start_point[0]
+        last, end_column = node.end_point
+        if last > first and end_column == 0:
             last -= 1
         if node.type == "comment":
             comment_id = len(comments)

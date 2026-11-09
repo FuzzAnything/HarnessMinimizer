@@ -173,13 +173,16 @@ def prepare_initializer_protection(source: Path, directory: Path) -> Initializer
             reason = "location-sensitive-initializer"
         if any(("\n" in token or "\r" in token) for _, _, token, _ in tokens):
             reason = "multiline-literal"
+        # Point.row over-decrefs its result in tree-sitter 0.26.0; indexing
+        # preserves the coordinate's lifetime for declarations beyond line 256.
+        line = node.start_point[0] + 1
         if reason:
-            skipped.append({"line": node.start_point.row + 1, "reason": reason})
+            skipped.append({"line": line, "reason": reason})
             continue
         marker = prefix + str(len(declarations))
         core = text[:-1]
         padding = "\n" * core.count("\n")
-        declarations.append(ProtectedDeclaration(marker, core, padding, node.start_point.row + 1))
+        declarations.append(ProtectedDeclaration(marker, core, padding, line))
         edits.append((node.start_byte, node.end_byte, (marker + padding + ";").encode()))
         covered_end = node.end_byte
     prepared = original

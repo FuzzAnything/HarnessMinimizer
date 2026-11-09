@@ -1,9 +1,33 @@
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from harnessminimizer import api
 from harnessminimizer.source_cleanup import clean_reduced_source
+
+
+@pytest.mark.parametrize("coordinate", ["row", "column"])
+def test_cleanup_large_coordinates_in_fresh_process(tmp_path, coordinate):
+    # Point attributes in tree-sitter 0.26.0 corrupt non-small Python integers.
+    # Keep this in a child so a regression fails the test instead of killing pytest.
+    source = tmp_path / "reduced.cpp"
+    prefix = b"\n" * 300 if coordinate == "row" else b""
+    kept = b'int value = 1; // attached\nconst char *text = "/* data */";\n'
+    comments = (b"/* block\n" + b" " * 300 + b"*/\n") * 10
+    source.write_bytes(prefix + b"// removable\n" + comments + kept)
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c",
+         "import sys; from harnessminimizer.source_cleanup import clean_reduced_source; "
+         "clean_reduced_source(sys.argv[1]); clean_reduced_source(sys.argv[1])", str(source)],
+        env=environment, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert source.read_bytes() == prefix + kept
 
 
 def test_cleanup_removes_comment_only_lines_without_touching_raw_string(tmp_path: Path):

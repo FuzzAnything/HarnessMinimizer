@@ -1,9 +1,11 @@
 """Harmless source/preprocessor/compiler tests; no library benchmark execution."""
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -13,6 +15,27 @@ from harnessminimizer.initializer_protection import (
 from harnessminimizer.initializer_analysis import analyze_uninitialized
 from harnessminimizer.macro_headers import prepare_macro_headers
 from harnessminimizer.reducer_runner import _split_source_for_pch
+
+
+def test_large_declaration_lines_survive_preparation_and_restoration(tmp_path):
+    source = tmp_path / "source.cpp"
+    source.write_text("\n" * 300 + "void f() {\n int value = 1;\n int line = __LINE__;\n}\n")
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c",
+         "import sys; from pathlib import Path; "
+         "from harnessminimizer.initializer_protection import prepare_initializer_protection; "
+         "source = Path(sys.argv[1]); "
+         "prepared = prepare_initializer_protection(source, Path(sys.argv[2])); "
+         "assert prepared.restore(prepared.source.read_text()) == source.read_text()",
+         str(source), str(tmp_path / "work")],
+        env=environment, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    metadata = json.loads((tmp_path / "work/initializer_protection.json").read_text())
+    assert [item["line"] for item in metadata["declarations"]] == [302]
+    assert metadata["skipped"] == [{"line": 303, "reason": "location-sensitive-initializer"}]
 
 
 @pytest.mark.parametrize("declaration", [
