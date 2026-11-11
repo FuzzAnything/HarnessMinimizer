@@ -1350,8 +1350,6 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 
         if not math.isfinite(config.reduction_timeout_seconds) or config.reduction_timeout_seconds <= 0:
             raise ValueError("Reduction timeout must be finite and positive.")
-        if config.tool != "treereduce":
-            raise ValueError("A reduction budget is supported only for treereduce.")
     language = language_for_path(config.harness_path)
     language.parser()  # Check the grammar dependency before expensive setup.
     with language_scope(language):

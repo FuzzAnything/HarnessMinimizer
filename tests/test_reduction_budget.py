@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from harnessminimizer import reduction_budget
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV, run_bounded_reduction
+from harnessminimizer.reduction_engines import ReducerInvocation
 from tests import crash_tester
 
 
@@ -133,3 +135,74 @@ class ReductionBudgetTests(unittest.TestCase):
         for value in [0, -1, float("nan"), float("inf")]:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 run_bounded_reduction(["must-not-run"], "unused", value, "unused-snapshot")
+
+    def test_perses_timeout_preserves_cwd_log_environment_and_result_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = root / "input"
+            inputs.mkdir()
+            output = root / "output" / "candidate.cpp"
+            destination = root / "export.cpp"
+            checkpoint = root / "checkpoint.cpp"
+            script = (
+                "import json, os, pathlib, sys, time; "
+                "print('perses progress', flush=True); "
+                "pathlib.Path('observed.json').write_text(json.dumps(dict(os.environ))); "
+                "pathlib.Path(sys.argv[1]).write_text('int verified_candidate;'); "
+                "time.sleep(60)"
+            )
+            invocation = ReducerInvocation(
+                [sys.executable, "-c", script, str(checkpoint)], output, destination,
+                {"tool": "perses"}, cwd=inputs, log_path=root / "perses.log",
+                env={**os.environ, "TEST_TRACE_REFERENCE": "approved-trace"},
+            )
+            result = run_bounded_reduction(
+                invocation.command, str(output), 1, str(checkpoint), invocation=invocation,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(destination.exists())
+            invocation.publish_result()
+            self.assertEqual(destination.read_text(), "int verified_candidate;")
+            self.assertIn("perses progress", invocation.log_path.read_text())
+            environment = json.loads((inputs / "observed.json").read_text())
+            self.assertEqual(environment["TEST_TRACE_REFERENCE"], "approved-trace")
+            self.assertIn(CHECKPOINT_START_ENV, environment)
+
+    def test_perses_initial_output_without_a_late_checkpoint_cannot_recover(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, snapshot = root / "initial.cpp", root / "checkpoint.cpp"
+            invocation = ReducerInvocation(
+                [sys.executable, "-c",
+                 "import pathlib,sys,time;pathlib.Path(sys.argv[1]).write_text('initial');time.sleep(60)",
+                 str(output)], output, root / "export.cpp", {"tool": "perses"},
+                cwd=root, log_path=root / "perses.log",
+            )
+            with self.assertRaisesRegex(RuntimeError, "without a candidate"):
+                run_bounded_reduction(
+                    invocation.command, str(output), 0.5, str(snapshot), invocation=invocation,
+                )
+            self.assertFalse(invocation.destination.exists())
+
+    def test_perses_normal_result_and_failure_keep_their_original_meaning(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output = root / "candidate.cpp"
+                invocation = ReducerInvocation(
+                    [sys.executable, "-c",
+                     "import pathlib,sys;print('engine diagnostic');pathlib.Path(sys.argv[1]).write_text('normal');sys.exit(int(sys.argv[2]))",
+                     str(output), str(exit_code)], output, root / "export.cpp",
+                    {"tool": "perses"}, cwd=root, log_path=root / "perses.log",
+                )
+                result = run_bounded_reduction(
+                    invocation.command, str(output), 2400, str(root / "checkpoint.cpp"),
+                    invocation=invocation,
+                )
+                self.assertEqual(result.returncode, exit_code)
+                if exit_code == 0:
+                    invocation.publish_result()
+                    self.assertEqual(invocation.destination.read_text(), "normal")
+                else:
+                    self.assertIn("engine diagnostic", result.stdout)
+                    self.assertFalse(invocation.destination.exists())

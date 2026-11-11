@@ -229,3 +229,14 @@ for HarnessMinimizer does not grant exceptions to Perses's license.
 
 > [!NOTE]
 > To reproduce the experimental results reported in the paper, visit [FuzzAnything/HarnessMinimizer-evaluation](https://github.com/FuzzAnything/HarnessMinimizer-evaluation).
+
+### Reduction budgets
+
+The Python API's `ReductionConfig.reduction_timeout_seconds` bounds the reduction
+search for TreeReduce, Perses, WDD and CDD. Preparation and final validation run
+outside this search budget. Interesting candidates are saved only during the
+last four minutes; no initial checkpoint is created. On a Perses timeout, only
+such a checkpoint is recovered, never its possibly initial output file. Normal
+completion uses the engine's final output. Both paths restore PCH/macro headers,
+inline recorded FDP values, and validate the exported result. A timeout without
+a checkpoint or a failed final validation is a failure, not a successful reduction.

@@ -3767,8 +3767,6 @@ def run_treereducer(
 
     validate_tool(tool)
     language = language_for_path(harness_path)
-    if reduction_timeout_seconds is not None and tool != "treereduce":
-        raise ValueError("A reduction budget is supported only for treereduce.")
 
     # Reducers change cwd to a temp dir when invoking the tester, so relative
     # paths for crash_input would not be found.  Resolve to absolute here.
@@ -3969,9 +3967,9 @@ def run_treereducer(
                 from harnessminimizer.reduction_budget import run_bounded_reduction
 
                 proc = run_bounded_reduction(
-                    invocation.command, reduced_harness,
+                    invocation.command, str(invocation.result),
                     reduction_timeout_seconds, get_last_interesting_file(language),
-                    **({"env": trace_env} if trace_env is not None else {}),
+                    invocation=invocation,
                 )
         except (OSError, subprocess.SubprocessError) as exc:
             # Preserve spent work in the profile even when a supervised reducer
