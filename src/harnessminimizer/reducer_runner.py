@@ -405,6 +405,9 @@ def runtime_library_env(
     return env
 
 
+INHERITS_ASAN_LEAK_POLICY = True
+
+
 def sanitizer_asan_options(
     *,
     symbolize: bool,
@@ -418,6 +421,15 @@ def sanitizer_asan_options(
     ]
     if not detect_odr_violation:
         options.append("detect_odr_violation=0")
+    # Keep the embedding application's explicit leak policy identical for the
+    # standalone reference, plugin runner and exported candidate. Other ASan
+    # options remain controlled here; never inherit arbitrary suppressions.
+    inherited = dict(
+        option.split("=", 1)
+        for option in os.environ.get("ASAN_OPTIONS", "").split(":") if "=" in option
+    )
+    if inherited.get("detect_leaks") in {"0", "1"}:
+        options.append("detect_leaks=" + inherited["detect_leaks"])
     return ":".join(options)
 
 
@@ -2753,7 +2765,7 @@ def collect_harness_coverage(
     profdata_path = _source_coverage_data_path()
 
     env = runtime_library_env(link_flags, symbolize=False)
-    env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
+    env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=False)
     env["UBSAN_OPTIONS"] = "exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize=0"
     env["LLVM_PROFILE_FILE"] = str(raw_path)
     cmd = [coverage_bin]
@@ -2868,7 +2880,7 @@ def _run_harness_for_crash_reference(
     env = runtime_library_env(link_flags, symbolize=symbolize)
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
-    env["ASAN_OPTIONS"] = f"exitcode=77:symbolize={symbolized}:handle_abort=1"
+    env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=symbolize)
     return run_command(
         cmd,
         env=env,

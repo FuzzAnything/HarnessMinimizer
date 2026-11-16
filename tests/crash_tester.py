@@ -52,6 +52,7 @@ from harnessminimizer.reducer_runner import (
     extract_symbolized_crash_location,
     fdp_wide_trace_path,
     runtime_library_env,
+    sanitizer_asan_options,
 )
 # STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 # LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
@@ -1227,10 +1228,10 @@ def main() -> int:
 
         env = runtime_library_env(args.link_flags, symbolize=use_symbolize)
         if use_symbolize:
-            env["ASAN_OPTIONS"] = "exitcode=77:symbolize=1:handle_abort=1"
+            env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=True)
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"
         else:
-            env["ASAN_OPTIONS"] = "exitcode=77:symbolize=0:handle_abort=1"
+            env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=False)
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=0:halt_on_error=1:print_stacktrace=1"
         if args.fdp_trace:
             env["FDP_TRACE_PATH"] = args.fdp_trace

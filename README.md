@@ -240,3 +240,25 @@ such a checkpoint is recovered, never its possibly initial output file. Normal
 completion uses the engine's final output. Both paths restore PCH/macro headers,
 inline recorded FDP values, and validate the exported result. A timeout without
 a checkpoint or a failed final validation is a failure, not a successful reduction.
+
+# Embedding with an outer deadline
+
+`ReductionConfig.search_timeout_seconds` optionally shares one deadline across
+reference preparation and reduction search. Set it together with
+`reduction_timeout_seconds` when an embedding application must reserve time for
+export and independent replay. Compilation and calibration consume the search
+budget; retries cannot restart it. If preparation exhausts the budget, search
+does not start. Existing callers that omit it retain the tree-only budget.
+Post-reduction validation still runs, and timeout recovery still requires a
+current validated candidate. The embedding application's outer timeout remains
+authoritative.
+
+The runtime preserves an embedding application's explicit `ASAN_OPTIONS`
+`detect_leaks=0` or `detect_leaks=1` policy across reference, plugin and candidate
+replays. Other ASan options, including exit status, symbolization and suppression
+settings, remain controlled by the minimizer.
+
+Symbolized stack matching ignores generated executable paths and build IDs only
+for source-less ASan memory interceptor frames (`memcpy`, `memmove`, `memset`).
+It still requires the same interceptor, frame order/depth and project source
+coordinates. Retained crash evidence is unchanged.

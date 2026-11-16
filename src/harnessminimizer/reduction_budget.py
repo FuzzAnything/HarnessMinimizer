@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import math
 import os
 from pathlib import Path
@@ -18,6 +20,22 @@ if TYPE_CHECKING:
 
 CHECKPOINT_WINDOW_SECONDS = 4 * 60
 CHECKPOINT_START_ENV = "HARNESSMINIMIZER_CHECKPOINT_START_MONOTONIC"
+_search_deadline: ContextVar[float | None] = ContextVar("search_deadline", default=None)
+
+
+@contextmanager
+def search_budget(timeout_seconds: float | None):
+    """Share one optional budget across reference preparation and search."""
+    if timeout_seconds is not None and (
+        not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+    ):
+        raise ValueError("Search timeout must be finite and positive.")
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    token = _search_deadline.set(deadline)
+    try:
+        yield
+    finally:
+        _search_deadline.reset(token)
 
 
 def run_bounded_reduction(
@@ -27,6 +45,11 @@ def run_bounded_reduction(
 ) -> subprocess.CompletedProcess:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("Reduction timeout must be finite and positive.")
+    deadline = _search_deadline.get()
+    if deadline is not None:
+        timeout_seconds = min(timeout_seconds, deadline - time.monotonic())
+        if timeout_seconds <= 0:
+            raise RuntimeError("Search budget exhausted during harness preparation.")
     candidate = Path(output)
     # A previous invocation's output cannot qualify as this run's progress.
     candidate.unlink(missing_ok=True)

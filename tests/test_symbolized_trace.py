@@ -47,6 +47,30 @@ def test_address_and_harness_changes_are_ignored_but_library_changes_are_not():
         assert recorded.evaluate(report(frames), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
 
 
+def test_runtime_memcpy_image_does_not_change_the_same_target_crash_identity():
+    def stack(image, build, *, wrapper="__asan_memcpy", line=69):
+        return (
+            f"    #0 0x5555559e763e in {wrapper} ({image}+0x49363e) (BuildId: {build})\n"
+            f"    #1 0x555555bb816e in DcmBufferConsumer::write(void const*, long) /src/dcostrmb.cc:{line}:5\n"
+            "    #2 0x555555a4ca57 in LLVMFuzzerTestOneInput /tmp/harness.cpp:307:21\n"
+        )
+    recorded = reference(stack("/work/poc.out", "7ba0f8a649554c22"))
+    for image in ["/work/calibration/1.out", "/work/pch/candidate.out", "/work/harness_runner"]:
+        assert recorded.evaluate(stack(image, "f12cdb87d4f0fa99"), "/tmp/harness.cpp")[0] is EvidenceResult.MATCH
+    assert recorded.evaluate(stack("/work/candidate.out", "abc", line=70), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+    assert recorded.evaluate(stack("/work/candidate.out", "abc", wrapper="__asan_memmove"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+
+
+@pytest.mark.parametrize("frame", [
+    "target_memcpy (/work/reference.out+0x123) (BuildId: abc)",
+    "__asan_memcpy /compiler/asan_interceptors.cpp:12:4 (/work/reference.out+0x123) (BuildId: abc)",
+])
+def test_non_runtime_image_identity_and_source_coordinates_remain_strict(frame):
+    stack = "    #0 0x123 in " + frame + "\n" + report(A)
+    recorded = reference(stack)
+    assert recorded.evaluate(stack.replace("reference.out", "different.out"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+
+
 def test_recorded_alternatives_match_without_learning_another():
     recorded = reference(report(A), report(B), report(A, address=0x444))
     assert len(recorded.normalized_patterns) == 2

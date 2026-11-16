@@ -68,6 +68,14 @@ class TestReducerRunner(unittest.TestCase):
             "exitcode=77:symbolize=1:handle_abort=1:detect_odr_violation=0",
         )
 
+    def test_only_explicit_leak_policy_is_inherited(self):
+        for value in ("0", "1"):
+            with self.subTest(value=value), patch.dict(os.environ, {
+                "ASAN_OPTIONS": f"detect_leaks={value}:suppressions=/tmp/ignored:exitcode=0:symbolize=0",
+            }):
+                self.assertEqual(reducer_runner.sanitizer_asan_options(symbolize=True),
+                                 f"exitcode=77:symbolize=1:handle_abort=1:detect_leaks={value}")
+
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
     def test_run_treereducer_sets_env(self, mock_run, mock_exists):

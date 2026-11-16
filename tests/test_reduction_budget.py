@@ -14,6 +14,43 @@ from tests import crash_tester
 
 
 class ReductionBudgetTests(unittest.TestCase):
+    def test_reference_preparation_consumes_search_budget_without_extending_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clock = [100.0]
+            with patch.object(reduction_budget.time, "monotonic", side_effect=lambda: clock[0]), \
+                    patch.object(reduction_budget, "run_supervised") as run:
+                run.return_value = subprocess.CompletedProcess(["reducer"], 0)
+                with reduction_budget.search_budget(60):
+                    clock[0] = 140  # Compile/calibrate a large template harness.
+                    run_bounded_reduction(["reducer"], str(root / "out"), 60, str(root / "checkpoint"))
+                    self.assertEqual(run.call_args.kwargs["timeout"], 20)
+                    clock[0] = 150
+                    run_bounded_reduction(["retry"], str(root / "out"), 60, str(root / "checkpoint"))
+                    self.assertEqual(run.call_args.kwargs["timeout"], 10)
+                    clock[0] = 160
+                    with self.assertRaisesRegex(RuntimeError, "during harness preparation"):
+                        run_bounded_reduction(["expired"], str(root / "out"), 60, str(root / "checkpoint"))
+                    self.assertEqual(run.call_count, 2)
+                # Independent runs and older callers keep their own budgets.
+                run_bounded_reduction(["next"], str(root / "out"), 60, str(root / "checkpoint"))
+                self.assertEqual(run.call_args.kwargs["timeout"], 60)
+
+    def test_api_owns_search_budget_and_restores_it_after_preparation_failure(self):
+        from harnessminimizer import api
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory) / "harness.cpp"
+            harness.write_text("int main() {}")
+            config = api.ReductionConfig(str(harness), reduction_timeout_seconds=30, search_timeout_seconds=60)
+            def fail_preparation(_config):
+                self.assertEqual(reduction_budget._search_deadline.get(), 160)
+                raise RuntimeError("compiler failed")
+            with patch.object(reduction_budget.time, "monotonic", return_value=100), \
+                    patch.object(api, "_reduce_with_config", side_effect=fail_preparation):
+                with self.assertRaisesRegex(RuntimeError, "compiler failed"):
+                    api.reduce_with_config(config)
+            self.assertIsNone(reduction_budget._search_deadline.get())
+
     def test_checkpoint_cutoff_is_shared_with_testers_without_changing_parent_environment(self):
         for budget, cutoff in [(2400, 2260), (600, 460), (240, 100), (30, 100)]:
             with self.subTest(budget=budget), tempfile.TemporaryDirectory() as directory:

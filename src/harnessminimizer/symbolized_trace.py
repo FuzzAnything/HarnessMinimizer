@@ -14,6 +14,23 @@ STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
+_RUNTIME_MEMORY_FRAME = re.compile(
+    r"\bin (?:__asan_|__interceptor_)(?:memcpy|memmove|memset)\s+"
+    r"\([^()\n]+\+0x[0-9a-fA-F]+\)(?:\s+\(BuildId: [0-9a-fA-F]+\))?\s*$"
+)
+
+
+def _canonical_runtime_frame(line: str) -> str:
+    # Some compiler-rt builds lack source coordinates for their memory
+    # interceptors. ASan then reports the *generated executable's* path/build ID.
+    # Reference sampling, PCH validation and the amortized runner link distinct
+    # executables, so those image annotations are not a target crash identity.
+    # Keep frame order, count, PC and exact interceptor name; project frames and
+    # runtime frames with source coordinates remain unchanged.
+    match = _RUNTIME_MEMORY_FRAME.search(line)
+    if match is None or SOURCE_LOCATION_PATTERN.search(line):
+        return line
+    return line[:match.start()] + match.group().split(" (", 1)[0]
 
 
 def normalize_crash_signature(signature: str, escape: bool = False) -> str:
@@ -55,7 +72,7 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
                 break
             if LLVMFuzzerTestOneInput_PATTERN.search(line):
                 break
-            frames.append(line)
+            frames.append(_canonical_runtime_frame(line))
         elif in_first_trace:
             break
     return "\n".join(frames) if frames else None

@@ -128,6 +128,9 @@ class ReductionConfig:
     # Budget recovery checkpoints accepted candidates only in the final four
     # minutes; no initial candidate is saved. None leaves snapshot behavior alone.
     reduction_timeout_seconds: float | None = None
+    # Optional caller envelope: reference compilation/calibration consumes this
+    # budget too, leaving the caller time for export and independent PoC replay.
+    search_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1345,6 +1348,9 @@ def _reduction_attempt(
 
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
+    from harnessminimizer.reduction_budget import search_budget
+    if config.search_timeout_seconds is not None and config.reduction_timeout_seconds is None:
+        raise ValueError("A search timeout requires a bounded reduction.")
     if config.reduction_timeout_seconds is not None:
         import math
 
@@ -1352,7 +1358,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
             raise ValueError("Reduction timeout must be finite and positive.")
     language = language_for_path(config.harness_path)
     language.parser()  # Check the grammar dependency before expensive setup.
-    with language_scope(language):
+    with language_scope(language), search_budget(config.search_timeout_seconds):
         return _reduce_with_config(config)
 
 
