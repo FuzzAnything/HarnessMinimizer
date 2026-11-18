@@ -32,6 +32,8 @@ from harnessreducer.reducer_runner import (
     extract_first_sanitizer_stack_trace,
     extract_symbolized_crash_location,
     open_debug_log,
+    RUNTIME_ERROR_PATTERN,
+    UBSAN_PATTERN,
     runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
@@ -325,6 +327,9 @@ def _reserve_amortized_fallback_first(args: argparse.Namespace) -> bool:
 
 
 def amortized_initial_plugin_link_flags(args: argparse.Namespace) -> str | None:
+    required = getattr(args, "amortized_plugin_required_link_flags", None)
+    if required:
+        return required
     fallback_link_flags = _fallback_link_flags(args)
     if fallback_link_flags and _reserve_amortized_fallback_first(args):
         return fallback_link_flags
@@ -859,6 +864,50 @@ def _check_crash_location(
     return _check_crash_location_pattern(run_log, stored_pattern, source_path)
 
 
+def _ubsan_pattern_mismatch_has_strict_evidence(
+    args: argparse.Namespace,
+    run_log: str,
+    source_path: str,
+    *,
+    use_symbolize: bool,
+) -> bool:
+    if not getattr(args, "allow_ubsan_pattern_mismatch", False) or not use_symbolize:
+        return False
+    expected_ubsan = bool(re.search(
+        r"runtime(?:\\\s+|\s+)error|UndefinedBehaviorSanitizer",
+        args.crash_pattern,
+        re.IGNORECASE,
+    ))
+    observed_ubsan = bool(
+        RUNTIME_ERROR_PATTERN.search(run_log) or UBSAN_PATTERN.search(run_log)
+    )
+    if not expected_ubsan or not observed_ubsan:
+        return False
+
+    if args.crash_location_pattern:
+        location_matches = _check_crash_location_pattern(
+            run_log, args.crash_location_pattern, source_path
+        )
+    elif args.crash_location_file and os.path.isfile(args.crash_location_file):
+        location_matches = _check_crash_location(
+            run_log, args.crash_location_file, source_path
+        )
+    else:
+        return False
+    if not location_matches:
+        return False
+
+    stack_trace_file = args.stack_trace_file
+    if not stack_trace_file or not os.path.isfile(stack_trace_file):
+        return False
+    try:
+        if not Path(stack_trace_file).read_text(encoding="utf-8").strip():
+            return False
+    except OSError:
+        return False
+    return _check_stack_trace(run_log, stack_trace_file, source_path)
+
+
 def _stack_depth_is_advisory(
     args: argparse.Namespace,
     *,
@@ -887,6 +936,7 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--allow-ubsan-pattern-mismatch", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")
     parser.add_argument("--stack-depth", type=int, default=None, help="Expected frame count of the first stack trace")
@@ -908,6 +958,7 @@ def main() -> int:
         default=None,
         help=argparse.SUPPRESS,
     )
+    parser.add_argument("--amortized-plugin-required-link-flags", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     args._last_exec_time_ms = None
     args._debug_compile_success = None
@@ -1016,8 +1067,18 @@ def main() -> int:
         # First: crash pattern must match unless a caller intentionally uses
         # this run only for symbolized stack/depth validation.
         if not args.skip_crash_pattern and re.search(args.crash_pattern, run_log) is None:
-            print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
-            return _finalize_result(args, 1)
+            if not _ubsan_pattern_mismatch_has_strict_evidence(
+                args,
+                run_log,
+                args.source,
+                use_symbolize=use_symbolize,
+            ):
+                print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
+                return _finalize_result(args, 1)
+            print(
+                "[!] UBSan diagnostic text differs from the reference; requiring the "
+                "recorded symbolized location and full trace to match."
+            )
 
         # Location-identifying anchor checks run first: these are the gates
         # that can reject a candidate.  Stack depth is advisory below, because

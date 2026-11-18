@@ -139,6 +139,7 @@ class AmortizedRunner:
     shared_libraries: tuple[str, ...]
     static_libraries: tuple[str, ...]
     plugin_link_flags: tuple[str, ...]
+    required_plugin_link_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1369,13 +1370,46 @@ def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
     return str(output)
 
 
+def prepare_callback_library(
+    link_inputs: AmortizedLinkInputs,
+    root_object: str,
+) -> tuple[str, ...]:
+    """Link fixed targets once while letting each candidate supply its callbacks."""
+    definitions = _nm_posix_symbols(
+        ["nm", "-g", "--defined-only", "--format=posix", root_object],
+        "Failed to inspect harness callback definitions",
+    )
+    references: set[str] = set()
+    for paths, dynamic in ((link_inputs.static_libraries, False),
+                           (link_inputs.shared_libraries, True)):
+        if paths:
+            references.update(_nm_posix_symbols(
+                ["nm", "-u", "--format=posix", *(["-D"] if dynamic else []), *paths],
+                "Failed to inspect target callback references",
+                symbol_types={"U", "w", "v"},
+            ))
+    callbacks = definitions & references
+    if not callbacks:
+        return ()
+    print("[+] Candidate-provided library callbacks: " + ", ".join(sorted(callbacks)))
+    link_tail = amortized_runner_link_tail(link_inputs, root_object)
+    link_tail = [flag for flag in link_tail if flag not in {"-no-pie", "-Wl,--export-dynamic"}]
+    library = Path(get_work_dir()) / f"amortized_callbacks_{time.time_ns()}.so"
+    run_command(
+        ["clang++", "-shared", *PHASE3_PLUGIN_SANITIZER_FLAGS, *link_tail, "-o", str(library)],
+        "Failed to build candidate callback library (target objects must be PIC)",
+    )
+    return ("-Wl,--no-as-needed", str(library), "-Wl,--as-needed")
+
+
 def _compile_harness_runner(
     link_inputs: AmortizedLinkInputs,
     static_root_config: StaticArchiveRootConfig | None = None,
+    static_root_object: str | None = None,
 ) -> str:
     source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
-    static_root_object = (
+    static_root_object = static_root_object or (
         compile_static_archive_root_object(static_root_config)
         if static_root_config is not None and link_inputs.static_libraries
         else None
@@ -1426,8 +1460,19 @@ def start_amortized_runner(
             "for the amortized runner."
         )
     _print_amortized_link_classification(link_inputs)
-    shared_libraries = link_inputs.shared_libraries
-    runner_binary = _compile_harness_runner(link_inputs, static_root_config)
+    root_object = compile_static_archive_root_object(static_root_config) if static_root_config else None
+    required_plugin_link_flags = prepare_callback_library(link_inputs, root_object) if root_object else ()
+    if required_plugin_link_flags:
+        runner_inputs = AmortizedLinkInputs((), (), ())
+        shared_libraries = ()
+        runner_binary = _compile_harness_runner(runner_inputs, None)
+    else:
+        shared_libraries = link_inputs.shared_libraries
+        runner_binary = (
+            _compile_harness_runner(link_inputs, static_root_config, root_object)
+            if root_object
+            else _compile_harness_runner(link_inputs, static_root_config)
+        )
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
     socket_path = str(Path(socket_dir) / "runner.sock")
     env = runtime_library_env(link_flags)
@@ -1483,7 +1528,8 @@ def start_amortized_runner(
             process=process,
             shared_libraries=shared_libraries,
             static_libraries=link_inputs.static_libraries,
-            plugin_link_flags=link_inputs.plugin_link_flags,
+            plugin_link_flags=() if required_plugin_link_flags else link_inputs.plugin_link_flags,
+            required_plugin_link_flags=required_plugin_link_flags,
         )
     finally:
         if process.poll() is None:
@@ -1510,6 +1556,7 @@ def run_amortized_reference_candidate(
     *,
     symbolize: bool,
     require_crash_pattern: bool = True,
+    required_plugin_link_flags: tuple[str, ...] = (),
 ) -> str:
     cmd = [
         get_crash_tester_path(),
@@ -1524,6 +1571,8 @@ def run_amortized_reference_candidate(
     ]
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
+    if required_plugin_link_flags:
+        cmd.append("--amortized-plugin-required-link-flags=" + " ".join(required_plugin_link_flags))
     if plugin_link_flags:
         cmd.append(
             f"--amortized-plugin-fallback-link-flags={' '.join(plugin_link_flags)}"
@@ -3068,6 +3117,7 @@ def calibrate_exec_timeout_ms(
     symbolize: bool,
     runner_socket: str | None = None,
     plugin_link_flags: tuple[str, ...] = (),
+    required_plugin_link_flags: tuple[str, ...] = (),
 ) -> int:
     samples_ms: list[int] = []
     tester_source = pch_artifacts.body_source if pch_artifacts is not None else harness_path
@@ -3090,6 +3140,8 @@ def calibrate_exec_timeout_ms(
             cmd.append("--symbolize")
         if runner_socket is not None:
             cmd.extend(["--amortized-runner-socket", runner_socket])
+        if required_plugin_link_flags:
+            cmd.append("--amortized-plugin-required-link-flags=" + " ".join(required_plugin_link_flags))
         if plugin_link_flags:
             cmd.append(
                 "--amortized-plugin-fallback-link-flags="
@@ -3130,6 +3182,17 @@ def calibrate_exec_timeout_ms(
         f"{calibrated_timeout_ms} ms from probe samples {samples_ms}"
     )
     return calibrated_timeout_ms
+
+
+def ubsan_pattern_variation_tester_args() -> list[str]:
+    """Permit UBSan text changes only when a full reference trace is available."""
+    stack_trace_file = get_stack_trace_file()
+    try:
+        if not Path(stack_trace_file).read_text(encoding="utf-8").strip():
+            return []
+    except OSError:
+        return []
+    return ["--stack-trace-file", stack_trace_file, "--allow-ubsan-pattern-mismatch"]
 
 
 def run_treereducer(
@@ -3191,6 +3254,11 @@ def run_treereducer(
                 "plugin_link_flags",
                 (),
             )
+            calibration_required_plugin_link_flags = getattr(
+                calibration_runner,
+                "required_plugin_link_flags",
+                (),
+            )
             exec_timeout_ms = calibrate_exec_timeout_ms(
                 harness_path,
                 fdp_trace_file,
@@ -3202,6 +3270,7 @@ def run_treereducer(
                 symbolize=symbolize,
                 runner_socket=calibration_runner.socket_path,
                 plugin_link_flags=calibration_plugin_link_flags,
+                required_plugin_link_flags=calibration_required_plugin_link_flags,
             )
     else:
         exec_timeout_ms = calibrate_exec_timeout_ms(
@@ -3260,6 +3329,7 @@ def run_treereducer(
         if not amortize_link:
             cmd.extend(required_stack_depth_tester_args(symbolized=True))
         cmd.extend(required_symbolized_crash_location_tester_args())
+        cmd.extend(ubsan_pattern_variation_tester_args())
     else:
         cmd.extend(dynamic_crash_site_tester_args())
 
@@ -3284,6 +3354,7 @@ def run_treereducer(
     with runner_context as amortized_runner:
         if amortized_runner is not None:
             plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
+            required_plugin_link_flags = getattr(amortized_runner, "required_plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
                 harness_path,
                 fdp_trace_file,
@@ -3296,6 +3367,7 @@ def run_treereducer(
                 pch_artifacts,
                 plugin_link_flags,
                 symbolize=symbolize,
+                required_plugin_link_flags=required_plugin_link_flags,
             )
             reference_depth = count_first_stack_trace_frames(reference_output)
             if reference_depth:
@@ -3307,6 +3379,8 @@ def run_treereducer(
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
+            if required_plugin_link_flags:
+                cmd.append("--amortized-plugin-required-link-flags=" + " ".join(required_plugin_link_flags))
             if plugin_link_flags:
                 cmd.append(
                     "--amortized-plugin-fallback-link-flags="
@@ -3628,6 +3702,7 @@ def validate_symbolized_crash_pattern_depth_location(
     ]
     cmd.extend(required_stack_depth_tester_args(symbolized=True))
     cmd.extend(required_symbolized_crash_location_tester_args())
+    cmd.extend(ubsan_pattern_variation_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))
