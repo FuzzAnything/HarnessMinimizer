@@ -5,19 +5,17 @@ import shutil
 from pathlib import Path
 
 from harnessreducer.api import ReductionConfig, reduce_with_config
+from harnessreducer.debug_log import copy_debug_log
 from harnessreducer.reducer_runner import get_debug_log_path
 
 
 def _stage_debug_log(output: str) -> None:
     debug_log = get_debug_log_path()
-    if not debug_log or not Path(debug_log).is_file():
-        return
-
-    destination = Path(output).resolve().parent / Path(debug_log).name
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if Path(debug_log).resolve() != destination:
-        shutil.copy2(debug_log, destination)
-    print(f"Debug log saved to: {destination}")
+    if debug_log:
+        source = Path(debug_log)
+        destination = Path(output).absolute().parent / source.name
+        if copy_debug_log(source, destination):
+            print(f"Debug log saved to: {destination}")
 
 
 def build_parser() -> argparse.ArgumentParser:

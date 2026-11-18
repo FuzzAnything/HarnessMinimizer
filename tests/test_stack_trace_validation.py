@@ -861,6 +861,16 @@ class TestDebugLog(unittest.TestCase):
         self.assert_writes_rejected()
         self.assertFalse((outside / DEBUG_LOG_FILE_NAME).exists())
 
+    def test_debug_log_rejects_linked_ancestor_before_creating_directories(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        self.work.rmdir()
+        self.work.symlink_to(outside, target_is_directory=True)
+        self.args.debug_log = str(self.work / "missing" / DEBUG_LOG_FILE_NAME)
+        with self.assertRaises(OSError):
+            ct_append_debug_record(self.args, 0)
+        self.assertEqual(list(outside.iterdir()), [])
+
     def test_debug_log_rejects_fifo(self):
         os.mkfifo(self.log)
         # Keep a reader open so a regression cannot block the test on FIFO open.

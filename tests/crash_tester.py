@@ -206,9 +206,7 @@ def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> N
         ]
     )
 
-    debug_path = Path(debug_log)
-    debug_path.parent.mkdir(parents=True, exist_ok=True)
-    with open_debug_log(debug_path) as handle:
+    with open_debug_log(Path(debug_log)) as handle:
         handle.write("\n".join(lines))
 
 
