@@ -31,6 +31,7 @@ from harnessreducer.reducer_runner import (
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
     extract_symbolized_crash_location,
+    open_debug_log,
     runtime_library_env,
 )
 # STACK_FRAME_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in\s+")
@@ -205,11 +206,8 @@ def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> N
 
     debug_path = Path(debug_log)
     debug_path.parent.mkdir(parents=True, exist_ok=True)
-    with debug_path.open("a", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    with open_debug_log(debug_path) as handle:
         handle.write("\n".join(lines))
-        handle.flush()
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -> None:

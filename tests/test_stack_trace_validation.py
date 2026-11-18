@@ -16,6 +16,8 @@ from harnessreducer.reducer_runner import (
     MEMORY_ADDRESS_PATTERN,
     STACK_FRAME_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
+    DEBUG_LOG_FILE_NAME,
+    configure_debug_logging,
     count_first_stack_trace_frames,
     dynamic_crash_site_tester_args,
     extract_crash_pattern_from_output,
@@ -811,6 +813,59 @@ class TestStackTraceStateManagement(unittest.TestCase):
             self.assertFalse(os.path.exists(dynamic_file))
             self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=False)))
             self.assertTrue(os.path.exists(get_crash_pattern_file(symbolized=True)))
+
+
+class TestDebugLog(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.work = self.root / "work"
+        self.work.mkdir()
+        self.log = self.work / DEBUG_LOG_FILE_NAME
+        self.args = SimpleNamespace(debug_log=str(self.log), source=str(self.root / "source"))
+        get_work_dir = patch("harnessreducer.reducer_runner.get_work_dir", return_value=str(self.work))
+        get_work_dir.start()
+        self.addCleanup(get_work_dir.stop)
+        self.addCleanup(configure_debug_logging, False)
+
+    def test_debug_log_reset_and_append(self):
+        self.log.write_text("previous run")
+        self.assertEqual(configure_debug_logging(True), str(self.log))
+        ct_append_debug_record(self.args, 0)
+        contents = self.log.read_text()
+        self.assertNotIn("previous run", contents)
+        self.assertIn("normal-path reduction debug log", contents)
+        self.assertIn("tester_return_code: 0", contents)
+
+    def assert_writes_rejected(self):
+        with self.assertRaises(OSError):
+            configure_debug_logging(True)
+        with self.assertRaises(OSError):
+            ct_append_debug_record(self.args, 0)
+
+    def test_debug_log_rejects_linked_file(self):
+        outside = self.root / "outside"
+        outside.write_text("keep")
+        for link in (self.log.symlink_to, self.log.hardlink_to):
+            with self.subTest(link=link.__name__):
+                link(outside)
+                self.assert_writes_rejected()
+                self.assertEqual(outside.read_text(), "keep")
+                self.log.unlink()
+
+    def test_debug_log_rejects_linked_directory(self):
+        outside = self.root / "outside"
+        self.work.rename(outside)
+        self.work.symlink_to(outside, target_is_directory=True)
+        self.assert_writes_rejected()
+        self.assertFalse((outside / DEBUG_LOG_FILE_NAME).exists())
+
+    def test_debug_log_rejects_fifo(self):
+        os.mkfifo(self.log)
+        # Keep a reader open so a regression cannot block the test on FIFO open.
+        with os.fdopen(os.open(self.log, os.O_RDONLY | os.O_NONBLOCK), "rb"):
+            self.assert_writes_rejected()
 
 
 class TestValidateStackTraceInvocation(unittest.TestCase):

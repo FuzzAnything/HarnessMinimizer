@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import atexit
 from contextlib import contextmanager, nullcontext
+import fcntl
 import filecmp
 import json
 import os
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -1840,20 +1842,39 @@ def get_work_dir() -> str:
     return configure_work_dir(None)
 
 
+@contextmanager
+def open_debug_log(path: Path):
+    """Lock a single-link regular file before writing log data."""
+    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW
+        flags |= os.O_NONBLOCK | os.O_NOCTTY
+        fd = os.open(path.name, flags, 0o600, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    with os.fdopen(fd, "a", encoding="utf-8") as handle:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError(f"Debug log must be a regular file with a single link: {path}")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield handle
+
+
 def configure_debug_logging(enabled: bool) -> str | None:
     global REDUCTION_DEBUG_LOG_PATH
 
+    REDUCTION_DEBUG_LOG_PATH = None
     if not enabled:
-        REDUCTION_DEBUG_LOG_PATH = None
         return None
 
     debug_log_path = str(Path(get_work_dir()) / DEBUG_LOG_FILE_NAME)
-    Path(debug_log_path).write_text(
-        "===== HarnessMinimizer normal-path reduction debug log =====\n"
-        "Candidate records can be out of order because treereduce-c runs "
-        "multiple workers concurrently.\n",
-        encoding="utf-8",
-    )
+    with open_debug_log(Path(debug_log_path)) as handle:
+        handle.truncate(0)
+        handle.write(
+            "===== HarnessMinimizer normal-path reduction debug log =====\n"
+            "Candidate records can be out of order because treereduce-c runs "
+            "multiple workers concurrently.\n"
+        )
     REDUCTION_DEBUG_LOG_PATH = debug_log_path
     print(f"[DEBUG] Reduction candidate log: {debug_log_path}")
     return debug_log_path
