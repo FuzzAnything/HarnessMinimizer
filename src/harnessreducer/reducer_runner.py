@@ -3066,7 +3066,7 @@ def dump_fdp_trace(
     harness_bin: str,
     crash_input: str | None,
     link_flags: str | None = None,
-) -> str:
+) -> str | None:
     fdp_trace_file = os.path.join(get_work_dir(), "fdp_trace.log")
     # The dump runtime appends trace records, so remove any trace left by an
     # earlier run when a fixed work directory is reused.
@@ -3082,7 +3082,17 @@ def dump_fdp_trace(
     run_command(exec_cmd, "Failed to execute tagged harness in dump mode", env=env, ignore_errors=True)
 
     if not os.path.exists(fdp_trace_file):
-        raise RuntimeError("FDP trace file was not created as expected.")
+        if not crash_input:
+            raise RuntimeError("FDP trace file was not created as expected.")
+        # Some crashing paths reach the target before the first FDP call (for
+        # example, a decoder can fault before the harness constructs its
+        # FuzzedDataProvider). The reducer already supports direct-input mode;
+        # let its crash oracle decide whether that path can be reduced.
+        print(
+            "[!] The tagged replay emitted no FDP trace; continuing with the "
+            "original crash input."
+        )
+        return None
     return fdp_trace_file
 
 
@@ -3384,10 +3394,42 @@ def run_treereducer(
             proc = run_bounded_reduction(
                 cmd, reduced_harness, reduction_timeout_seconds, get_last_interesting_file()
             )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
-    if not os.path.exists(reduced_harness):
-        raise RuntimeError("Reduced harness file was not created as expected.")
+    reduced_path = Path(reduced_harness)
+    missing_or_invalid_output = (
+        reduced_path.is_symlink()
+        or not reduced_path.is_file()
+        or not reduced_path.stat().st_size
+    )
+    if proc.returncode != 0 or missing_or_invalid_output:
+        # The process may fail after its tester has already written an atomic,
+        # crash-preserving checkpoint. In bounded reanalysis runs that file is
+        # cleared before every invocation, so it is safe to salvage only a
+        # changed candidate from this attempt and let the normal downstream
+        # replay validate it before publication.
+        checkpoint = Path(get_last_interesting_file())
+        recovered = None
+        if reduction_timeout_seconds is not None:
+            for candidate in (reduced_path, checkpoint):
+                if (
+                    candidate.is_symlink()
+                    or not candidate.is_file()
+                    or not candidate.stat().st_size
+                ):
+                    continue
+                if candidate_files_match(str(candidate), reducer_source):
+                    continue
+                recovered = candidate
+                break
+        if recovered is None:
+            if proc.returncode != 0:
+                raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
+            raise RuntimeError("Reduced harness file was not created as expected.")
+        if recovered != reduced_path:
+            shutil.copyfile(recovered, reduced_path)
+        print(
+            f"[!] Tree reducer exited with status {proc.returncode}; "
+            "using its last changed interesting candidate for validation."
+        )
 
     restore_transition_log_path = os.path.join(
         get_work_dir(),

@@ -910,13 +910,19 @@ def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tu
     return result.source, result.replaced
 
 
-def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
+def strip_injected_ids(
+    source: str,
+    start_id: int = 100000,
+    marker: str = "FDP_ID",
+) -> tuple[str, int]:
     """Remove numeric callsite IDs from a source instrumented by ``inject_ids``.
 
     Injected IDs are sequential and may exceed ``start_id + 99`` when a
     harness has more than 100 supported FDP callsites. This function is used
     only on pipeline-instrumented sources, so every final integer argument at
-    or above ``start_id`` is treated as an injected ID.
+    or above ``start_id`` is treated as an injected ID. The marker comment is
+    also authoritative: tree reduction may rewrite the numeric argument while
+    leaving the injected comment in place.
     """
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
@@ -939,7 +945,11 @@ def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
 
         last = arg_nodes[-1]
         last_value = _parse_int_literal(_node_text(source_bytes, last))
-        if last_value is None or last_value < start_id:
+        marker_bytes = f"{marker}:".encode("utf-8")
+        marker_start = args.start_byte + 1 if len(arg_nodes) == 1 else arg_nodes[-2].end_byte
+        marker_region = source_bytes[marker_start:last.start_byte]
+        has_marker = marker_bytes in marker_region
+        if last_value is None or (last_value < start_id and not has_marker):
             continue
 
         arg_start = args.start_byte + 1

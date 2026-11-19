@@ -1024,6 +1024,20 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     else:
         final_harness = post_inline_harness
 
+    # A reducer can preserve the injected marker while simplifying its
+    # numeric callsite argument. Always sanitize the exported source after all
+    # reduction passes so those internal IDs never become part of a PoC's FDP
+    # API calls.
+    final_source = Path(final_harness).read_text(encoding="utf-8", errors="ignore")
+    cleaned_source, removed_ids = strip_injected_ids(
+        final_source,
+        start_id=config.start_id,
+        marker=config.marker,
+    )
+    if removed_ids:
+        Path(final_harness).write_text(cleaned_source, encoding="utf-8")
+        print(f"Removed {removed_ids} remaining injected FDP IDs from final harness.")
+
     return ReductionResult(
         reduced_harness=final_harness,
         tagged_harness=tagged_harness_file,
