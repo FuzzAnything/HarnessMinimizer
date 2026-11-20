@@ -16,6 +16,7 @@ from pathlib import Path
 
 from harnessreducer.debug_log import open_debug_log
 from harnessreducer.dynamic_slicer import CoverageMap, slice_source_by_coverage
+from harnessreducer.safe_files import copy_regular_file, nonempty_regular_file
 
 TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
@@ -3395,12 +3396,7 @@ def run_treereducer(
                 cmd, reduced_harness, reduction_timeout_seconds, get_last_interesting_file()
             )
     reduced_path = Path(reduced_harness)
-    missing_or_invalid_output = (
-        reduced_path.is_symlink()
-        or not reduced_path.is_file()
-        or not reduced_path.stat().st_size
-    )
-    if proc.returncode != 0 or missing_or_invalid_output:
+    if proc.returncode != 0 or not nonempty_regular_file(reduced_path):
         # The process may fail after its tester has already written an atomic,
         # crash-preserving checkpoint. In bounded reanalysis runs that file is
         # cleared before every invocation, so it is safe to salvage only a
@@ -3410,11 +3406,7 @@ def run_treereducer(
         recovered = None
         if reduction_timeout_seconds is not None:
             for candidate in (reduced_path, checkpoint):
-                if (
-                    candidate.is_symlink()
-                    or not candidate.is_file()
-                    or not candidate.stat().st_size
-                ):
+                if not nonempty_regular_file(candidate):
                     continue
                 if candidate_files_match(str(candidate), reducer_source):
                     continue
@@ -3424,8 +3416,10 @@ def run_treereducer(
             if proc.returncode != 0:
                 raise RuntimeError(f"Failed to run tree-reducer:\n{proc.stdout} {proc.stderr}")
             raise RuntimeError("Reduced harness file was not created as expected.")
-        if recovered != reduced_path:
-            shutil.copyfile(recovered, reduced_path)
+        if recovered != reduced_path and not copy_regular_file(
+            recovered, reduced_path, skip_empty=True
+        ):
+            raise RuntimeError("Checkpoint disappeared or was empty before copying.")
         print(
             f"[!] Tree reducer exited with status {proc.returncode}; "
             "using its last changed interesting candidate for validation."

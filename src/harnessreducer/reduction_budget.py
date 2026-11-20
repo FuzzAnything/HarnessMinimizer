@@ -6,8 +6,9 @@ import math
 import os
 from pathlib import Path
 import signal
-import shutil
 import subprocess
+
+from harnessreducer.safe_files import copy_regular_file, nonempty_regular_file
 
 
 def _stop_process_group(process: subprocess.Popen) -> None:
@@ -47,9 +48,8 @@ def run_bounded_reduction(
         _stop_process_group(process)
         # treereduce writes its -o file only at completion. The tester's
         # atomic snapshot is what survives an interrupted reduction.
-        if not checkpoint.is_symlink() and checkpoint.is_file() and checkpoint.stat().st_size:
-            shutil.copyfile(checkpoint, candidate)
-        if candidate.is_symlink() or not candidate.is_file() or not candidate.stat().st_size:
+        copy_regular_file(checkpoint, candidate, skip_empty=True)
+        if not nonempty_regular_file(candidate):
             raise RuntimeError("Reduction budget exhausted without a candidate.")
         print(
             f"[+] Reduction budget exhausted after {timeout_seconds:g} seconds; "

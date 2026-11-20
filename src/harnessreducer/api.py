@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from harnessreducer.safe_files import open_regular_file, replace_regular_file
 from harnessreducer.check_mode import (
     emit_check_statistics_summary,
     record_check_reference,
@@ -1028,14 +1029,17 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     # numeric callsite argument. Always sanitize the exported source after all
     # reduction passes so those internal IDs never become part of a PoC's FDP
     # API calls.
-    final_source = Path(final_harness).read_text(encoding="utf-8", errors="ignore")
+    final_path = Path(final_harness)
+    with open_regular_file(final_path) as final_file:
+        original = os.fstat(final_file.fileno())
+        final_source = final_file.read().decode("utf-8")
     cleaned_source, removed_ids = strip_injected_ids(
         final_source,
         start_id=config.start_id,
         marker=config.marker,
     )
     if removed_ids:
-        Path(final_harness).write_text(cleaned_source, encoding="utf-8")
+        replace_regular_file(final_path, cleaned_source.encode("utf-8"), original)
         print(f"Removed {removed_ids} remaining injected FDP IDs from final harness.")
 
     return ReductionResult(

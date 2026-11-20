@@ -1,13 +1,34 @@
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from harnessreducer.reduction_budget import run_bounded_reduction
 
 
 class ReductionBudgetTests(unittest.TestCase):
+    def test_timeout_rejects_a_linked_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output, snapshot = root / "output", root / "snapshot"
+
+            def timeout_after_writing(*, timeout):
+                snapshot.write_bytes(b"fixture")
+                output.symlink_to("unused")
+                raise subprocess.TimeoutExpired("fixture", timeout)
+
+            with (
+                patch("harnessreducer.reduction_budget.subprocess.Popen") as launch,
+                patch("harnessreducer.reduction_budget._stop_process_group"),
+            ):
+                launch.return_value.wait.side_effect = timeout_after_writing
+                with self.assertRaises(OSError):
+                    run_bounded_reduction(["fixture"], str(output), 1, str(snapshot))
+            self.assertFalse((root / "unused").exists())
+
     def test_budget_recovers_atomic_snapshot_and_stops_testers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
