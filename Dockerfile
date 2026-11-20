@@ -138,18 +138,29 @@ ENV PATH="/root/HarnessMinimizer/.venv/bin:/root/HarnessMinimizer/.tools/bin:${P
 RUN uv sync --frozen
 RUN python tools/treereduce/install.py --jobs "$ENGINE_BUILD_JOBS"
 
-# Keep the pinned upstream checkout, including its license and build files.
+# Pin Perses independently of the selected HarnessMinimizer revision.
+# Keep its source, license and build files alongside the installed JAR.
+ARG PERSES_REF=43c619a54f883169077b2218cd9c4b395e8927c4
 RUN mkdir -p .tools/perses && \
-    git clone https://github.com/uw-pluverse/perses.git .tools/perses/source && \
-    git -C .tools/perses/source checkout --detach 6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2 && \
-    python tools/perses/install.py --source .tools/perses/source --jobs "$ENGINE_BUILD_JOBS" && \
-    (cd .tools/perses/source && bazelisk shutdown)
+    git init .tools/perses/source && \
+    git -C .tools/perses/source remote add origin https://github.com/uw-pluverse/perses.git && \
+    git -C .tools/perses/source fetch --depth 1 --no-tags origin "$PERSES_REF" && \
+    git -C .tools/perses/source checkout --detach FETCH_HEAD && \
+    test "$(git -C .tools/perses/source rev-parse HEAD)" = "$PERSES_REF" && \
+    (cd .tools/perses/source && \
+        bazelisk build --jobs="$ENGINE_BUILD_JOBS" --lockfile_mode=off --noshow_progress --embed_label="$PERSES_REF" \
+            //src/org/perses:perses_deploy.jar && bazelisk shutdown) && \
+    install -m 644 .tools/perses/source/bazel-bin/src/org/perses/perses_deploy.jar .tools/perses/perses_deploy.jar && \
+    java -jar .tools/perses/perses_deploy.jar --verbosity SEVERE --version | grep -Fx "Git Version: $PERSES_REF" && \
+    printf '{"source_commit":"%s","jar_sha256":"%s"}\n' "$PERSES_REF" \
+        "$(sha256sum .tools/perses/perses_deploy.jar | cut -d ' ' -f 1)" > .tools/perses/build_info.json
+LABEL org.fuzzanything.perses.commit=$PERSES_REF
 
 ENV HARNESSMINIMIZER_TREEREDUCE="/root/HarnessMinimizer/.tools/bin/treereduce-c" \
     HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
 RUN harnessminimizer --help >/dev/null && \
     "$HARNESSMINIMIZER_TREEREDUCE" --harnessminimizer-supervisor-version && \
-    java -jar "$HARNESSMINIMIZER_PERSES_JAR" --help >/dev/null
+    python -c 'from harnessminimizer.reduction_engines import check_perses; check_perses()'
 
 ENV DEBUGINFOD_URLS="" \
     ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-21/bin/llvm-symbolizer" \

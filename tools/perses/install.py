@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 
-COMMIT = "6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2"
+COMMIT = "43c619a54f883169077b2218cd9c4b395e8927c4"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TARGET = "//src/org/perses:perses_deploy.jar"
 
@@ -41,11 +41,21 @@ def main() -> None:
     bazel = shutil.which("bazelisk") or shutil.which("bazel")
     if not bazel:
         parser.error("Install Bazelisk or Bazel (the checkout requires Bazel 9.1.0)")
-    command = [bazel, "build", f"--jobs={args.jobs}", "--lockfile_mode=off", "--noshow_progress", TARGET]
+    # Perses records its Git SHA in volatile workspace status. A stable build
+    # label also makes Bazel invalidate cached version metadata across revisions.
+    command = [
+        bazel, "build", f"--jobs={args.jobs}", "--lockfile_mode=off", "--noshow_progress",
+        f"--embed_label={COMMIT}", TARGET,
+    ]
     subprocess.run(command, cwd=source, check=True)
     jar = source / "bazel-bin/src/org/perses/perses_deploy.jar"
     if not jar.is_file():
         parser.error(f"Build did not produce {jar}")
+    version = subprocess.check_output(
+        ["java", "-jar", str(jar), "--verbosity", "SEVERE", "--version"], text=True,
+    )
+    if f"Git Version: {revision}" not in version.splitlines():
+        parser.error("Built Perses JAR reports a different source commit")
     destination = args.root.resolve()
     destination.mkdir(parents=True, exist_ok=True)
     # Stage before replacing, so an interrupted copy does not corrupt the installed JAR.

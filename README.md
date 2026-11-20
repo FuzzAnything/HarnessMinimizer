@@ -203,7 +203,7 @@ remain applicable under either option. See
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/) for the upstream license texts.
 
 **Optional Perses engines.** Perses is a separate external program under
-[GPL-3.0-or-later](https://github.com/uw-pluverse/perses/blob/6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2/LICENSE).
+[GPL-3.0-or-later](https://github.com/uw-pluverse/perses/blob/43c619a54f883169077b2218cd9c4b395e8927c4/LICENSE).
 It is **not bundled in HarnessMinimizer's source repository or Python packages**:
 users obtain and build it separately, or the Docker build downloads and installs
 it automatically. HarnessMinimizer invokes its command-line interface. A commercial license

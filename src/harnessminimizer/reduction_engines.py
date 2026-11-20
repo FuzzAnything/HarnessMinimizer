@@ -24,7 +24,7 @@ from harnessminimizer.source_language import CPP, SourceLanguage, language_for_p
 
 
 TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd")
-PERSES_COMMIT = "6c6ae0db20fa83b0f85a71ca447f0c4d5e056bd2"
+PERSES_COMMIT = "43c619a54f883169077b2218cd9c4b395e8927c4"
 CANDIDATE_PLACEHOLDER = "@@.cpp"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LIST_MINIMIZERS = {"perses": "DFS", "wdd": "WDD", "cdd": "CDD"}
