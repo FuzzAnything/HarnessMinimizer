@@ -1,8 +1,36 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from harnessreducer.api import ADDITIONAL_HEADERS, inline_literals_in_reduced_harness
-from harnessreducer.fdp_transform import InlineResult, InlineSkip
+from harnessreducer.fdp_transform import InlineResult, InlineSkip, strip_injected_ids
+
+
+@pytest.mark.parametrize("trace_available", [False, True])
+@pytest.mark.parametrize("crash_preserved", [False, True])
+def test_inline_cleanup_honors_custom_markers_and_preserves_native_arguments(
+    tmp_path: Path, trace_available, crash_preserved,
+) -> None:
+    reduced = tmp_path / "reduced.cpp"
+    source = (
+        "void f() {\n"
+        "  fdp.ConsumeRandomLengthString(/*SITE:123*/ 0);\n"
+        "  fdp.ConsumeBytesAsString(200000);\n"
+        "  fdp.ConsumeIntegralInRange<int>(0, 200000);\n"
+        "}\n"
+    )
+    reduced.write_text(source, encoding="utf-8")
+    trace = tmp_path / "fdp_trace.log"
+    trace.write_text("", encoding="utf-8")
+    with patch("harnessreducer.api.validate_crash_pattern_and_stack_trace", return_value=crash_preserved):
+        output, _ = inline_literals_in_reduced_harness(
+            str(reduced), str(trace) if trace_available else None,
+            "fixture-pattern", None, None, None, start_id=123, marker="SITE",
+        )
+    exported = Path(output).read_text(encoding="utf-8")
+    assert source.replace("/*SITE:123*/ 0", "") in exported
+    assert strip_injected_ids(exported, start_id=123, marker="SITE") == (exported, 0)
 
 
 def test_inline_literals_returns_inline_file_when_crash_preserved(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -10,24 +11,26 @@ from typing import Any, Deque
 import tree_sitter_cpp as ts_cpp
 from tree_sitter import Language, Node, Parser
 
-SUPPORTED_FDP_APIS = {
-    "ConsumeBytes",
-    "ConsumeBytesWithTerminator",
-    "ConsumeRemainingBytes",
-    "ConsumeBytesAsString",
-    "ConsumeRandomLengthString",
-    "ConsumeRemainingBytesAsString",
-    "ConsumeIntegral",
-    "ConsumeIntegralInRange",
-    "ConsumeFloatingPoint",
-    "ConsumeFloatingPointInRange",
-    "ConsumeProbability",
-    "ConsumeBool",
-    "ConsumeEnum",
-    "PickValueInArray",
-    "ConsumeData",
-    "remaining_bytes",
+# Minimum and maximum native argument counts, excluding the injected site ID.
+_FDP_ARGUMENT_COUNTS = {
+    "ConsumeBytes": (1, 1),
+    "ConsumeBytesWithTerminator": (1, 2),
+    "ConsumeRemainingBytes": (0, 0),
+    "ConsumeBytesAsString": (1, 1),
+    "ConsumeRandomLengthString": (0, 1),
+    "ConsumeRemainingBytesAsString": (0, 0),
+    "ConsumeIntegral": (0, 0),
+    "ConsumeIntegralInRange": (2, 2),
+    "ConsumeFloatingPoint": (0, 0),
+    "ConsumeFloatingPointInRange": (2, 2),
+    "ConsumeProbability": (0, 0),
+    "ConsumeBool": (0, 0),
+    "ConsumeEnum": (0, 0),
+    "PickValueInArray": (1, 1),
+    "ConsumeData": (2, 2),
+    "remaining_bytes": (0, 0),
 }
+SUPPORTED_FDP_APIS = set(_FDP_ARGUMENT_COUNTS)
 
 CPP_LANGUAGE = Language(ts_cpp.language())
 PARSER = Parser(CPP_LANGUAGE)
@@ -917,17 +920,16 @@ def strip_injected_ids(
 ) -> tuple[str, int]:
     """Remove numeric callsite IDs from a source instrumented by ``inject_ids``.
 
-    Injected IDs are sequential and may exceed ``start_id + 99`` when a
-    harness has more than 100 supported FDP callsites. This function is used
-    only on pipeline-instrumented sources, so every final integer argument at
-    or above ``start_id`` is treated as an injected ID. The marker comment is
-    also authoritative: tree reduction may rewrite the numeric argument while
-    leaving the injected comment in place.
+    A marker identifies an ID even after its value was reduced. Without one,
+    require an extra argument beyond the method's native signature as well as
+    a value at or above ``start_id``. Ambiguous optional arguments are preserved
+    so repeated cleanup cannot remove a legitimate size, terminator or bound.
     """
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
     replacements: list[tuple[int, int, str]] = []
     removed = 0
+    marker_pattern = re.compile(r"/\*\s*" + re.escape(marker) + r":\s*-?[0-9]+\s*\*/")
 
     for node in _iter_nodes(tree.root_node):
         if node.type != "call_expression":
@@ -940,36 +942,34 @@ def strip_injected_ids(
             continue
 
         arg_nodes = [child for child in args.named_children if child.type != "comment"]
-        if not arg_nodes:
+        function = node.child_by_field_name("function")
+        method = _extract_method_name(function.child_by_field_name("field"), source_bytes)
+        min_args, max_args = _FDP_ARGUMENT_COUNTS[method]
+        if not min_args < len(arg_nodes) <= max_args + 1:
             continue
 
         last = arg_nodes[-1]
         last_value = _parse_int_literal(_node_text(source_bytes, last))
-        marker_bytes = f"{marker}:".encode("utf-8")
-        marker_start = args.start_byte + 1 if len(arg_nodes) == 1 else arg_nodes[-2].end_byte
-        marker_region = source_bytes[marker_start:last.start_byte]
-        has_marker = marker_bytes in marker_region
-        if last_value is None or (last_value < start_id and not has_marker):
+        if last_value is None:
             continue
 
-        arg_start = args.start_byte + 1
-        arg_end = args.end_byte - 1
-        if len(arg_nodes) == 1:
-            replacements.append((arg_start, arg_end, ""))
-            removed += 1
+        remove_start = args.start_byte + 1
+        if len(arg_nodes) > 1:
+            prev = arg_nodes[-2]
+            remove_start = prev.end_byte
+            for child in args.children:
+                if child.type == "," and prev.end_byte <= child.start_byte < last.start_byte:
+                    remove_start = child.start_byte
+        has_marker = any(
+            child.type == "comment"
+            and remove_start <= child.start_byte < last.start_byte
+            and marker_pattern.fullmatch(_node_text(source_bytes, child)) is not None
+            for child in args.named_children
+        )
+        if not has_marker and (len(arg_nodes) <= max_args or last_value < start_id):
             continue
 
-        prev = arg_nodes[-2]
-        remove_start = prev.end_byte
-        remove_end = last.end_byte
-
-        for child in args.children:
-            if child.type != ",":
-                continue
-            if child.start_byte >= prev.end_byte and child.end_byte <= last.start_byte:
-                remove_start = child.start_byte
-
-        replacements.append((remove_start, remove_end, ""))
+        replacements.append((remove_start, last.end_byte, ""))
         removed += 1
 
     if not replacements:

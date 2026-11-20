@@ -173,9 +173,11 @@ def _prepend_additional_headers(harness_path: str) -> None:
     Path(harness_path).write_text(headers_block + content, encoding="utf-8")
 
 
-def _finalize_fallback_harness(reduced_harness_path: str, start_id: int) -> str:
+def _finalize_fallback_harness(
+    reduced_harness_path: str, start_id: int, marker: str = "FDP_ID",
+) -> str:
     fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id)
+    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id, marker=marker)
     if removed:
         Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
@@ -459,13 +461,14 @@ def _inline_direct_input_in_reduced_harness(
     snapshot: bool,
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
+    marker: str = "FDP_ID",
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
             "[!] Direct-input inlining requires --crash-input. "
             "Returning the tree-reduced harness."
         )
-        return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+        return _finalize_fallback_harness(reduced_harness_path, start_id, marker), ()
 
     crash_input_path = Path(crash_input)
     if not crash_input_path.exists():
@@ -473,7 +476,7 @@ def _inline_direct_input_in_reduced_harness(
             f"[!] Direct-input inlining could not find crash input {crash_input}. "
             "Returning the tree-reduced harness."
         )
-        return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+        return _finalize_fallback_harness(reduced_harness_path, start_id, marker), ()
 
     crash_bytes = crash_input_path.read_bytes()
 
@@ -494,7 +497,7 @@ def _inline_direct_input_in_reduced_harness(
             print(
                 f"[!] Direct-input inlining skipped for the {attempt_label} harness: {exc}"
             )
-            return _finalize_fallback_harness(base_harness_path, start_id), ()
+            return _finalize_fallback_harness(base_harness_path, start_id, marker), ()
 
         header_path.write_text(
             _direct_input_header_source(crash_bytes),
@@ -591,10 +594,10 @@ def _inline_direct_input_in_reduced_harness(
                 "[-] Snapshot direct-input inline reduction also failed. "
                 "Falling back to the last interesting snapshot harness."
             )
-            return _finalize_fallback_harness(last_interesting_path, start_id), ()
+            return _finalize_fallback_harness(last_interesting_path, start_id, marker), ()
 
     print("[-] Falling back to the tree-reduced harness.")
-    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+    return _finalize_fallback_harness(reduced_harness_path, start_id, marker), ()
 
 
 def inline_literals_in_reduced_harness(
@@ -609,6 +612,7 @@ def inline_literals_in_reduced_harness(
     snapshot: bool = False,
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
+    marker: str = "FDP_ID",
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -625,6 +629,7 @@ def inline_literals_in_reduced_harness(
             snapshot,
             fast_crash_pattern,
             symbolize,
+            marker,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
@@ -671,7 +676,7 @@ def inline_literals_in_reduced_harness(
                 "[!] Skipping inline validation because no FDP callsites were inlined/replayed; "
                 f"returning the {attempt_label} harness."
             )
-            return _finalize_fallback_harness(base_harness_path, start_id), ()
+            return _finalize_fallback_harness(base_harness_path, start_id, marker), ()
         if count == 0:
             print(
                 "[!] No FDP callsites were replayed, but FDP callsites remain in the "
@@ -714,7 +719,7 @@ def inline_literals_in_reduced_harness(
         if crash_preserved:
             print("[+] Inline reduction preserved crash behavior.")
             inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
-            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
+            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id, marker=marker)
             if removed:
                 Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
                 print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
@@ -760,10 +765,10 @@ def inline_literals_in_reduced_harness(
             print(
                 "[-] Snapshot inline reduction also failed. Falling back to the last interesting snapshot harness."
             )
-            return _finalize_fallback_harness(last_interesting_path, start_id), ()
+            return _finalize_fallback_harness(last_interesting_path, start_id, marker), ()
 
     print("[-] Falling back to the tree-reduced harness.")
-    return _finalize_fallback_harness(reduced_harness_path, start_id), ()
+    return _finalize_fallback_harness(reduced_harness_path, start_id, marker), ()
 
 
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
@@ -1008,6 +1013,7 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         snapshot=config.snapshot,
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
+        marker=config.marker,
     )
 
     if config.use_llm:

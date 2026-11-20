@@ -17,6 +17,13 @@ class _Proc:
         self.stderr = stderr
 
 
+def _successful_reducer_run(command, **_kwargs):
+    if command[0] == "treereduce-c":
+        output = Path(command[command.index("-o") + 1])
+        output.write_text("int result;\n", encoding="utf-8")
+    return _Proc(returncode=0)
+
+
 class TestReducerRunner(unittest.TestCase):
     def setUp(self):
         reducer_runner.TREEDUCER_DIR = None
@@ -55,7 +62,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_sets_env(self, mock_run, mock_exists):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
         reducer_runner.set_normal_reference_stack_depth(12)
 
@@ -81,10 +88,9 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_symbolize_uses_symbolized_oracle(self, mock_run):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
-            Path(tmpdir, "reduced_harness.cpp").write_text("", encoding="utf-8")
             reducer_runner.set_symbolized_reference_stack_depth(6)
             reducer_runner.set_symbolized_reference_crash_location_pattern(
                 r"/src/lib\.c:10:3"
@@ -129,7 +135,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_start_runner,
         mock_reference,
     ):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
         mock_start_runner.return_value = nullcontext(
             SimpleNamespace(socket_path="/tmp/harness-runner.sock")
@@ -160,7 +166,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_passes_snapshot_flag_when_enabled(self, mock_run, mock_exists):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
 
         reducer_runner.run_treereducer(
@@ -185,7 +191,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_exists,
         mock_initialize_statistics,
     ):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
         mock_initialize_statistics.return_value = "/tmp/work/statistics.txt"
 
@@ -206,7 +212,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_adds_normal_path_debug_log(self, mock_run, mock_exists):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -230,7 +236,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessreducer.reducer_runner.os.path.exists")
     @patch("harnessreducer.reducer_runner.subprocess.run")
     def test_run_treereducer_uses_split_mode_flag(self, mock_run, mock_exists):
-        mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _successful_reducer_run
         mock_exists.return_value = True
 
         reducer_runner.run_treereducer(
