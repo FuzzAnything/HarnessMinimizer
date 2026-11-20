@@ -46,7 +46,7 @@ class TestDebugLogStaging(unittest.TestCase):
     def test_failed_copy_preserves_previous_export(self):
         self.output.parent.mkdir()
         self.copy.write_text("previous")
-        with patch("harnessreducer.debug_log.shutil.copyfileobj", side_effect=OSError):
+        with patch("harnessreducer.safe_files.shutil.copyfileobj", side_effect=OSError):
             with self.assertRaises(OSError):
                 _stage_debug_log(str(self.output))
         self.assertEqual(self.copy.read_text(), "previous")
