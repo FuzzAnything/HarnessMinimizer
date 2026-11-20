@@ -4,6 +4,7 @@ import argparse
 import shutil
 from pathlib import Path
 
+from harnessminimizer.debug_log import copy_debug_log
 from harnessminimizer.api import ReductionConfig, reduce_with_config
 from harnessminimizer.reduction_engines import TOOL_CHOICES
 from harnessminimizer.reducer_runner import (
@@ -18,14 +19,12 @@ from harnessminimizer.reducer_runner import (
 
 def _stage_debug_log(output: str) -> None:
     debug_log = get_debug_log_path()
-    if not debug_log or not Path(debug_log).is_file():
-        return
+    if debug_log:
+        source = Path(debug_log)
+        destination = Path(output).absolute().parent / source.name
+        if copy_debug_log(source, destination):
+            print(f"Debug log saved to: {destination}")
 
-    destination = Path(output).resolve().parent / Path(debug_log).name
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if Path(debug_log).resolve() != destination:
-        shutil.copy2(debug_log, destination)
-    print(f"Debug log saved to: {destination}")
 
 
 def _stage_profile(output: str) -> None:

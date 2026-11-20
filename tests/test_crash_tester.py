@@ -188,11 +188,9 @@ class TestCrashTester(unittest.TestCase):
         with patch.dict(crash_tester.os.environ, {crash_tester.CHECKPOINT_START_ENV: "2160"}), \
                 patch.object(crash_tester.time, "monotonic", return_value=2159.99), \
                 patch.object(crash_tester, "Path") as path, \
-                patch.object(crash_tester.filecmp, "cmp") as compare, \
-                patch.object(crash_tester.shutil, "copyfile") as copy:
+                patch.object(crash_tester, "copy_regular_file") as copy:
             crash_tester._update_last_interesting_file("candidate.cpp", "checkpoint.cpp")
         path.assert_not_called()
-        compare.assert_not_called()
         copy.assert_not_called()
 
     def test_checkpoint_window_opens_at_cutoff_and_updates_atomically(self):

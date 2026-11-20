@@ -212,3 +212,60 @@ def test_checker_rejects_missing_or_invalid_required_trace_set(payload):
                              env={**os.environ, TRACE_SET_ENV: payload})
     assert process.returncode == 2
     assert "Missing or invalid symbolized reference traces" in process.stderr
+
+
+def test_daily_ubsan_exception_requires_same_location_and_recorded_library_trace(tmp_path):
+    args = SimpleNamespace(
+        symbolize=True, _source_aliases=SourceAliases(), _reference_traces=reference(report(A)),
+        debug_log=None, crash_pattern=r'runtime\s+error:\s+division by zero',
+        skip_crash_pattern=False, allow_ubsan_pattern_mismatch=True,
+        crash_location_pattern=re.escape(f'{LIBRARY}:7:3'),
+        crash_location_file=None, source='/tmp/harness.cpp', stack_depth=None,
+        strict_stack_depth=False, stack_trace_file=None,
+    )
+    changed = f'{LIBRARY}:7:3: runtime error: signed integer overflow\n' + report(A)
+    assert _evaluate_candidate_crash(args, 77, changed)[0] is EvidenceResult.MATCH
+    for log in (
+        changed.replace(':7:3', ':8:3'),
+        changed.replace('via_a', 'different_caller'),
+        'SUMMARY: AddressSanitizer: heap-buffer-overflow\n' + report(A),
+    ):
+        assert _evaluate_candidate_crash(args, 77, log)[0] is EvidenceResult.MISMATCH
+    assert _evaluate_candidate_crash(args, 77, changed.split('    #0')[0])[0] is EvidenceResult.MISSING_EVIDENCE
+    args._source_aliases = SourceAliases([(LIBRARY, '/build/library.cc')])
+    assert _evaluate_candidate_crash(args, 77, changed.replace(LIBRARY, '/build/library.cc'))[0] is EvidenceResult.MATCH
+    args._source_aliases = SourceAliases()
+    args.symbolize = False
+    assert _evaluate_candidate_crash(args, 77, changed)[0] is EvidenceResult.MISMATCH
+    args.symbolize = True
+    args.allow_ubsan_pattern_mismatch = False
+    assert _evaluate_candidate_crash(args, 77, changed)[0] is EvidenceResult.MISMATCH
+    args.allow_ubsan_pattern_mismatch = True
+    # The older, explicitly recorded single-trace mode stays supported, but
+    # the exception never permits missing trace evidence.
+    args._reference_traces = None
+    assert _evaluate_candidate_crash(args, 77, changed)[0] is EvidenceResult.MISMATCH
+    trace = tmp_path / 'trace.txt'
+    trace.write_text(reference(report(A)).normalized_patterns[0])
+    args.stack_trace_file = str(trace)
+    assert _evaluate_candidate_crash(args, 77, changed)[0] is EvidenceResult.MATCH
+    assert _evaluate_candidate_crash(args, 77, changed.replace('via_a', 'wrong'))[0] is EvidenceResult.MISMATCH
+
+
+def test_ubsan_exception_is_forwarded_to_final_validation_with_in_memory_traces(collection_state, monkeypatch):
+    runner.set_symbolized_reference_traces(reference(report(A)), required=True)
+    commands = []
+
+    def execute(command, *args, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 77, report(A), '')
+
+    monkeypatch.setattr(runner, 'run_command', execute)
+    assert runner.ubsan_pattern_variation_tester_args() == ['--allow-ubsan-pattern-mismatch']
+    assert runner.validate_symbolized_crash_pattern_depth_location(
+        '/tmp/harness.cpp', r'runtime error: division by zero', 'seed', None, None,
+    )
+    command, = commands
+    assert '--require-reference-traces' in command
+    assert '--allow-ubsan-pattern-mismatch' in command
+    assert '--stack-trace-file' not in command

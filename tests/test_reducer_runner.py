@@ -26,6 +26,7 @@ class TestReducerRunner(unittest.TestCase):
         # source/output paths. Real preparation and restoration have separate
         # filesystem/native tests in test_macro_headers and test_reduction_engines.
         for mock in (
+            patch("harnessminimizer.reducer_runner.nonempty_regular_file", return_value=True),
             patch("harnessminimizer.reduction_engines.prepare_macro_headers",
                   side_effect=lambda source, work: MacroPreparation(source)),
             patch("harnessminimizer.reduction_engines.ReducerInvocation.publish_result"),

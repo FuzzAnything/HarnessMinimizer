@@ -241,6 +241,23 @@ completion uses the engine's final output. Both paths restore PCH/macro headers,
 inline recorded FDP values, and validate the exported result. A timeout without
 a checkpoint or a failed final validation is a failure, not a successful reduction.
 
+If the engine exits with an error, a current-run accepted checkpoint can also
+be recovered when checkpoint saving is enabled. Recovery rejects missing,
+empty, stale, or unchanged checkpoints and still performs the same final
+inlining and crash validation. An engine's unverified output is not a fallback.
+
+In symbolized mode, UBSan diagnostic wording may change only when the recorded
+crash location and a complete recorded library trace still match. Unsymbolized
+checks retain their existing crash-pattern requirements.
+
+Amortized linking also supports libraries that call functions defined by the
+harness: fixed target code is linked once into a helper shared library, and
+each candidate supplies the callbacks. Those target objects must support PIC.
+
+Work and export directories may be symlink aliases. Checked source rewrites,
+checkpoint copies, and debug-log writes reject symlink or hardlink files;
+replacement copies are published atomically.
+
 # Embedding with an outer deadline
 
 `ReductionConfig.search_timeout_seconds` optionally shares one deadline across

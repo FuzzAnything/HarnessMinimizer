@@ -178,3 +178,45 @@ def test_repeated_objects_are_not_silently_deduplicated(tmp_path: Path) -> None:
     inputs = rr.resolve_amortized_link_inputs(f"{obj} {obj}")
     assert inputs.object_files == (str(obj), str(obj))
     assert inputs.ordered_link_flags == (str(obj), str(obj))
+
+
+@pytest.mark.parametrize('kind', ['static', 'shared', 'object'])
+def test_candidate_callback_is_resolved_through_fixed_helper(tmp_path, monkeypatch, kind):
+    rr.configure_work_dir(str(tmp_path / 'work'))
+    rr.reset_stack_trace_state()
+    library_source = '''extern "C" int user_callback();
+extern "C" void target() {
+  if (user_callback() != 42) return;
+  volatile int *p = new int[1]; p[4] = 7;
+}
+'''
+    if kind == 'shared':
+        library = compile_file(tmp_path, 'libtarget.so', library_source,
+                               '-shared', '-fPIC', '-fsanitize=address,undefined')
+    else:
+        obj = compile_file(tmp_path, 'target.o', library_source, '-c', '-fPIC', '-fsanitize=address,undefined')
+        library = obj
+        if kind == 'static':
+            library = tmp_path / 'libtarget.a'
+            subprocess.run(['ar', 'rcs', str(library), str(obj)], check=True, timeout=30)
+    harness = tmp_path / 'harness.cpp'
+    harness.write_text('''#include <cstdint>
+#include <cstddef>
+extern "C" void target();
+extern "C" int user_callback() { return 42; }
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t*, size_t) { target(); return 0; }
+''')
+    monkeypatch.setenv('ASAN_OPTIONS', 'detect_leaks=0')
+    with rr.start_amortized_runner(
+        str(library), None, None, symbolize=False,
+        static_root_config=rr.StaticArchiveRootConfig(source=str(harness)),
+    ) as server:
+        assert server.required_plugin_link_flags
+        for _ in range(2):
+            rr.run_amortized_reference_candidate(
+                str(harness), None, 'AddressSanitizer', None, str(library), None,
+                'split', server.socket_path, None, server.plugin_link_flags,
+                symbolize=False, required_plugin_link_flags=server.required_plugin_link_flags,
+            )
+        assert server.process.poll() is None
+    rr.reset_stack_trace_state()

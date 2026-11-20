@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -28,6 +29,16 @@ SUPPORTED_FDP_APIS = {
     "ConsumeData",
     "remaining_bytes",
 }
+
+_FDP_ARGUMENT_COUNTS = {name: (count, count) for name, count in {
+    "ConsumeBytes": 1, "ConsumeBytesWithTerminator": 2, "ConsumeRemainingBytes": 0,
+    "ConsumeBytesAsString": 1, "ConsumeRandomLengthString": 1, "ConsumeRemainingBytesAsString": 0,
+    "ConsumeIntegral": 0, "ConsumeIntegralInRange": 2, "ConsumeFloatingPoint": 0,
+    "ConsumeFloatingPointInRange": 2, "ConsumeProbability": 0, "ConsumeBool": 0,
+    "ConsumeEnum": 0, "PickValueInArray": 1, "ConsumeData": 2, "remaining_bytes": 0,
+}.items()}
+_FDP_ARGUMENT_COUNTS.update(ConsumeRandomLengthString=(0, 1), ConsumeBytesWithTerminator=(1, 2))
+
 
 CPP_LANGUAGE = Language(ts_cpp.language())
 PARSER = Parser(CPP_LANGUAGE)
@@ -62,26 +73,6 @@ _SCALAR_METHODS = _FLOAT_METHODS | {
     "ConsumeEnum",
     "PickValueInArray",
 }
-
-_PUBLIC_FDP_MAX_ARGS = {
-    "ConsumeBytes": 1,
-    "ConsumeBytesWithTerminator": 2,
-    "ConsumeRemainingBytes": 0,
-    "ConsumeBytesAsString": 1,
-    "ConsumeRandomLengthString": 1,
-    "ConsumeRemainingBytesAsString": 0,
-    "ConsumeIntegral": 0,
-    "ConsumeIntegralInRange": 2,
-    "ConsumeFloatingPoint": 0,
-    "ConsumeFloatingPointInRange": 2,
-    "ConsumeProbability": 0,
-    "ConsumeBool": 0,
-    "ConsumeEnum": 0,
-    "PickValueInArray": 1,
-    "ConsumeData": 2,
-    "remaining_bytes": 0,
-}
-
 
 @dataclass
 class CallSite:
@@ -192,23 +183,6 @@ def _extract_first_template_argument(field_node: Node, source_bytes: bytes) -> s
     return None
 
 
-def _is_supported_fdp_call(call_node: Node, source_bytes: bytes) -> bool:
-    function_node = call_node.child_by_field_name("function")
-    if function_node is None or function_node.type != "field_expression":
-        return False
-
-    receiver = function_node.child_by_field_name("argument")
-    field = function_node.child_by_field_name("field")
-
-    if _node_text(source_bytes, receiver).strip() != "fdp":
-        return False
-    if field is None:
-        return False
-
-    method_name = _extract_method_name(field, source_bytes)
-    return method_name in SUPPORTED_FDP_APIS
-
-
 def _parse_int_literal(token: str) -> int | None:
     text = token.strip()
     if not text:
@@ -221,24 +195,6 @@ def _parse_int_literal(token: str) -> int | None:
         return None
 
 
-def _extract_explicit_id(args_node: Node, source_bytes: bytes) -> int | None:
-    arg_nodes = list(args_node.named_children)
-    if not arg_nodes:
-        return None
-    last = arg_nodes[-1]
-    if last.type not in {"number_literal", "unary_expression"}:
-        return None
-    return _parse_int_literal(_node_text(source_bytes, last))
-
-
-def _extract_call_arg_texts(args_node: Node, source_bytes: bytes) -> list[str]:
-    return [
-        _node_text(source_bytes, child).strip()
-        for child in args_node.named_children
-        if child.type != "comment"
-    ]
-
-
 def _default_site_id_candidates(call_node: Node, field_node: Node | None) -> list[int]:
     row0, col0 = call_node.start_point
     if field_node is not None:
@@ -247,43 +203,103 @@ def _default_site_id_candidates(call_node: Node, field_node: Node | None) -> lis
     return [((line << 12) ^ (col0 + 1)), ((line << 12) ^ col0), line]
 
 
-def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
+def _supported_fdp_method(call_node: Node, source_bytes: bytes) -> str | None:
+    function_node = call_node.child_by_field_name("function")
+    if function_node is None or function_node.type != "field_expression":
+        return None
+
+    receiver = function_node.child_by_field_name("argument")
+    field = function_node.child_by_field_name("field")
+
+    if _node_text(source_bytes, receiver).strip() != "fdp" or field is None:
+        return None
+
+    method_name = _extract_method_name(field, source_bytes)
+    return method_name if method_name in SUPPORTED_FDP_APIS else None
+
+
+def _argument_nodes(args: Node) -> list[Node]:
+    return [child for child in args.named_children if child.type != "comment"]
+
+
+def _has_argument_pack(nodes: list[Node]) -> bool:
+    # Only a top-level expansion changes this call's arity.
+    return any(node.type == "parameter_pack_expansion" for node in nodes)
+
+
+def _is_numeric_argument(node: Node) -> bool:
+    while node.type in {"unary_expression", "parenthesized_expression"}:
+        operands = [child for child in node.named_children if child.type != "comment"]
+        if len(operands) != 1:
+            return False
+        node = operands[0]
+    return node.type == "number_literal"
+
+
+def _marker_pattern(marker: str) -> re.Pattern[str]:
+    return re.compile(r"/\*\s*" + re.escape(marker) + r":\s*-?[0-9]+\s*\*/")
+
+
+def _site_argument_start(
+    args: Node, nodes: list[Node], method: str, source_bytes: bytes,
+    marker_pattern: re.Pattern[str],
+) -> int | None:
+    """Return the start of a removable trailing numeric argument, including its comma."""
+    min_args, max_args = _FDP_ARGUMENT_COUNTS[method]
+    if not min_args < len(nodes) <= max_args + 1 or _has_argument_pack(nodes):
+        return None
+    start = args.start_byte + 1
+    if len(nodes) > 1:
+        for child in args.children:
+            if child.type == "," and nodes[-2].end_byte <= child.start_byte < nodes[-1].start_byte:
+                start = child.start_byte
+                break
+        else:
+            return None
+    if len(nodes) > max_args:
+        return start
+    for child in args.named_children:
+        if (
+            child.type == "comment" and start <= child.start_byte < nodes[-1].start_byte
+            and marker_pattern.fullmatch(_node_text(source_bytes, child))
+        ):
+            return start
+    return None
+
+
+
+def _find_fdp_calls_for_inline(source: str, marker: str = "FDP_ID") -> list[CallSite]:
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
     calls: list[CallSite] = []
+    marker_pattern = _marker_pattern(marker)
 
     for node in _iter_nodes(tree.root_node):
         if node.type != "call_expression":
             continue
 
-        fn = node.child_by_field_name("function")
-        if fn is None or fn.type != "field_expression":
+        method = _supported_fdp_method(node, source_bytes)
+        if method is None:
             continue
-
-        recv = fn.child_by_field_name("argument")
-        field = fn.child_by_field_name("field")
-        if _node_text(source_bytes, recv).strip() != "fdp" or field is None:
-            continue
-
-        method = _extract_method_name(field, source_bytes)
-        if method not in SUPPORTED_FDP_APIS:
-            continue
+        field = node.child_by_field_name("function").child_by_field_name("field")
         template_arg = _extract_first_template_argument(field, source_bytes)
 
         args = node.child_by_field_name("arguments")
         if args is None:
             continue
 
-        arg_texts = _extract_call_arg_texts(args, source_bytes)
-        key = _extract_explicit_id(args, source_bytes)
-        original_arg_texts = arg_texts
-        if key is not None and arg_texts:
-            last_arg_value = _parse_int_literal(arg_texts[-1])
-            if last_arg_value == key:
-                original_arg_texts = arg_texts[:-1]
-
+        arg_nodes = _argument_nodes(args)
+        arg_texts = [_node_text(source_bytes, child).strip() for child in arg_nodes]
+        key = None
         fallback_keys: list[int] = []
-        if key is None:
+        if arg_nodes and _is_numeric_argument(arg_nodes[-1]):
+            value = _parse_int_literal(arg_texts[-1])
+            if value is not None and _site_argument_start(
+                args, arg_nodes, method, source_bytes, marker_pattern,
+            ) is not None:
+                key = value
+                arg_texts.pop()
+        if key is None and _FDP_ARGUMENT_COUNTS[method][0] <= len(arg_nodes) <= _FDP_ARGUMENT_COUNTS[method][1] and not _has_argument_pack(arg_nodes):
             fallback_keys = _default_site_id_candidates(node, field)
             if fallback_keys:
                 key = fallback_keys[0]
@@ -295,7 +311,7 @@ def _find_fdp_calls_for_inline(source: str) -> list[CallSite]:
                 method=method,
                 key=key,
                 fallback_keys=fallback_keys,
-                arg_texts=original_arg_texts,
+                arg_texts=arg_texts,
                 template_arg=template_arg,
             )
         )
@@ -312,55 +328,43 @@ def count_fdp_calls(source: str) -> int:
     return len(_find_fdp_calls_for_inline(source))
 
 
-def _find_argument_list_ranges(source_bytes: bytes) -> list[tuple[int, int]]:
+def inject_ids(src: str, start_id: int, marker: str) -> tuple[str, int]:
+    source_bytes = src.encode("utf-8")
     tree = PARSER.parse(source_bytes)
-    ranges: list[tuple[int, int]] = []
-
+    inserts = []
+    unsupported = False
     for node in _iter_nodes(tree.root_node):
         if node.type != "call_expression":
             continue
-        if not _is_supported_fdp_call(node, source_bytes):
-            continue
-
+        method = _supported_fdp_method(node, source_bytes)
         args = node.child_by_field_name("arguments")
-        if args is None or args.type != "argument_list":
+        if method is None or args is None:
             continue
-
-        ranges.append((args.start_byte + 1, args.end_byte - 1))
-
-    return ranges
-
-
-def inject_ids(src: str, start_id: int, marker: str) -> tuple[str, int]:
-    source_bytes = src.encode("utf-8")
-    arg_ranges = _find_argument_list_ranges(source_bytes)
-    if not arg_ranges:
-        return src, 0
-
-    planned_inserts: list[tuple[int, bytes]] = []
-    next_id = start_id
-    marker_bytes = marker.encode("utf-8")
-
-    # Assign IDs in source order for determinism, then insert from back to front
-    # so nested argument ranges never invalidate each other.
-    for start, end in sorted(arg_ranges, key=lambda item: item[0]):
-        args = source_bytes[start:end]
-        if marker_bytes in args:
+        if marker.encode("utf-8") in source_bytes[args.start_byte:args.end_byte]:
             continue
-
-        id_payload = f"/*{marker}:{next_id}*/ {next_id}".encode("utf-8")
-        insert_text = b", " + id_payload if args.strip() else id_payload
-        planned_inserts.append((end, insert_text))
-        next_id += 1
-
-    if not planned_inserts:
-        return src, 0
-
-    changed = source_bytes
-    for pos, insert_text in sorted(planned_inserts, key=lambda item: item[0], reverse=True):
-        changed = changed[:pos] + insert_text + changed[pos:]
-
-    return changed.decode("utf-8"), len(planned_inserts)
+        nodes = _argument_nodes(args)
+        minimum, maximum = _FDP_ARGUMENT_COUNTS[method]
+        if _has_argument_pack(nodes) or not minimum <= len(nodes) <= maximum:
+            unsupported = True
+            continue
+        default = ""
+        if len(nodes) < maximum:
+            default = "static_cast<size_t>(-1)" if method == "ConsumeRandomLengthString" else "0"
+        inserts.append((node.start_byte, args.end_byte - 1, bool(nodes), default))
+    if not inserts and unsupported:
+        raise ValueError("FDP calls found, but none can be tagged unambiguously")
+    planned = []
+    for index, (_, position, has_args, default) in enumerate(sorted(inserts)):
+        site = start_id + index
+        payload = f"/*{marker}:{site}*/ {site}"
+        if default:
+            payload = default + ", " + payload
+        if has_args:
+            payload = ", " + payload
+        planned.append((position, payload.encode("utf-8")))
+    for position, payload in sorted(planned, reverse=True):
+        source_bytes = source_bytes[:position] + payload + source_bytes[position:]
+    return source_bytes.decode("utf-8"), len(planned)
 
 
 def load_trace(trace_path: Path) -> dict[int, Deque[tuple[str, Any]]]:
@@ -1176,8 +1180,9 @@ def inline_source_with_report(
     source: str,
     streams: dict[int, Deque[tuple[str, Any]]],
     header_name: str = VALUES_HEADER_NAME,
+    marker: str = "FDP_ID",
 ) -> InlineResult:
-    calls = _find_fdp_calls_for_inline(source)
+    calls = _find_fdp_calls_for_inline(source, marker)
     if not calls:
         return InlineResult(source=source, replaced=0, detected_calls=0)
 
@@ -1351,68 +1356,61 @@ def inline_source(source: str, streams: dict[int, Deque[tuple[str, Any]]]) -> tu
     return result.source, result.replaced
 
 
-def strip_injected_ids(source: str, start_id: int = 100000) -> tuple[str, int]:
+def strip_injected_ids(
+    source: str,
+    start_id: int = 100000,
+    marker: str = "FDP_ID",
+) -> tuple[str, int]:
     """Remove numeric callsite IDs from a source instrumented by ``inject_ids``.
 
-    Injected IDs are sequential and may exceed ``start_id + 99`` when a
-    harness has more than 100 supported FDP callsites. Reducers can also
-    mutate an injected ID into a small integer. In that case, only strip the
-    final integer when the call has more arguments than the public FDP API
-    accepts.
+    A marker identifies an ID even after its value was reduced. Without one,
+    require an extra argument beyond the method's native signature. Ambiguous
+    optional arguments are preserved
+    so repeated cleanup cannot remove a legitimate size, terminator or bound.
     """
+    # start_id remains accepted for API compatibility; numeric magnitude alone
+    # does not distinguish an ID from a legitimate size or bound.
     source_bytes = source.encode("utf-8")
     tree = PARSER.parse(source_bytes)
     replacements: list[tuple[int, int, str]] = []
     removed = 0
+    marker_pattern = _marker_pattern(marker)
 
     for node in _iter_nodes(tree.root_node):
         if node.type != "call_expression":
             continue
-        if not _is_supported_fdp_call(node, source_bytes):
+        method = _supported_fdp_method(node, source_bytes)
+        if method is None:
             continue
-
-        fn = node.child_by_field_name("function")
-        field = fn.child_by_field_name("field") if fn is not None else None
-        method = _extract_method_name(field, source_bytes) if field is not None else ""
 
         args = node.child_by_field_name("arguments")
         if args is None or args.type != "argument_list":
             continue
 
-        arg_nodes = [child for child in args.named_children if child.type != "comment"]
+        arg_nodes = _argument_nodes(args)
         if not arg_nodes:
+            continue
+        if _has_argument_pack(arg_nodes):
+            if any(
+                child.type == "comment" and marker_pattern.fullmatch(_node_text(source_bytes, child))
+                for child in args.named_children
+            ):
+                line = node.start_point[0] + 1
+                raise ValueError(f"Cannot verify an FDP marker on a parameter pack at line {line}")
             continue
 
         last = arg_nodes[-1]
         last_value = _parse_int_literal(_node_text(source_bytes, last))
-        public_max_args = _PUBLIC_FDP_MAX_ARGS.get(method)
-        has_original_id = last_value is not None and last_value >= start_id
-        has_reduced_id = (
-            last_value is not None
-            and public_max_args is not None
-            and len(arg_nodes) > public_max_args
+        if last_value is None:
+            continue
+
+        remove_start = _site_argument_start(
+            args, arg_nodes, method, source_bytes, marker_pattern,
         )
-        if not has_original_id and not has_reduced_id:
+        if remove_start is None:
             continue
 
-        arg_start = args.start_byte + 1
-        arg_end = args.end_byte - 1
-        if len(arg_nodes) == 1:
-            replacements.append((arg_start, arg_end, ""))
-            removed += 1
-            continue
-
-        prev = arg_nodes[-2]
-        remove_start = prev.end_byte
-        remove_end = last.end_byte
-
-        for child in args.children:
-            if child.type != ",":
-                continue
-            if child.start_byte >= prev.end_byte and child.end_byte <= last.start_byte:
-                remove_start = child.start_byte
-
-        replacements.append((remove_start, remove_end, ""))
+        replacements.append((remove_start, last.end_byte, ""))
         removed += 1
 
     if not replacements:

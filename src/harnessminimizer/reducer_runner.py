@@ -7,12 +7,15 @@ import json
 import os
 import re
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from harnessminimizer.debug_log import open_debug_log
+from harnessminimizer.safe_files import copy_regular_file, nonempty_regular_file
 from harnessminimizer.process_supervisor import (
     run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
 )
@@ -177,6 +180,7 @@ class AmortizedRunner:
     shared_libraries: tuple[str, ...]
     static_libraries: tuple[str, ...]
     plugin_link_flags: tuple[str, ...]
+    required_plugin_link_flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1536,6 +1540,7 @@ def amortized_runner_link_tail(
     static_root_object: str | Path | None = None,
     *,
     export_dir: str | Path | None = None,
+    object_export_symbols: set[str] | None = None,
 ) -> list[str]:
     static_plan = plan_static_archive_runner_link(
         link_inputs,
@@ -1553,6 +1558,8 @@ def amortized_runner_link_tail(
                 ["nm", "-g", "--defined-only", "--format=posix", *link_inputs.object_files],
                 "Failed to inspect fixed object symbols",
             )
+            if object_export_symbols is not None:
+                object_symbols.intersection_update(object_export_symbols)
             objects, _, _ = _prepare_visibility_exported_static_libraries(
                 link_inputs.object_files, tuple(sorted(object_symbols)), export_dir=export_dir,
             )
@@ -1611,14 +1618,57 @@ def compile_static_archive_root_object(config: StaticArchiveRootConfig) -> str:
     return str(output)
 
 
+def prepare_callback_library(
+    link_inputs: AmortizedLinkInputs,
+    root_object: str,
+) -> tuple[str, ...]:
+    """Link fixed targets once while letting each candidate supply its callbacks."""
+    definitions = _nm_posix_symbols(
+        ["nm", "-g", "--defined-only", "--format=posix", root_object],
+        "Failed to inspect harness callback definitions",
+    )
+    references: set[str] = set()
+    for paths, dynamic in ((link_inputs.static_libraries + link_inputs.object_files, False),
+                           (link_inputs.shared_libraries, True)):
+        if paths:
+            references.update(_nm_posix_symbols(
+                ["nm", "-u", "--format=posix", *(["-D"] if dynamic else []), *paths],
+                "Failed to inspect target callback references",
+                symbol_types={"U", "w", "v"},
+            ))
+    callbacks = definitions & references
+    if not callbacks:
+        return ()
+    print("[+] Candidate-provided library callbacks: " + ", ".join(sorted(callbacks)))
+    root_references = _nm_posix_symbols(
+        ["nm", "-u", "--format=posix", root_object],
+        "Failed to inspect harness callback dependencies", symbol_types={"U", "w", "v"},
+    )
+    # Export definitions used across the plugin/DSO boundary, while leaving
+    # sanitizer-internal data hidden. Making that data preemptible can turn
+    # even a PIC object into an invalid shared-library input.
+    link_tail = amortized_runner_link_tail(
+        link_inputs, root_object, object_export_symbols=references | root_references,
+    )
+    link_tail = [flag for flag in link_tail if flag not in {"-no-pie", "-Wl,--export-dynamic"}]
+    library = Path(get_work_dir()) / f"amortized_callbacks_{time.time_ns()}.so"
+    run_command(
+        ["clang++", "-shared", *PHASE3_PLUGIN_SANITIZER_FLAGS, *link_tail, "-o", str(library)],
+        "Failed to build candidate callback library (target objects must be PIC)",
+    )
+    return ("-Wl,--no-as-needed", str(library), "-Wl,--as-needed")
+
+
+
 def _compile_harness_runner(
     link_inputs: AmortizedLinkInputs,
     static_root_config: StaticArchiveRootConfig | None = None,
+    static_root_object: str | None = None,
 ) -> str:
     source = SCRIPT_DIR / HARNESS_RUNNER_SOURCE_NAME
     replay_runtime_source = SCRIPT_DIR / FDP_REPLAY_RUNTIME_SOURCE_NAME
     output = Path(get_work_dir()) / HARNESS_RUNNER_BINARY_NAME
-    static_root_object = (
+    static_root_object = static_root_object or (
         compile_static_archive_root_object(static_root_config)
         if static_root_config is not None and (link_inputs.static_libraries or link_inputs.object_files)
         else None
@@ -1672,8 +1722,15 @@ def start_amortized_runner(
             "for the amortized runner."
         )
     _print_amortized_link_classification(link_inputs)
-    shared_libraries = link_inputs.shared_libraries
-    runner_binary = _compile_harness_runner(link_inputs, static_root_config)
+    root_object = compile_static_archive_root_object(static_root_config) if static_root_config else None
+    required_plugin_link_flags = prepare_callback_library(link_inputs, root_object) if root_object else ()
+    if required_plugin_link_flags:
+        shared_libraries = ()
+        runner_binary = _compile_harness_runner(AmortizedLinkInputs((), (), ()))
+    else:
+        shared_libraries = link_inputs.shared_libraries
+        runner_binary = (_compile_harness_runner(link_inputs, static_root_config, root_object)
+                         if root_object else _compile_harness_runner(link_inputs, static_root_config))
     socket_dir = tempfile.mkdtemp(prefix="harness_runner_")
     socket_path = str(Path(socket_dir) / "runner.sock")
     env = runtime_library_env(link_flags, symbolize=symbolize)
@@ -1738,7 +1795,8 @@ def start_amortized_runner(
             process=process,
             shared_libraries=shared_libraries,
             static_libraries=link_inputs.static_libraries,
-            plugin_link_flags=link_inputs.plugin_link_flags,
+            plugin_link_flags=() if required_plugin_link_flags else link_inputs.plugin_link_flags,
+            required_plugin_link_flags=required_plugin_link_flags,
         )
     finally:
         terminate_process_group(process)
@@ -1763,6 +1821,7 @@ def run_amortized_reference_candidate(
     symbolize: bool,
     require_crash_pattern: bool = True,
     auto_var_init_pattern: bool = False,
+    required_plugin_link_flags: tuple[str, ...] = (),
 ) -> str:
     cmd = [
         get_crash_tester_path(),
@@ -1777,6 +1836,8 @@ def run_amortized_reference_candidate(
     ]
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
+    if required_plugin_link_flags:
+        cmd.append("--amortized-plugin-required-link-flags=" + shlex.join(required_plugin_link_flags))
     if plugin_link_flags:
         cmd.append(
             f"--amortized-plugin-fallback-link-flags={' '.join(plugin_link_flags)}"
@@ -1785,6 +1846,7 @@ def run_amortized_reference_candidate(
         cmd.append("--symbolize")
         cmd.extend(symbolized_crash_location_tester_args())
         cmd.extend(reference_trace_tester_args())
+        cmd.extend(ubsan_pattern_variation_tester_args())
     else:
         cmd.extend(dynamic_crash_site_tester_args())
     if not require_crash_pattern:
@@ -1975,21 +2037,21 @@ def isolated_attempt_work_dir(path: Path):
 
 def configure_debug_logging(enabled: bool) -> str | None:
     global REDUCTION_DEBUG_LOG_PATH
-
+    REDUCTION_DEBUG_LOG_PATH = None
     if not enabled:
-        REDUCTION_DEBUG_LOG_PATH = None
         return None
-
     debug_log_path = str(Path(get_work_dir()) / DEBUG_LOG_FILE_NAME)
-    Path(debug_log_path).write_text(
-        "===== HarnessMinimizer normal-path reduction debug log =====\n"
-        "Candidate records can be out of order because the reduction engine runs "
-        "multiple workers concurrently.\n",
-        encoding="utf-8",
-    )
+    with open_debug_log(Path(debug_log_path)) as handle:
+        handle.truncate(0)
+        handle.write(
+            "===== HarnessMinimizer normal-path reduction debug log =====\n"
+            "Candidate records can be out of order because the reduction engine runs "
+            "multiple workers concurrently.\n"
+        )
     REDUCTION_DEBUG_LOG_PATH = debug_log_path
     print(f"[DEBUG] Reduction candidate log: {debug_log_path}")
     return debug_log_path
+
 
 
 def get_debug_log_path() -> str | None:
@@ -3693,6 +3755,7 @@ def calibrate_exec_timeout_ms(
     symbolize: bool,
     runner_socket: str | None = None,
     plugin_link_flags: tuple[str, ...] = (),
+    required_plugin_link_flags: tuple[str, ...] = (),
 ) -> int:
     samples_ms: list[int] = []
     tester_source = pch_artifacts.body_source if pch_artifacts is not None else harness_path
@@ -3715,6 +3778,8 @@ def calibrate_exec_timeout_ms(
             cmd.append("--symbolize")
         if runner_socket is not None:
             cmd.extend(["--amortized-runner-socket", runner_socket])
+        if required_plugin_link_flags:
+            cmd.append("--amortized-plugin-required-link-flags=" + shlex.join(required_plugin_link_flags))
         if plugin_link_flags:
             cmd.append(
                 "--amortized-plugin-fallback-link-flags="
@@ -3755,6 +3820,16 @@ def calibrate_exec_timeout_ms(
         f"{calibrated_timeout_ms} ms from probe samples {samples_ms}"
     )
     return calibrated_timeout_ms
+
+
+def ubsan_pattern_variation_tester_args() -> list[str]:
+    if SYMBOLIZED_TRACE_REQUIRED:
+        reference_trace_tester_args()
+        return ["--allow-ubsan-pattern-mismatch"]
+    path = Path(get_stack_trace_file())
+    if path.is_file() and path.read_text(encoding="utf-8").strip():
+        return ["--stack-trace-file", str(path), "--allow-ubsan-pattern-mismatch"]
+    return []
 
 
 def run_treereducer(
@@ -3839,6 +3914,7 @@ def run_treereducer(
                 symbolize=symbolize,
                 runner_socket=calibration_runner.socket_path,
                 plugin_link_flags=calibration_plugin_link_flags,
+                required_plugin_link_flags=getattr(calibration_runner, "required_plugin_link_flags", ()),
             )
     else:
         exec_timeout_ms = calibrate_exec_timeout_ms(
@@ -3894,6 +3970,7 @@ def run_treereducer(
         elif not amortize_link:
             cmd.extend(required_stack_depth_tester_args(symbolized=True))
         cmd.extend(required_symbolized_crash_location_tester_args())
+        cmd.extend(ubsan_pattern_variation_tester_args())
     else:
         cmd.extend(dynamic_crash_site_tester_args())
 
@@ -3918,6 +3995,7 @@ def run_treereducer(
     with runner_context as amortized_runner:
         if amortized_runner is not None:
             plugin_link_flags = getattr(amortized_runner, "plugin_link_flags", ())
+            required_plugin_link_flags = getattr(amortized_runner, "required_plugin_link_flags", ())
             reference_output = run_amortized_reference_candidate(
                 harness_path,
                 fdp_trace_file,
@@ -3929,6 +4007,7 @@ def run_treereducer(
                 amortized_runner.socket_path,
                 pch_artifacts,
                 plugin_link_flags,
+                required_plugin_link_flags=required_plugin_link_flags,
                 symbolize=symbolize,
                 auto_var_init_pattern=auto_var_init_pattern,
             )
@@ -3950,6 +4029,8 @@ def run_treereducer(
             cmd.extend(
                 ["--amortized-runner-socket", amortized_runner.socket_path]
             )
+            if required_plugin_link_flags:
+                cmd.append("--amortized-plugin-required-link-flags=" + shlex.join(required_plugin_link_flags))
             if plugin_link_flags:
                 cmd.append(
                     "--amortized-plugin-fallback-link-flags="
@@ -3974,6 +4055,7 @@ def run_treereducer(
         reduction_started_ns = time.perf_counter_ns()
         try:
             if reduction_timeout_seconds is None:
+                Path(get_last_interesting_file(language)).unlink(missing_ok=True)
                 proc = invocation.run(run_supervised)
             else:
                 from harnessminimizer.reduction_budget import run_bounded_reduction
@@ -4021,8 +4103,18 @@ def run_treereducer(
             f"({float(reducer_summary['checks_per_second']):.3f} checks/s)"
         )
         print(f"[+] Profile report: {get_reduction_profile_text_file()}")
-    if proc.returncode != 0:
-        raise RuntimeError(f"Failed to run {tool} reducer:\n{proc.stdout} {proc.stderr}")
+    if proc.returncode != 0 or not nonempty_regular_file(invocation.result):
+        checkpoint = Path(get_last_interesting_file(language))
+        recovered = (
+            (reduction_timeout_seconds is not None or snapshot)
+            and nonempty_regular_file(checkpoint)
+            and not candidate_files_match(str(checkpoint), reducer_source)
+            and copy_regular_file(checkpoint, invocation.result, skip_empty=True, create_parent=True)
+        )
+        if not recovered:
+            raise RuntimeError(f"Failed to run {tool} reducer (exit={proc.returncode}):\n{proc.stdout} {proc.stderr}")
+        print(f"[!] {tool} exited with status {proc.returncode}; finalizing its saved accepted candidate. "
+              "Final crash validation is still required.")
     invocation.publish_result()
     if not os.path.exists(reduced_harness):
         raise RuntimeError("Reduced harness file was not created as expected.")
@@ -4306,6 +4398,7 @@ def validate_stack_trace(
     if not require_crash_pattern:
         cmd.append("--skip-crash-pattern")
     cmd.extend(stack_trace_arg)
+    cmd.extend(ubsan_pattern_variation_tester_args())
     cmd.extend(stack_depth_tester_args(symbolized=True))
     # Trace-set mode requires both membership and the crash-location anchor.
     # Legacy supplemental validation retains its advisory stack-file check.
@@ -4369,6 +4462,7 @@ def validate_symbolized_crash_pattern_depth_location(
     cmd.extend(reference_trace_tester_args() if SYMBOLIZED_TRACE_REQUIRED
                else required_stack_depth_tester_args(symbolized=True))
     cmd.extend(required_symbolized_crash_location_tester_args())
+    cmd.extend(ubsan_pattern_variation_tester_args())
     if fdp_trace_file:
         cmd.extend(["--fdp-trace", fdp_trace_file])
     cmd.extend(retry_oom_tester_args(retry_oom_without_rss_limit))

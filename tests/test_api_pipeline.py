@@ -373,6 +373,7 @@ class TestApiPipeline(unittest.TestCase):
             crash_pattern_symbolize_0="AddressSanitizer",
             symbolize=False,
             auto_var_init_pattern_fallback=False,
+            marker="M",
         )
         mock_check.assert_called_once()
 
@@ -812,6 +813,7 @@ class TestApiPipeline(unittest.TestCase):
             crash_pattern_symbolize_0="FastPattern",
             symbolize=True,
             auto_var_init_pattern_fallback=False,
+            marker="FDP_ID",
         )
 
         self.mock_get_symbolized_pattern.return_value = None

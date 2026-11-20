@@ -6,11 +6,9 @@ _PROCESS_ENTRY_WALL_NS = time.time_ns()
 
 import fcntl
 import os
-import filecmp
 import json
 import re
 import resource
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +19,9 @@ __script_dir__ = os.path.dirname(os.path.realpath(__file__))
 __project_root__ = Path(__script_dir__).parent
 sys.path.insert(0, str(__project_root__ / "src"))
 PHASE3_SANITIZER_FLAGS = ["-fsanitize=address,fuzzer,undefined"]
+
+from harnessminimizer.debug_log import open_debug_log
+from harnessminimizer.safe_files import copy_regular_file
 
 from harnessminimizer.process_supervisor import (
     run_supervised, termination_guard, runner_request, OutputLimitExceeded,
@@ -43,6 +44,8 @@ from harnessminimizer.reducer_runner import (
     PHASE3_SPLIT_OPT_FLAGS,
     PHASE3_WARNING_FLAGS,
     PHASE3_PLUGIN_SANITIZER_FLAGS,
+    RUNTIME_ERROR_PATTERN,
+    UBSAN_PATTERN,
     STACK_FRAME_COUNT_PATTERN,
     LLVMFuzzerTestOneInput_PATTERN,
     _frame_matches_harness_source,
@@ -256,10 +259,7 @@ def _append_debug_record(args: argparse.Namespace, tester_return_code: int) -> N
         ]
     )
 
-    debug_path = Path(debug_log)
-    debug_path.parent.mkdir(parents=True, exist_ok=True)
-    with debug_path.open("a", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    with open_debug_log(Path(debug_log)) as handle:
         handle.write("\n".join(lines))
         handle.flush()
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -276,22 +276,8 @@ def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -
         return
 
     snapshot = Path(snapshot_path)
-    snapshot.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if snapshot.exists() and filecmp.cmp(source_path, snapshot_path, shallow=False):
-            return
-    except FileNotFoundError:
-        pass
-
-    # treereduce runs many testers concurrently. Each writer needs its own
-    # temporary file so another tester cannot rename or truncate its copy.
-    with tempfile.NamedTemporaryFile(dir=snapshot.parent, delete=False) as temporary:
-        tmp_snapshot = Path(temporary.name)
-    try:
-        shutil.copyfile(source_path, tmp_snapshot)
-        os.replace(tmp_snapshot, snapshot)
-    finally:
-        tmp_snapshot.unlink(missing_ok=True)
+    copy_regular_file(Path(source_path), snapshot, skip_empty=True, create_parent=True,
+                      skip_identical=True)
 
 
 def compile_error_mentions_uninitialized(error_text: str | None) -> bool:
@@ -386,6 +372,9 @@ def _reserve_amortized_fallback_first(args: argparse.Namespace) -> bool:
 
 
 def amortized_initial_plugin_link_flags(args: argparse.Namespace) -> str | None:
+    required = getattr(args, "amortized_plugin_required_link_flags", None)
+    if required:
+        return required
     fallback_link_flags = _fallback_link_flags(args)
     if fallback_link_flags and _reserve_amortized_fallback_first(args):
         return fallback_link_flags
@@ -1023,9 +1012,16 @@ def _evaluate_candidate_crash(
 
     # First: crash pattern must match unless a caller intentionally uses
     # this run only for symbolized stack/depth validation.
+    relaxed_ubsan = False
     if not args.skip_crash_pattern and not matches_crash_pattern(args.crash_pattern, run_log, aliases):
-        print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
-        return EvidenceResult.MISMATCH, None
+        relaxed_ubsan = bool(
+            use_symbolize and getattr(args, "allow_ubsan_pattern_mismatch", False)
+            and re.search(r"runtime(?:\\s[+*]?|\\ |\s)+error|UndefinedBehaviorSanitizer", args.crash_pattern, re.IGNORECASE)
+            and (RUNTIME_ERROR_PATTERN.search(run_log) or UBSAN_PATTERN.search(run_log))
+        )
+        if not relaxed_ubsan:
+            print(f"Crash pattern did not match. Exit status: {status}\n, crash pattern: {args.crash_pattern}\nExecution log:\n{run_log}")
+            return EvidenceResult.MISMATCH, None
 
     # A known mismatch takes precedence over missing evidence in another check.
     missing = None
@@ -1041,6 +1037,8 @@ def _evaluate_candidate_crash(
     location_pattern = args.crash_location_pattern
     if not location_pattern and args.crash_location_file and os.path.exists(args.crash_location_file):
         location_pattern = Path(args.crash_location_file).read_text(encoding="utf-8").strip()
+    if relaxed_ubsan and not location_pattern:
+        return EvidenceResult.MISMATCH, None
     if location_pattern:
         result = _classify_crash_location_pattern(
             run_log, location_pattern, args.source, aliases=aliases,
@@ -1083,8 +1081,22 @@ def _evaluate_candidate_crash(
         else:
             print("[+] Stack depth validation passed.")
 
+    if relaxed_ubsan and trace_reference is None:
+        path = Path(args.stack_trace_file) if args.stack_trace_file else None
+        if path is None or not path.is_file():
+            return EvidenceResult.MISMATCH, None
+        stored = path.read_text(encoding="utf-8").strip()
+        if not stored:
+            return EvidenceResult.MISMATCH, None
+        result, _ = SymbolizedTraceReference((stored,), 1).evaluate(run_log, args.source, aliases)
+        if result is EvidenceResult.MISMATCH:
+            return result, None
+        if result is EvidenceResult.MISSING_EVIDENCE:
+            missing = "symbolized reference-trace evidence"
     if missing is not None:
         return EvidenceResult.MISSING_EVIDENCE, missing
+    if relaxed_ubsan:
+        print("[!] UBSan diagnostic text differs; recorded crash location and full library trace match.")
 
     # Advisory full symbolized stack-trace check.  The recorded trace can
     # differ run-to-run for multithreaded targets (different worker thread
@@ -1122,6 +1134,8 @@ def main() -> int:
     parser.add_argument("--symbolize", action="store_true", help="Force symbolize=1 for this run (used for stack trace validation)")
     parser.add_argument("--skip-crash-pattern", action="store_true", help="Require exit 77 but do not match the crash regex")
     parser.add_argument("--stack-trace-file", type=str, default=None, help="Path to stored normalized stack trace pattern")
+    parser.add_argument("--allow-ubsan-pattern-mismatch", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--amortized-plugin-required-link-flags", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--require-reference-traces", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--crash-location-pattern", type=str, default=None, help="Normalized symbolized crash-location pattern")
     parser.add_argument("--crash-location-file", type=str, default=None, help="Path to stored normalized symbolized crash-location pattern")

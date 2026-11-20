@@ -36,12 +36,21 @@ class BudgetPipelineTests(unittest.TestCase):
     def test_perses_normal_completion_uses_its_output_with_the_same_validation(self):
         self._check_timeout_recovery(snapshot=False, with_fdp=True, tool="perses", finish=True)
 
-    def _check_timeout_recovery(self, *, snapshot, with_fdp=False, tool="treereduce", finish=False):
+    def test_engine_error_recovers_accepted_tree_candidate_and_validates_export(self):
+        self._check_timeout_recovery(snapshot=False, with_fdp=True, engine_error=True)
+
+    def test_engine_error_recovers_accepted_perses_candidate_and_restores_macros(self):
+        self._check_timeout_recovery(snapshot=False, with_fdp=True, tool="perses", engine_error=True, with_callback=True)
+
+    def _check_timeout_recovery(self, *, snapshot, with_fdp=False, tool="treereduce", finish=False, engine_error=False, with_callback=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             library = root / "library.cpp"
             library.write_text('extern "C" void target() { volatile int zero = 0; volatile int value = 7 / zero; (void)value; }\n')
-            subprocess.run(["clang++", "-fsanitize=address,undefined", "-g", "-O0", "-c", str(library), "-o", str(root / "library.o")], check=True)
+            if with_callback:
+                library.write_text('extern "C" int user_callback();\n' + library.read_text().replace(
+                    'target() {', 'target() { if (user_callback() != 42) return;'))
+            subprocess.run(["clang++", *(["-fPIC"] if with_callback else []), "-fsanitize=address,undefined", "-g", "-O0", "-c", str(library), "-o", str(root / "library.o")], check=True)
             subprocess.run(["ar", "rcs", str(root / "libtarget.a"), str(root / "library.o")], check=True)
             harness = root / "harness.cpp"
             if with_fdp:
@@ -58,6 +67,8 @@ class BudgetPipelineTests(unittest.TestCase):
                 )
             else:
                 harness.write_text('#include <cstddef>\n#include <cstdint>\nextern "C" void target();\nextern "C" int LLVMFuzzerTestOneInput(const uint8_t*, size_t) { int unused = 0; target(); return 0; }\n')
+            if with_callback:
+                harness.write_text('extern "C" int user_callback() { return 42; }\n' + harness.read_text())
             seed = root / "seed"
             seed.write_bytes(b"fixture")
             tools = root / "bin"
@@ -91,6 +102,8 @@ if '--finish-fixture' in args:
 else:
     time.sleep(60)
 ''')
+            if engine_error:
+                driver.write_text(driver.read_text().replace('time.sleep(60)', 'raise SystemExit(23)'))
             driver.chmod(0o755)
             environment = {
                 **os.environ,

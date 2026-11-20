@@ -4,9 +4,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
-import shutil
-import tempfile
 
+from harnessminimizer.safe_files import open_regular_file, replace_regular_file, copy_regular_file
 from harnessminimizer.process_supervisor import termination_guard
 from harnessminimizer.source_cleanup import clean_reduced_source
 from harnessminimizer.source_language import (
@@ -178,7 +177,7 @@ def tag_harness_with_fdp_ids(
     marker: str,
 ) -> TaggedHarness:
     source_path = Path(harness_path)
-    source = source_path.read_text(encoding="utf-8")
+    source = source_path.read_bytes().decode("utf-8")
     if language_for_path(source_path) == C:
         transformed, count = source, 0
     else:
@@ -189,7 +188,7 @@ def tag_harness_with_fdp_ids(
     suffix = source_path.suffix or ".cpp"
     tagged_name = f"{source_path.stem}.tagged{suffix}"
     tagged_harness_file = str(Path(get_work_dir()) / tagged_name)
-    Path(tagged_harness_file).write_text(transformed, encoding="utf-8")
+    replace_regular_file(Path(tagged_harness_file), transformed.encode("utf-8"))
     print(f"Injected {count} FDP callsite IDs into {tagged_harness_file}")
     return TaggedHarness(tagged_harness_file, count)
 
@@ -204,44 +203,51 @@ def _tagged_harness_fdp_count(tagged: TaggedHarness | str) -> int:
     return tagged.fdp_callsite_count if isinstance(tagged, TaggedHarness) else 1
 
 
+def _read_source_file(path: Path):
+    with open_regular_file(path) as handle:
+        return handle.read().decode("utf-8"), os.fstat(handle.fileno())
+
+
+def _with_additional_headers(source: str) -> str:
+    newline = "\r\n" if source.partition("\n")[0].endswith("\r") else "\n"
+    return "".join(header + newline for header in ADDITIONAL_HEADERS if header not in source) + source
+
+
+def _clean_source_file(path: Path, start_id: int | None, marker: str, *, add_headers=False):
+    source, original = _read_source_file(path)
+    cleaned, removed = (strip_injected_ids(source, start_id=start_id, marker=marker)
+                        if start_id is not None else (source, 0))
+    if add_headers:
+        cleaned = _with_additional_headers(cleaned)
+    if cleaned != source:
+        replace_regular_file(path, cleaned.encode("utf-8"), original)
+    return removed
+
+
 def _prepend_additional_headers(harness_path: str) -> None:
     if language_for_path(harness_path) == C:
-        return  # Generated C declarations include their own required headers.
-    content = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
-    missing = [header for header in ADDITIONAL_HEADERS if header not in content]
-    if not missing:
         return
-    headers_block = "\n".join(missing) + "\n"
-    Path(harness_path).write_text(headers_block + content, encoding="utf-8")
+    _clean_source_file(Path(harness_path), None, "FDP_ID", add_headers=True)
 
 
-def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None) -> str:
+
+def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None, marker: str = "FDP_ID") -> str:
     if language_for_path(reduced_harness_path) == C:
         return reduced_harness_path
-    fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = (strip_injected_ids(fallback_source, start_id=start_id)
-                               if start_id is not None else (fallback_source, 0))
+    removed = _clean_source_file(Path(reduced_harness_path), start_id, marker, add_headers=True)
     if removed:
-        Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
-    _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
 
 
+
 def _finalize_budget_checkpoint(final_source: str) -> None:
-    """Replace a raw timed checkpoint with the validated, portable source."""
+    """Replace the checkpoint with the validated portable source, atomically."""
     checkpoint = Path(get_last_interesting_file())
-    if not checkpoint.is_file() or checkpoint.is_symlink() or checkpoint == Path(final_source):
+    if checkpoint == Path(final_source) or not checkpoint.exists():
         return
-    # The reducer and its testers have stopped. Keep the checkpoint atomic for
-    # anyone inspecting it while finalization finishes.
-    with tempfile.NamedTemporaryFile(dir=checkpoint.parent, delete=False) as temporary:
-        temporary_path = Path(temporary.name)
-    try:
-        shutil.copyfile(final_source, temporary_path)
-        os.replace(temporary_path, checkpoint)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    copy_regular_file(Path(final_source), checkpoint, skip_empty=True)
+
 
 
 def _append_validation_summary(
@@ -385,8 +391,9 @@ def _finalize_and_validate_fallback_harness(
     symbolize: bool,
     fallback_label: str,
     auto_var_init_pattern_fallback: bool = False,
+    marker: str = "FDP_ID",
 ) -> PostReductionOutcome:
-    fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id)
+    fallback_path = _finalize_fallback_harness(reduced_harness_path, start_id, marker)
     validation_log_path = f"{fallback_path}.fallback.validation.log"
     print(
         "Verifying crash preservation for cleaned fallback harness without FDP replay: "
@@ -715,7 +722,7 @@ def _prepare_fuzzer_entry_return(
     if not source_path.is_file():
         return PreparedHarnessSource(harness_path, compile_flags)
 
-    source = source_path.read_text(encoding="utf-8", errors="ignore")
+    source = source_path.read_bytes().decode("utf-8")
     source_bytes = source.encode("utf-8")
     tree = language_for_path(source_path).parser().parse(source_bytes)
     matches = []
@@ -753,7 +760,7 @@ def _prepare_fuzzer_entry_return(
         f"{source_path.stem}.return-prepared{source_path.suffix or '.cpp'}"
     )
     prepared_path = Path(work_dir) / prepared_name
-    prepared_path.write_text(transformed, encoding="utf-8")
+    replace_regular_file(prepared_path, transformed.encode("utf-8"))
     prepared_flags = _append_compile_include_dir(
         compile_flags,
         source_path.resolve().parent,
@@ -874,6 +881,7 @@ def _inline_direct_input_in_reduced_harness(
     crash_pattern_symbolize_0: str,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
+    marker: str = "FDP_ID",
 ) -> tuple[str, tuple[str, ...]]:
     if not crash_input:
         print(
@@ -881,7 +889,7 @@ def _inline_direct_input_in_reduced_harness(
             "Returning the non-inlined reduced harness without final validation."
         )
         return PostReductionOutcome(
-            _finalize_fallback_harness(reduced_harness_path, start_id),
+            _finalize_fallback_harness(reduced_harness_path, start_id, marker),
             validated=False, stage="missing-input",
         )
 
@@ -892,7 +900,7 @@ def _inline_direct_input_in_reduced_harness(
             "Returning the non-inlined reduced harness without final validation."
         )
         return PostReductionOutcome(
-            _finalize_fallback_harness(reduced_harness_path, start_id),
+            _finalize_fallback_harness(reduced_harness_path, start_id, marker),
             validated=False, stage="missing-input",
         )
 
@@ -904,7 +912,7 @@ def _inline_direct_input_in_reduced_harness(
         *,
         attempt_label: str,
     ) -> tuple[str, tuple[str, ...]] | None:
-        source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        source = Path(base_harness_path).read_bytes().decode("utf-8")
         inline_harness_path = str(Path(base_harness_path).with_suffix(f".inline{language.suffix}"))
         header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
         generated_headers: tuple[str, ...] = ()
@@ -931,16 +939,13 @@ def _inline_direct_input_in_reduced_harness(
                 )
 
         if transformed != source:
-            header_path.write_text(
-                _direct_input_header_source(crash_bytes, **language_kwargs),
-                encoding="utf-8",
-            )
+            replace_regular_file(header_path, (_direct_input_header_source(crash_bytes, **language_kwargs)).encode("utf-8"))
             generated_headers = (str(header_path),)
             print(
                 f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
                 f"{inline_harness_path} using {header_path}"
             )
-        Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+        replace_regular_file(Path(inline_harness_path), transformed.encode("utf-8"))
         _prepend_additional_headers(inline_harness_path)
 
         validation_log_path = f"{inline_harness_path}.validation.log"
@@ -1026,6 +1031,7 @@ def _inline_direct_input_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+                marker=marker,
             )
 
     print(
@@ -1043,6 +1049,7 @@ def _inline_direct_input_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+        marker=marker,
     )
 
 
@@ -1059,6 +1066,7 @@ def inline_literals_in_reduced_harness(
     crash_pattern_symbolize_0: str | None = None,
     symbolize: bool = False,
     auto_var_init_pattern_fallback: bool = False,
+    marker: str = "FDP_ID",
 ) -> tuple[str, tuple[str, ...]]:
     fast_crash_pattern = crash_pattern_symbolize_0 or crash_pattern_symbolize_1
     if not fast_crash_pattern:
@@ -1076,20 +1084,21 @@ def inline_literals_in_reduced_harness(
             fast_crash_pattern,
             symbolize,
             auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+            marker=marker,
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
-        source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        source = Path(base_harness_path).read_bytes().decode("utf-8")
         streams = load_trace(Path(fdp_trace_file))
-        inline_result = inline_source_with_report(source, streams)
+        inline_result = inline_source_with_report(source, streams, marker=marker)
         transformed = inline_result.source
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
-        Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+        replace_regular_file(Path(inline_harness_path), transformed.encode("utf-8"))
 
         generated_headers: list[str] = []
         if inline_result.header_source and inline_result.header_name:
             header_path = Path(inline_harness_path).with_name(inline_result.header_name)
-            header_path.write_text(inline_result.header_source, encoding="utf-8")
+            replace_regular_file(header_path, inline_result.header_source.encode("utf-8"))
             generated_headers.append(str(header_path))
             details = []
             if inline_result.loop_replaced:
@@ -1152,10 +1161,10 @@ def inline_literals_in_reduced_harness(
                 return None
             print("[+] Replay validation preserved crash behavior.")
 
-        inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
-        cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id)
+        inline_source_text = Path(inline_harness_path).read_bytes().decode("utf-8")
+        cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id, marker=marker)
         if removed:
-            Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
+            replace_regular_file(Path(inline_harness_path), cleaned.encode("utf-8"))
             print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
 
         print(
@@ -1227,6 +1236,7 @@ def inline_literals_in_reduced_harness(
                 symbolize=symbolize,
                 fallback_label="last interesting snapshot",
                 auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+                marker=marker,
             )
 
     print(
@@ -1244,6 +1254,7 @@ def inline_literals_in_reduced_harness(
         symbolize=symbolize,
         fallback_label="reduced",
         auto_var_init_pattern_fallback=auto_var_init_pattern_fallback,
+        marker=marker,
     )
 
 
@@ -1340,6 +1351,7 @@ def _reduction_attempt(
         crash_pattern_symbolize_0=crash_pattern_symbolize_0,
         symbolize=config.symbolize,
         auto_var_init_pattern_fallback=config.auto_var_init_pattern,
+        marker=config.marker,
     )
     if config.reduction_timeout_seconds is not None and getattr(outcome, "validated", True):
         _finalize_budget_checkpoint(outcome[0])
@@ -1508,9 +1520,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         if fdp_trace_file is None:
             # Restore the pre-tag source so calls on unexecuted branches remain
             # compatible with the public FDP header during direct-input builds.
-            Path(tagged_harness_file).write_text(
-                Path(effective_harness_path).read_text(encoding="utf-8"), encoding="utf-8",
-            )
+            replace_regular_file(Path(tagged_harness_file), Path(effective_harness_path).read_bytes())
             print(
                 "[+] No FDP values were recorded, but the expected crash was verified; "
                 "using the original input without FDP replay."
