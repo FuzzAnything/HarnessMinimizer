@@ -56,7 +56,7 @@ def nonempty_regular_file(path: Path) -> bool:
 
 
 @contextmanager
-def _replacement_stream(parent: int, name: str):
+def _replacement_stream(parent: int, name: str, *, create_only: bool = False):
     # Replace the directory entry without following a destination link, even
     # if it changed after validation. An interrupted write leaves it intact.
     temporary = f".copy-{secrets.token_hex(16)}"
@@ -64,18 +64,32 @@ def _replacement_stream(parent: int, name: str):
     try:
         with os.fdopen(fd, "wb") as target:
             yield target
-        os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        if create_only:
+            os.link(temporary, name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+            os.unlink(temporary, dir_fd=parent)
+        else:
+            os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
     except BaseException:
         with suppress(FileNotFoundError):
             os.unlink(temporary, dir_fd=parent)
         raise
 
 
-def replace_regular_file(path: Path, content: bytes, original: os.stat_result) -> None:
+def replace_regular_file(path: Path, content: bytes, original: os.stat_result | None = None) -> None:
+    """Publish complete bytes, checking the previous file or exclusively creating a new one."""
     with _open_directory(path.parent, create=False) as parent:
-        with _replacement_stream(parent, path.name) as target:
+        if original is None:
+            try:
+                original = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+        if original is not None:
+            _require_regular_file(original, path)
+        with _replacement_stream(parent, path.name, create_only=original is None) as target:
             target.write(content)
             target.flush()
+            if original is None:
+                return
             current = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
             _require_regular_file(current, path)
             if (

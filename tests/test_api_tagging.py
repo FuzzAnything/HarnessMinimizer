@@ -31,6 +31,19 @@ class TestHarnessTagging(unittest.TestCase):
             self.assertEqual(tagged.fdp_callsite_count, 1)
             self.assertIn("FDP_ID:100000", tagged_path.read_text(encoding="utf-8"))
 
+    def test_ambiguous_only_source_preserves_previous_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "sample.cpp"
+            original = b"void f(FuzzedDataProvider &fdp) { fdp.ConsumeRandomLengthString(); }\r\n"
+            source.write_bytes(original)
+            previous = source.with_name("sample.tagged.cpp")
+            previous.write_bytes(b"prior output\n")
+            reducer_runner.configure_work_dir(tmpdir)
+            with self.assertRaisesRegex(ValueError, "none can be tagged"):
+                tag_harness_with_fdp_ids(str(source), 100100, "SITE")
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(previous.read_bytes(), b"prior output\n")
+
 
 if __name__ == "__main__":
     unittest.main()

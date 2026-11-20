@@ -141,7 +141,7 @@ def tag_harness_with_fdp_ids(
     marker: str,
 ) -> TaggedHarness:
     source_path = Path(harness_path)
-    source = source_path.read_text(encoding="utf-8")
+    source = source_path.read_bytes().decode("utf-8")
     transformed, count = inject_ids(source, start_id, marker)
 
     # Keep the instrumented source separate from the input even when the user
@@ -149,7 +149,7 @@ def tag_harness_with_fdp_ids(
     suffix = source_path.suffix or ".cpp"
     tagged_name = f"{source_path.stem}.tagged{suffix}"
     tagged_harness_file = str(Path(get_work_dir()) / tagged_name)
-    Path(tagged_harness_file).write_text(transformed, encoding="utf-8")
+    replace_regular_file(Path(tagged_harness_file), transformed.encode("utf-8"))
     print(f"Injected {count} FDP callsite IDs into {tagged_harness_file}")
     return TaggedHarness(tagged_harness_file, count)
 
@@ -164,24 +164,33 @@ def _tagged_harness_fdp_count(tagged: TaggedHarness | str) -> int:
     return tagged.fdp_callsite_count if isinstance(tagged, TaggedHarness) else 1
 
 
-def _prepend_additional_headers(harness_path: str) -> None:
-    content = Path(harness_path).read_text(encoding="utf-8", errors="ignore")
-    missing = [header for header in ADDITIONAL_HEADERS if header not in content]
-    if not missing:
-        return
-    headers_block = "\n".join(missing) + "\n"
-    Path(harness_path).write_text(headers_block + content, encoding="utf-8")
+def _read_source_file(path: Path) -> tuple[str, os.stat_result]:
+    with open_regular_file(path) as handle:
+        original = os.fstat(handle.fileno())
+        return handle.read().decode("utf-8"), original
+
+
+def _with_additional_headers(source: str) -> str:
+    newline = "\r\n" if source.partition("\n")[0].endswith("\r") else "\n"
+    return "".join(header + newline for header in ADDITIONAL_HEADERS if header not in source) + source
+
+
+def _clean_source_file(path: Path, start_id: int, marker: str, *, add_headers: bool = False) -> int:
+    source, original = _read_source_file(path)
+    cleaned, removed = strip_injected_ids(source, start_id=start_id, marker=marker)
+    if add_headers:
+        cleaned = _with_additional_headers(cleaned)
+    if cleaned != source:
+        replace_regular_file(path, cleaned.encode("utf-8"), original)
+    return removed
 
 
 def _finalize_fallback_harness(
     reduced_harness_path: str, start_id: int, marker: str = "FDP_ID",
 ) -> str:
-    fallback_source = Path(reduced_harness_path).read_text(encoding="utf-8", errors="ignore")
-    cleaned_source, removed = strip_injected_ids(fallback_source, start_id=start_id, marker=marker)
+    removed = _clean_source_file(Path(reduced_harness_path), start_id, marker, add_headers=True)
     if removed:
-        Path(reduced_harness_path).write_text(cleaned_source, encoding="utf-8")
         print(f"Removed {removed} injected FDP IDs from fallback harness.")
-    _prepend_additional_headers(reduced_harness_path)
     return reduced_harness_path
 
 
@@ -485,7 +494,7 @@ def _inline_direct_input_in_reduced_harness(
         *,
         attempt_label: str,
     ) -> tuple[str, tuple[str, ...]] | None:
-        source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        source, _ = _read_source_file(Path(base_harness_path))
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
         header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
         try:
@@ -499,12 +508,10 @@ def _inline_direct_input_in_reduced_harness(
             )
             return _finalize_fallback_harness(base_harness_path, start_id, marker), ()
 
-        header_path.write_text(
-            _direct_input_header_source(crash_bytes),
-            encoding="utf-8",
+        replace_regular_file(header_path, _direct_input_header_source(crash_bytes).encode("utf-8"))
+        replace_regular_file(
+            Path(inline_harness_path), _with_additional_headers(transformed).encode("utf-8"),
         )
-        Path(inline_harness_path).write_text(transformed, encoding="utf-8")
-        _prepend_additional_headers(inline_harness_path)
         print(
             f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
             f"{inline_harness_path} using {header_path}"
@@ -633,17 +640,19 @@ def inline_literals_in_reduced_harness(
         )
 
     def _attempt_inline(base_harness_path: str, *, attempt_label: str) -> tuple[str, tuple[str, ...]] | None:
-        source = Path(base_harness_path).read_text(encoding="utf-8", errors="ignore")
+        source, _ = _read_source_file(Path(base_harness_path))
         streams = load_trace(Path(fdp_trace_file))
-        inline_result = inline_source_with_report(source, streams)
+        inline_result = inline_source_with_report(source, streams, marker=marker)
         transformed, count = inline_result.source, inline_result.replaced
         inline_harness_path = str(Path(base_harness_path).with_suffix(".inline.cpp"))
-        Path(inline_harness_path).write_text(transformed, encoding="utf-8")
+        replace_regular_file(
+            Path(inline_harness_path), _with_additional_headers(transformed).encode("utf-8"),
+        )
 
         generated_headers: list[str] = []
         if inline_result.header_source and inline_result.header_name:
             header_path = Path(inline_harness_path).with_name(inline_result.header_name)
-            header_path.write_text(inline_result.header_source, encoding="utf-8")
+            replace_regular_file(header_path, inline_result.header_source.encode("utf-8"))
             generated_headers.append(str(header_path))
             details = []
             if inline_result.loop_replaced:
@@ -656,7 +665,6 @@ def inline_literals_in_reduced_harness(
                 f"header-backed values: {header_path}"
             )
 
-        _prepend_additional_headers(inline_harness_path)
         print(f"Inlined/replayed {count} FDP calls into {inline_harness_path}")
 
         unsupported_skips = [
@@ -718,10 +726,8 @@ def inline_literals_in_reduced_harness(
             )
         if crash_preserved:
             print("[+] Inline reduction preserved crash behavior.")
-            inline_source_text = Path(inline_harness_path).read_text(encoding="utf-8", errors="ignore")
-            cleaned, removed = strip_injected_ids(inline_source_text, start_id=start_id, marker=marker)
+            removed = _clean_source_file(Path(inline_harness_path), start_id, marker)
             if removed:
-                Path(inline_harness_path).write_text(cleaned, encoding="utf-8")
                 print(f"Removed {removed} remaining injected FDP IDs from inline harness.")
             return inline_harness_path, tuple(generated_headers)
 
@@ -1035,17 +1041,8 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     # numeric callsite argument. Always sanitize the exported source after all
     # reduction passes so those internal IDs never become part of a PoC's FDP
     # API calls.
-    final_path = Path(final_harness)
-    with open_regular_file(final_path) as final_file:
-        original = os.fstat(final_file.fileno())
-        final_source = final_file.read().decode("utf-8")
-    cleaned_source, removed_ids = strip_injected_ids(
-        final_source,
-        start_id=config.start_id,
-        marker=config.marker,
-    )
+    removed_ids = _clean_source_file(Path(final_harness), config.start_id, config.marker)
     if removed_ids:
-        replace_regular_file(final_path, cleaned_source.encode("utf-8"), original)
         print(f"Removed {removed_ids} remaining injected FDP IDs from final harness.")
 
     return ReductionResult(
