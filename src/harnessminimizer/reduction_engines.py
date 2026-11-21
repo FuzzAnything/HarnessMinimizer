@@ -18,12 +18,13 @@ import subprocess
 import sys
 import tempfile
 
-from harnessminimizer.process_supervisor import run_supervised, treereduce_binary
+from harnessminimizer.process_supervisor import run_supervised
+from harnessminimizer.safe_files import replace_regular_file
 from harnessminimizer.macro_headers import MacroPreparation, prepare_macro_headers
 from harnessminimizer.source_language import CPP, SourceLanguage, language_for_path
 
 
-TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd")
+TOOL_CHOICES = ("perses", "wdd", "cdd")
 PERSES_COMMIT = "43c619a54f883169077b2218cd9c4b395e8927c4"
 CANDIDATE_PLACEHOLDER = "@@.cpp"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -39,8 +40,6 @@ def perses_flags(
     tool: str, *, stable: bool, jobs: int, language: SourceLanguage = CPP,
 ) -> list[str]:
     validate_tool(tool)
-    if tool == "treereduce":
-        raise ValueError("treereduce does not use Perses settings")
     flag_values = {
         "--alg": "node_priority",
         "--cleanup-alg": "node_priority",
@@ -272,14 +271,30 @@ class ReducerInvocation:
     log_path: Path | None = None
     env: dict[str, str] | None = None
 
+    def _record_exit(self, status: str, exit_code: int | None = None) -> None:
+        self.metadata.update(status=status, exit_code=exit_code)
+        try:
+            replace_regular_file(self.destination.parent / "reduction_engine.json",
+                                 (json.dumps(self.metadata, indent=2) + "\n").encode())
+        except OSError as error:
+            print(f"Could not save reducer exit status: {error}", file=sys.stderr)
+
     def run(self, supervisor=run_supervised) -> subprocess.CompletedProcess:
         kwargs = dict(stderr=subprocess.STDOUT, text=True, check=False, timeout=None, private_tmpdir=True)
         if self.env is not None:
             kwargs["env"] = self.env
         if self.log_path is None:
             return supervisor(self.command, **kwargs)
-        with self.log_path.open("w", encoding="utf-8") as log:
-            result = supervisor(self.command, stdout=log, cwd=self.cwd, **kwargs)
+        try:
+            with self.log_path.open("w", encoding="utf-8") as log:
+                result = supervisor(self.command, stdout=log, cwd=self.cwd, **kwargs)
+        except subprocess.TimeoutExpired:
+            self._record_exit("timed_out")
+            raise
+        except (OSError, subprocess.SubprocessError):
+            self._record_exit("execution_error")
+            raise
+        self._record_exit("exited", result.returncode)
         if result.returncode:
             # Preserve useful failure evidence without loading a potentially large log.
             with self.log_path.open("rb") as log:
@@ -304,7 +319,7 @@ class ReducerInvocation:
 def prepare_reducer_invocation(
     *, source: str, output: str, checker_command: list[str],
     stable: bool, jobs: int, candidate_timeout_seconds: int = 300,
-    tool: str = "treereduce",
+    tool: str = "perses",
 ) -> ReducerInvocation:
     validate_tool(tool)
     language = language_for_path(source)
@@ -313,7 +328,6 @@ def prepare_reducer_invocation(
     if candidate_timeout_seconds <= 0:
         raise ValueError("The candidate timeout must be positive")
     destination = Path(output)
-    # This is deliberately shared by every engine and runs after any PCH split.
     # Do not change the checker: the compiler reads the ordinary macro headers.
     macros = prepare_macro_headers(Path(source), destination.resolve().parent)
     if macros.headers:
@@ -327,15 +341,6 @@ def prepare_reducer_invocation(
         if argument.startswith("--last-interesting-file=")
         or (argument == "--last-interesting-file" and index + 1 < len(checker_command))
     )
-    if tool == "treereduce":
-        command = [treereduce_binary(), "-j", str(jobs), "-s", prepared_source, "-o", output]
-        command.extend(["--stable", "--min-reduction", "1"] if stable else ["--fast"])
-        command.extend(["--timeout", str(candidate_timeout_seconds), "--interesting-exit-code", "77", "--", *checker_command])
-        return ReducerInvocation(
-            command=command, result=destination, destination=destination,
-            metadata={"tool": tool, "command": command, "macro_preparation": macros.metadata()},
-            macros=macros, snapshot_paths=snapshot_paths,
-        )
     checker_cwd = Path.cwd()
     runtime = check_perses()
     checker_command = absolute_checker_paths(checker_command, language=language)
@@ -359,7 +364,7 @@ def prepare_reducer_invocation(
         "--output-dir", str(output_dir),
     ]
     metadata = {
-        "tool": tool, "command": command, "perses": runtime.metadata(),
+        "tool": tool, "command": command, "perses": runtime.metadata(), "perses_flags": flags,
         "checker_command": checker_command, "candidate_timeout_seconds": candidate_timeout_seconds,
         "checker_working_directory": str(checker_cwd),
         "input_source": str(Path(source).resolve()), "engine_directory": str(root),
@@ -367,9 +372,8 @@ def prepare_reducer_invocation(
         "macro_preparation": macros.metadata(),
         "check_count_definition": "completed checker profile records; excludes unexecuted cached candidates",
     }
-    (destination.resolve().parent / "reduction_engine.json").write_text(
-        json.dumps(metadata, indent=2) + "\n", encoding="utf-8",
-    )
+    replace_regular_file(destination.parent / "reduction_engine.json",
+                         (json.dumps(metadata, indent=2) + "\n").encode())
     return ReducerInvocation(
         command=command, result=output_dir / candidate.name,
         destination=destination, metadata=metadata, cwd=inputs, log_path=root / "reducer.log",

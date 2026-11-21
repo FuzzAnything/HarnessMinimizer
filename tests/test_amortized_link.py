@@ -62,7 +62,7 @@ def test_reference_filter_preserves_verified_aliases_and_discards_unused(
         input='extern "C" int target_value(); int main() { return target_value(); }\n',
         text=True, check=True, capture_output=True, timeout=30,
     )
-    # Exercise the normalization used by run_treereducer before classification.
+    # Exercise the normalization used by run_reducer before classification.
     normalized = reducer_runner.absolutize_link_flags(" ".join(flags))
     inputs = reducer_runner.resolve_amortized_link_inputs(normalized)
     assert inputs.shared_libraries == (str(target), str(unused))

@@ -121,7 +121,7 @@ def test_cleanup_runs_before_format_and_inline_for_finished_or_timed_reduction(
         order.append("inline")
         return api.PostReductionOutcome(str(source))
 
-    monkeypatch.setattr(api, "run_treereducer", reduced)
+    monkeypatch.setattr(api, "run_reducer", reduced)
     monkeypatch.setattr(api, "format_reduced_harness", formatted)
     monkeypatch.setattr(api, "inline_literals_in_reduced_harness", inlined)
     monkeypatch.setattr(api, "_finalize_budget_checkpoint", lambda _path: order.append("checkpoint"))

@@ -7,20 +7,24 @@ from harnessminimizer.api import ReductionResult
 from harnessminimizer.cli import build_parser, main
 
 
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
-def test_cli_passes_selected_tool_to_api(tool):
+@pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
+def test_cli_passes_selected_tool_to_api(tool, capsys):
     with patch("harnessminimizer.cli.reduce_with_config", return_value=ReductionResult(
         "unused.cpp", "tagged.cpp", None, success=False,
+        failure_reason="Fixture output failed validation.", validation_log="fixture.validation.log",
     )) as reduce:
         assert main(["h.cpp", "-o", "r.cpp", "--tool", tool]) == 1
     config = reduce.call_args.args[0]
+    output = capsys.readouterr().out
+    assert "Fixture output failed validation." in output
+    assert "fixture.validation.log" in output
     assert config.tool == tool
     assert config.symbolize and config.compilation_mode == "split"
     assert config.jobs == 60
     assert not config.profile and not config.stable and not config.amortize_link
 
 
-@pytest.mark.parametrize("tool", ["sfc", "vulcan", "all", "unknown"])
+@pytest.mark.parametrize("tool", ["treereduce", "sfc", "vulcan", "all", "unknown"])
 def test_cli_rejects_unsupported_engines(tool):
     with pytest.raises(SystemExit) as error:
         build_parser().parse_args(["h.cpp", "-o", "r.cpp", "--tool", tool])
@@ -215,7 +219,7 @@ def test_profile_stages_diagnostics_on_success_and_failure(tmp_path, success):
         (work / name).write_text("profile data")
     output = tmp_path / "output" / "reduced.cpp"
     result = ReductionResult(str(selected), "tagged.cpp", None, success=success)
-    with patch.object(runner, "TREEDUCER_DIR", str(work)), \
+    with patch.object(runner, "_WORK_DIR", str(work)), \
             patch("harnessminimizer.cli.reduce_with_config", return_value=result) as reduce:
         assert main(["h.cpp", "-o", str(output), "--profile"]) == (0 if success else 1)
     assert reduce.call_args.args[0].profile is True

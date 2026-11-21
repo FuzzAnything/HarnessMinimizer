@@ -31,7 +31,6 @@ include = [
     "/tests",
     "/include",
     "/README.md",
-    "/tools/treereduce",
     "/tools/perses/install.py",
     "/pyproject.toml",
 ]

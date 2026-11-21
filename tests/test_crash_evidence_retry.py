@@ -211,7 +211,7 @@ class TestReferenceEvidenceRetry(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.addCleanup(patch.stopall)
-        patch.object(runner, "TREEDUCER_DIR", self.temp.name).start()
+        patch.object(runner, "_WORK_DIR", self.temp.name).start()
         runner.reset_stack_trace_state()
         self.addCleanup(runner.reset_stack_trace_state)
 

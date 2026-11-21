@@ -8,8 +8,8 @@ from harnessminimizer.debug_log import copy_debug_log
 from harnessminimizer.api import ReductionConfig, reduce_with_config
 from harnessminimizer.reduction_engines import TOOL_CHOICES
 from harnessminimizer.reducer_runner import (
-    DEFAULT_TREEREDUCE_JOBS,
-    MAX_TREEREDUCE_JOBS,
+    DEFAULT_REDUCER_JOBS,
+    MAX_REDUCER_JOBS,
     get_candidate_profile_events_file,
     get_debug_log_path,
     get_reduction_profile_json_file,
@@ -54,8 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the original harness source file (.c/.cc/.cpp).",
     )
     parser.add_argument(
-        "--tool", choices=TOOL_CHOICES, default="treereduce",
-        help="Reduction engine (default: treereduce; other choices use external Perses).",
+        "--tool", choices=TOOL_CHOICES, default="perses",
+        help="Perses preset (default: perses).",
     )
     parser.add_argument(
         "--compile-flags",
@@ -99,10 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-j",
         "--jobs",
         type=int,
-        default=DEFAULT_TREEREDUCE_JOBS,
+        default=DEFAULT_REDUCER_JOBS,
         help=(
             "Requested number of concurrent interestingness checks "
-            f"(default: {DEFAULT_TREEREDUCE_JOBS}; maximum: {MAX_TREEREDUCE_JOBS})."
+            f"(default: {DEFAULT_REDUCER_JOBS}; maximum: {MAX_REDUCER_JOBS})."
         ),
     )
     parser.add_argument(
@@ -213,8 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--amortize-link cannot be combined with --direct/--single-step")
     if args.protect_initializers and args.slice:
         parser.error("--protect-initializers cannot currently be combined with --slice")
-    if not 1 <= args.jobs <= MAX_TREEREDUCE_JOBS:
-        parser.error(f"--jobs must be between 1 and {MAX_TREEREDUCE_JOBS}")
+    if not 1 <= args.jobs <= MAX_REDUCER_JOBS:
+        parser.error(f"--jobs must be between 1 and {MAX_REDUCER_JOBS}")
 
     config = ReductionConfig(
         harness_path=args.harness,
@@ -243,7 +243,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.profile:
             _stage_profile(args.output)
     if not result.success:
-        print("[!] Warning: Reduction did not complete successfully. Please see the detailed logs above for more information.")
+        print(result.failure_reason or "Reduction did not complete successfully.")
+        if result.validation_log:
+            print(f"Validation log: {result.validation_log}")
         return 1
     reduced_harness = result.reduced_harness
 

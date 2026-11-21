@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from harnessminimizer import reducer_runner
 from harnessminimizer.dynamic_slicer import CoverageMap
-from harnessminimizer.macro_headers import MacroPreparation
+from harnessminimizer.reduction_engines import ReducerInvocation
 from harnessminimizer.source_alias import SourceAliases
 
 
@@ -25,15 +25,20 @@ class TestReducerRunner(unittest.TestCase):
         # These command-routing tests mock the reducer and use nonexistent
         # source/output paths. Real preparation and restoration have separate
         # filesystem/native tests in test_macro_headers and test_reduction_engines.
+        def checker_invocation(*, output, checker_command, **options):
+            return ReducerInvocation(checker_command, Path(output), Path(output), options)
+
+        self.prepare = patch("harnessminimizer.reduction_engines.prepare_reducer_invocation",
+                             side_effect=checker_invocation)
+        self.invocation = self.prepare.start()
+        self.addCleanup(self.prepare.stop)
         for mock in (
             patch("harnessminimizer.reducer_runner.nonempty_regular_file", return_value=True),
-            patch("harnessminimizer.reduction_engines.prepare_macro_headers",
-                  side_effect=lambda source, work: MacroPreparation(source)),
             patch("harnessminimizer.reduction_engines.ReducerInvocation.publish_result"),
         ):
             mock.start()
             self.addCleanup(mock.stop)
-        reducer_runner.TREEDUCER_DIR = None
+        reducer_runner._WORK_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
         reducer_runner.set_normal_reference_stack_depth(None)
         reducer_runner.set_symbolized_reference_stack_depth(None)
@@ -79,13 +84,13 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_sets_env(self, mock_run, mock_exists):
+    def test_run_reducer_sets_env(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
         reducer_runner.set_normal_reference_stack_depth(12)
         reducer_runner.set_normal_reference_stack_depth_strict(True)
 
-        out = reducer_runner.run_treereducer(
+        out = reducer_runner.run_reducer(
             symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
@@ -126,7 +131,7 @@ class TestReducerRunner(unittest.TestCase):
                     patch("harnessminimizer.reducer_runner.write_profile_summary",
                           side_effect=AssertionError("profiling is disabled")):
                 self.assertEqual(
-                    reducer_runner.run_treereducer(
+                    reducer_runner.run_reducer(
                         str(source), None, "AddressSanitizer", None, None, None,
                         jobs=1,
                     ),
@@ -136,7 +141,7 @@ class TestReducerRunner(unittest.TestCase):
             self.assertIn("--symbolize", command)
             self.assertNotIn("--profile-file", command)
             self.assertFalse(any(arg.startswith("--oracle-") for arg in command))
-            self.assertEqual(command[command.index("--timeout") + 1], "300")
+            self.assertEqual(self.invocation.call_args.kwargs["tool"], "perses")
             for artifact in (
                 "candidate_profile.jsonl", "reduction_profile.json", "reduction_profile.txt",
                 "reduced_harness.raw.cpp", "paired_execution.json",
@@ -144,7 +149,7 @@ class TestReducerRunner(unittest.TestCase):
                 self.assertFalse((root / artifact).exists(), artifact)
 
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_defaults_to_symbolized_oracle(self, mock_run):
+    def test_run_reducer_defaults_to_symbolized_oracle(self, mock_run):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
@@ -162,7 +167,7 @@ class TestReducerRunner(unittest.TestCase):
                 )
             )
 
-            reducer_runner.run_treereducer(
+            reducer_runner.run_reducer(
                 harness_path="/tmp/in.cpp",
                 fdp_trace_file="/tmp/trace.log",
                 crash_pattern="SymbolizedPattern",
@@ -187,7 +192,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessminimizer.reducer_runner.start_amortized_runner")
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_uses_amortized_runner_and_calibrated_depth(
+    def test_run_reducer_uses_amortized_runner_and_calibrated_depth(
         self,
         mock_run,
         mock_exists,
@@ -206,7 +211,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_reference.side_effect = record_reference
         reducer_runner.set_normal_reference_stack_depth_strict(True)
 
-        reducer_runner.run_treereducer(
+        reducer_runner.run_reducer(
             symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
@@ -233,11 +238,11 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_passes_snapshot_flag_when_enabled(self, mock_run, mock_exists):
+    def test_run_reducer_passes_snapshot_flag_when_enabled(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
 
-        reducer_runner.run_treereducer(
+        reducer_runner.run_reducer(
             symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
@@ -255,7 +260,7 @@ class TestReducerRunner(unittest.TestCase):
     @patch("harnessminimizer.reducer_runner.write_profile_summary")
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_profiles_candidates_and_uses_requested_jobs(
+    def test_run_reducer_profiles_candidates_and_uses_requested_jobs(
         self,
         mock_run,
         mock_exists,
@@ -275,7 +280,7 @@ class TestReducerRunner(unittest.TestCase):
             reducer_runner.configure_work_dir(tmpdir)
             source = Path(tmpdir) / "in.cpp"
             source.write_text("int main() { return 0; }\n", encoding="utf-8")
-            reducer_runner.run_treereducer(
+            reducer_runner.run_reducer(
                 symbolize=False,
                 harness_path=str(source),
                 fdp_trace_file=None,
@@ -288,17 +293,16 @@ class TestReducerRunner(unittest.TestCase):
             )
 
         cmd = mock_run.call_args.args[0]
-        jobs_index = cmd.index("-j")
-        self.assertEqual(cmd[jobs_index + 1], "7")
+        self.assertEqual(self.invocation.call_args.kwargs["jobs"], 7)
         self.assertIn("--profile-file", cmd)
         mock_write_profile.assert_called_once()
         configuration = mock_write_profile.call_args.kwargs["configuration"]
         self.assertEqual(configuration["compilation_mode"], "split")
         self.assertFalse(configuration["symbolize"])
 
-    def test_run_treereducer_rejects_out_of_range_jobs(self):
+    def test_run_reducer_rejects_out_of_range_jobs(self):
         with self.assertRaisesRegex(ValueError, "between 1 and 63"):
-            reducer_runner.run_treereducer(
+            reducer_runner.run_reducer(
                 harness_path="/tmp/in.cpp",
                 fdp_trace_file=None,
                 crash_pattern="AddressSanitizer",
@@ -310,14 +314,14 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_adds_normal_path_debug_log(self, mock_run, mock_exists):
+    def test_run_reducer_adds_normal_path_debug_log(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
 
         with tempfile.TemporaryDirectory() as tmpdir:
             reducer_runner.configure_work_dir(tmpdir)
             debug_log = reducer_runner.configure_debug_logging(True)
-            reducer_runner.run_treereducer(
+            reducer_runner.run_reducer(
                 symbolize=False,
                 harness_path="/tmp/in.cpp",
                 fdp_trace_file=None,
@@ -335,11 +339,11 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_uses_split_mode_flag(self, mock_run, mock_exists):
+    def test_run_reducer_uses_split_mode_flag(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
 
-        reducer_runner.run_treereducer(
+        reducer_runner.run_reducer(
             symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file="/tmp/trace.log",
@@ -355,11 +359,11 @@ class TestReducerRunner(unittest.TestCase):
 
     @patch("harnessminimizer.reducer_runner.os.path.exists")
     @patch("harnessminimizer.reducer_runner.run_supervised")
-    def test_run_treereducer_passes_auto_var_init_pattern_to_checker(self, mock_run, mock_exists):
+    def test_run_reducer_passes_auto_var_init_pattern_to_checker(self, mock_run, mock_exists):
         mock_run.return_value = _Proc(returncode=0, stdout="", stderr="")
         mock_exists.return_value = True
 
-        reducer_runner.run_treereducer(
+        reducer_runner.run_reducer(
             symbolize=False,
             harness_path="/tmp/in.cpp",
             fdp_trace_file=None,
@@ -378,7 +382,7 @@ class TestReducerRunner(unittest.TestCase):
         work_dir = "/tmp/hm_fixed"
         got = reducer_runner.configure_work_dir(work_dir)
         self.assertEqual(got, str(Path(work_dir).resolve()))
-        self.assertEqual(reducer_runner.TREEDUCER_DIR, str(Path(work_dir).resolve()))
+        self.assertEqual(reducer_runner._WORK_DIR, str(Path(work_dir).resolve()))
         self.assertTrue(reducer_runner._IS_USER_WORK_DIR)
         mock_mkdtemp.assert_not_called()
 
@@ -387,7 +391,7 @@ class TestReducerRunner(unittest.TestCase):
         mock_mkdtemp.return_value = "/tmp/hm_auto"
         got = reducer_runner.get_work_dir()
         self.assertEqual(got, "/tmp/hm_auto")
-        self.assertEqual(reducer_runner.TREEDUCER_DIR, "/tmp/hm_auto")
+        self.assertEqual(reducer_runner._WORK_DIR, "/tmp/hm_auto")
         self.assertFalse(reducer_runner._IS_USER_WORK_DIR)
         mock_mkdtemp.assert_called_once()
 

@@ -24,8 +24,8 @@ from harnessminimizer.fdp_transform import (
 from harnessminimizer.reducer_runner import (
     PHASE3_DIRECT,
     PHASE3_SPLIT,
-    DEFAULT_TREEREDUCE_JOBS,
-    MAX_TREEREDUCE_JOBS,
+    DEFAULT_REDUCER_JOBS,
+    MAX_REDUCER_JOBS,
     POST_REDUCTION_VALIDATION_ATTEMPTS,
     apply_coverage_guided_slice,
     append_exec_timeout_tester_args,
@@ -33,7 +33,6 @@ from harnessminimizer.reducer_runner import (
     check_reducer_crash_pattern,
     check_reducer_symbolized_reduction_oracle,
     check_reducer_symbolized_crash_pattern,
-    check_tree_reducer,
     extract_crash_pattern_from_output,
     extract_first_dynamic_library_crash_site,
     extract_first_sanitizer_stack_trace,
@@ -55,7 +54,7 @@ from harnessminimizer.reducer_runner import (
     reset_last_interesting_state,
     reset_poc_runtime_args,
     resolve_amortized_link_inputs,
-    run_treereducer,
+    run_reducer,
     run_command,
     set_current_exec_timeout_ms,
     source_alias_tester_args,
@@ -119,11 +118,11 @@ class ReductionConfig:
     snapshot: bool = False
     amortize_link: bool = False
     symbolize: bool = True
-    jobs: int = DEFAULT_TREEREDUCE_JOBS
+    jobs: int = DEFAULT_REDUCER_JOBS
     profile: bool = False
     protect_initializers: bool = False
     auto_var_init_pattern: bool = False
-    tool: str = "treereduce"
+    tool: str = "perses"
     # Budget recovery checkpoints accepted candidates only in the final four
     # minutes; no initial candidate is saved. None leaves snapshot behavior alone.
     reduction_timeout_seconds: float | None = None
@@ -140,6 +139,8 @@ class ReductionResult:
     generated_headers: tuple[str, ...] = ()
     poc_runtime_args: tuple[str, ...] = ()
     success: bool = True
+    failure_reason: str | None = None
+    validation_log: str | None = None
 
 
 class PostReductionOutcome(tuple):
@@ -1266,7 +1267,7 @@ def _reduction_attempt(
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
     reduction_compilation_mode = config.compilation_mode
     validation_compilation_mode = PHASE3_DIRECT
-    reduced_harness = run_treereducer(
+    reduced_harness = run_reducer(
         tagged_harness_file,
         fdp_trace_file,
         crash_pattern_symbolize_1 if config.symbolize else crash_pattern_symbolize_0,
@@ -1361,6 +1362,7 @@ def _reduction_attempt(
 @termination_guard()
 def reduce_with_config(config: ReductionConfig) -> ReductionResult:
     from harnessminimizer.reduction_budget import search_budget
+    validate_tool(config.tool)
     if config.search_timeout_seconds is not None and config.reduction_timeout_seconds is None:
         raise ValueError("A search timeout requires a bounded reduction.")
     if config.reduction_timeout_seconds is not None:
@@ -1375,7 +1377,6 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
 
 
 def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
-    validate_tool(config.tool)
     configure_work_dir(config.work_dir)
     if config.protect_initializers and config.slice_enabled:
         raise ValueError(
@@ -1383,9 +1384,9 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             "this additional reduction stage is outside the protected recovery."
         )
     configure_debug_logging(config.debug)
-    if not 1 <= config.jobs <= MAX_TREEREDUCE_JOBS:
+    if not 1 <= config.jobs <= MAX_REDUCER_JOBS:
         raise ValueError(
-            f"jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
+            f"jobs must be between 1 and {MAX_REDUCER_JOBS}."
         )
     set_current_exec_timeout_ms(DEFAULT_EXEC_TIMEOUT_MS)
     reset_stack_trace_state()
@@ -1399,10 +1400,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     if has_static_target_libraries(config.link_flags):
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_compilation_mode = PHASE3_DIRECT
-    if config.tool == "treereduce":
-        check_tree_reducer()
-    else:
-        check_perses()
+    check_perses()
     prepared_source = _prepare_fuzzer_entry_return(
         config.harness_path,
         config.compile_flags,
@@ -1434,13 +1432,15 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
             tagged_harness="",
             fdp_trace="",
             success=False,
+            failure_reason=f"Reference execution stopped inside the harness at {exc.location}.",
         )
     if not crash_pattern_symbolize_0:
         return ReductionResult(
             reduced_harness="",
             tagged_harness="",
             fdp_trace="",
-            success=False
+            success=False,
+            failure_reason="Reference execution supplied no crash pattern.",
         )
     recorded_symbolized_pattern = get_reference_crash_pattern_symbolize_1()
     crash_pattern_symbolize_1 = recorded_symbolized_pattern
@@ -1550,6 +1550,8 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         return ReductionResult(
             reduced_harness=post_inline_harness, tagged_harness=tagged_harness_file,
             fdp_trace=fdp_trace_file, generated_headers=generated_headers, success=False,
+            failure_reason=f"Reduction output failed validation at stage {outcome.stage}.",
+            validation_log=outcome.log,
         )
     return ReductionResult(
         reduced_harness=post_inline_harness,
@@ -1573,11 +1575,11 @@ def process(
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = True,
-    jobs: int = DEFAULT_TREEREDUCE_JOBS,
+    jobs: int = DEFAULT_REDUCER_JOBS,
     profile: bool = False,
     protect_initializers: bool = False,
     auto_var_init_pattern: bool = False,
-    tool: str = "treereduce",
+    tool: str = "perses",
 ) -> str | None:
     config = ReductionConfig(
         harness_path=harness_path,

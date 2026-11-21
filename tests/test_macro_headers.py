@@ -84,7 +84,7 @@ def test_restore_uses_include_identity_not_positions_and_preserves_user_includes
 
 
 @pytest.mark.parametrize("mode", ["split", "pch"])
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+@pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
 def test_engine_restores_output_and_snapshot(tmp_path, monkeypatch, mode, tool):
     monkeypatch.setattr("harnessminimizer.reduction_engines.check_perses", lambda: PersesRuntime(
         ("java", "-jar", "/test/perses.jar"), "digest", "version", "java 17", None,
@@ -106,8 +106,7 @@ def test_engine_restores_output_and_snapshot(tmp_path, monkeypatch, mode, tool):
         stable=True, jobs=2,
         tool=tool,
     )
-    key = "-s" if tool == "treereduce" else "--input-file"
-    engine_source = Path(invocation.command[invocation.command.index(key) + 1]).read_text()
+    engine_source = Path(invocation.command[invocation.command.index("--input-file") + 1]).read_text()
     assert "#define" not in engine_source
     assert ("#include <cstddef>" in engine_source) == (mode == "split")
     assert invocation.metadata["macro_preparation"]["definition_count"] == 1
@@ -208,9 +207,9 @@ def test_repeated_inclusion_does_not_add_implicit_include_guards(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_TREEREDUCE") != "1", reason="opt-in real reducer test")
+@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_PERSES") != "1", reason="opt-in real reducer test")
 @pytest.mark.parametrize("mode", ["split", "pch"])
-def test_real_treereduce_reduces_macros_and_exports_compilable_source(tmp_path, mode):
+def test_real_perses_reduces_macros_and_exports_compilable_source(tmp_path, mode):
     source = tmp_path / "original.cpp"
     original = (
         '#include <cstddef>\n'

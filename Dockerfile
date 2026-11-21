@@ -136,7 +136,6 @@ RUN mkdir -p .tools/bin && \
 ENV VIRTUAL_ENV="/root/HarnessMinimizer/.venv"
 ENV PATH="/root/HarnessMinimizer/.venv/bin:/root/HarnessMinimizer/.tools/bin:${PATH}"
 RUN uv sync --frozen
-RUN python tools/treereduce/install.py --jobs "$ENGINE_BUILD_JOBS"
 
 # Pin Perses independently of the selected HarnessMinimizer revision.
 # Keep its source, license and build files alongside the installed JAR.
@@ -156,10 +155,8 @@ RUN mkdir -p .tools/perses && \
         "$(sha256sum .tools/perses/perses_deploy.jar | cut -d ' ' -f 1)" > .tools/perses/build_info.json
 LABEL org.fuzzanything.perses.commit=$PERSES_REF
 
-ENV HARNESSMINIMIZER_TREEREDUCE="/root/HarnessMinimizer/.tools/bin/treereduce-c" \
-    HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
+ENV HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
 RUN harnessminimizer --help >/dev/null && \
-    "$HARNESSMINIMIZER_TREEREDUCE" --harnessminimizer-supervisor-version && \
     python -c 'from harnessminimizer.reduction_engines import check_perses; check_perses()'
 
 ENV DEBUGINFOD_URLS="" \

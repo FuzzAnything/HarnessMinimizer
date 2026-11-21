@@ -67,14 +67,6 @@ def assert_terminated(pid):
     raise AssertionError(f"process {pid} survived or was not reaped")
 
 
-def test_treereduce_override_uses_project_environment_variable(tmp_path, monkeypatch):
-    from harnessminimizer.process_supervisor import treereduce_binary
-
-    binary = tmp_path / "engine with spaces" / "treereduce-c"
-    monkeypatch.setenv("HARNESSMINIMIZER_TREEREDUCE", str(binary))
-    assert treereduce_binary() == str(binary)
-
-
 def test_run_preserves_output_and_exit_status():
     result = run_supervised(
         [sys.executable, "-c", "import sys;print('out');print('err',file=sys.stderr);sys.exit(77)"],
@@ -300,51 +292,6 @@ def test_real_checker_preserves_profile_fields_and_crash(tmp_path):
     assert durations["execute_ns"] > 0
     assert durations["oracle_ns"] > 0
     assert durations["total_ns"] >= durations["execute_ns"] + durations["compile_link_ns"]
-
-
-def test_patched_treereduce_reaps_timed_out_checkers(tmp_path, reap_orphans):
-    from harnessminimizer.process_supervisor import treereduce_binary
-    binary = treereduce_binary()
-    probe = subprocess.run([binary, "--harnessminimizer-supervisor-version"], capture_output=True)
-    if probe.returncode != 0:
-        pytest.skip("install the pinned treereduce patch to run its integration regression")
-    source = tmp_path / "source.cpp"
-    source.write_text("int f(int x) { int a = x+1; int b = a+2; return b; }\n")
-    checker = tmp_path / "checker.py"
-    entries = tmp_path / "pids.jsonl"
-    checker.write_text(
-        "import os,pathlib,subprocess,sys,time,json\n"
-        f"initial=pathlib.Path({str(tmp_path / 'initial')!r})\n"
-        "if not initial.exists():\n initial.touch();sys.exit(77)\n"
-        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(8)'],start_new_session=True)\n"
-        f"with open({str(entries)!r},'a') as f:f.write(json.dumps([os.getpid(),child.pid])+'\\n')\n"
-        "time.sleep(8)\n"
-    )
-    process = subprocess.Popen([
-        binary, "-j", "1", "-s", str(source), "-o", str(tmp_path / "reduced.cpp"),
-        "--timeout", "1", "--interesting-exit-code", "77", "--", sys.executable, str(checker), "@@.cpp",
-    ], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        deadline = time.monotonic() + 4
-        rows = []
-        while time.monotonic() < deadline:
-            if entries.exists():
-                rows = [json.loads(line) for line in entries.read_text().splitlines()]
-                if len(rows) >= 3:
-                    break
-            time.sleep(0.02)
-        assert len(rows) >= 3
-        assert process.poll() is None
-        # Unlike the unpatched dependency, earlier checkers have been reaped
-        # while the reducer remains alive; nested executor groups are dead too.
-        for checker_pid, child_pid in rows[:-1]:
-            assert not Path(f"/proc/{checker_pid}").exists()
-            assert_terminated(child_pid)
-    finally:
-        terminate_process_group(process)
-        if entries.exists():
-            for row in entries.read_text().splitlines():
-                reap_orphans.extend(json.loads(row))
 
 
 def test_sigterm_unwinds_python_supervisor(tmp_path, reap_orphans):

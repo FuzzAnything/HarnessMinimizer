@@ -159,7 +159,7 @@ def test_real_crash_checker_retains_symbolized_oracle_and_profile(tmp_path):
 
 
 def test_missing_symbolization_keeps_strict_failure_and_saves_raw_output(tmp_path, monkeypatch):
-    monkeypatch.setattr(rr, "TREEDUCER_DIR", str(tmp_path))
+    monkeypatch.setattr(rr, "_WORK_DIR", str(tmp_path))
     output = "WARNING: Can't read from symbolizer\n    #0 0x1234 (/target.so+0x12)\n"
     with pytest.raises(ValueError, match="reference_symbolization_failure.log"):
         rr._record_symbolized_reference_crash_location(output, "harness.cpp", required=True)

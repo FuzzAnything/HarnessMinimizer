@@ -71,7 +71,7 @@ def test_c_prefix_preserves_conditionals_and_body(tmp_path):
 
 
 def test_c_preparation_skips_fdp_and_preserves_original(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "TREEDUCER_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr(runner, "_WORK_DIR", str(tmp_path / "work"))
     (tmp_path / "work").mkdir()
     harness = tmp_path / "harness.c"
     original = (

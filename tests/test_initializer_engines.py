@@ -12,10 +12,10 @@ from harnessminimizer.reduction_engines import prepare_reducer_invocation
 from harnessminimizer.reducer_runner import _split_source_for_pch
 
 
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+@pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
 @pytest.mark.parametrize("mode,jobs", [("split", 1), ("pch", 2)])
 def test_real_engine_protected_declarations(tmp_path, mode, jobs, tool):
-    gate = "HARNESSMINIMIZER_TEST_TREEREDUCE" if tool == "treereduce" else "HARNESSMINIMIZER_TEST_PERSES"
+    gate = "HARNESSMINIMIZER_TEST_PERSES"
     if os.environ.get(gate) != "1":
         pytest.skip(f"opt-in real-engine integration: {gate}=1")
     original = tmp_path / "original.cpp"

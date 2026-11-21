@@ -32,7 +32,7 @@ def test_real_checker_preserves_relative_data_and_replay(
     benchmark.mkdir()
     monkeypatch.chdir(benchmark)
     # Restore this module's process-global work-directory settings at teardown.
-    monkeypatch.setattr(reducer_runner, "TREEDUCER_DIR", None)
+    monkeypatch.setattr(reducer_runner, "_WORK_DIR", None)
     monkeypatch.setattr(reducer_runner, "_IS_USER_WORK_DIR", False)
     work = Path(reducer_runner.configure_work_dir(str(tmp_path / "work")))
     data = benchmark / "data"

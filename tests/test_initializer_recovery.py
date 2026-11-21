@@ -13,7 +13,7 @@ from harnessminimizer.reduction_profile import write_profile_summary
 
 @pytest.fixture
 def work(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "TREEDUCER_DIR", str(tmp_path))
+    monkeypatch.setattr(runner, "_WORK_DIR", str(tmp_path))
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", True)
     source = tmp_path / "tagged.cpp"
     source.write_text("void f(){ int value=7; consume(value); }\n")
@@ -29,7 +29,7 @@ def event(start, compile_ns, success=True):
     }
 
 
-def profile(root, events, wall_ns, tool="treereduce"):
+def profile(root, events, wall_ns, tool="perses"):
     events_path = root / "candidate_profile.jsonl"
     events_path.write_text("".join(json.dumps(e) + "\n" for e in events))
     write_profile_summary(
@@ -66,7 +66,7 @@ def test_success_never_parses_analyzes_or_retries(work, monkeypatch):
 
 @pytest.mark.parametrize("stage", ["final-output", "cleaned-fallback", "fdp-replay", "direct-input"])
 @pytest.mark.parametrize("retry_succeeds", [True, False])
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+@pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
 def test_one_retry_and_pooled_metrics_preserve_first_attempt(work, monkeypatch, stage, retry_succeeds, tool):
     diagnosis_calls = []
     def diagnose(source, *args):
@@ -188,7 +188,7 @@ def test_analyzer_timeout_is_not_an_initialization_diagnostic(tmp_path, monkeypa
 @pytest.mark.parametrize("symbolize", [False, True])
 @pytest.mark.parametrize("mode,plugin", [("split", False), ("pch", True)])
 @pytest.mark.parametrize("retry_succeeds", [True, False])
-@pytest.mark.parametrize("tool", ["treereduce", "perses", "wdd", "cdd"])
+@pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
 def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypatch, symbolize, mode, plugin, retry_succeeds, tool):
     """Exercise API orchestration with a harmless synthetic source and no execution."""
     from harnessminimizer import api
@@ -202,7 +202,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
     source.write_text(original)
     seed = tmp_path / "input"
     seed.write_bytes(b"hello")
-    for name in ("check_tree_reducer", "check_perses", "check_harness_compilation", "check_reducer_crash_pattern",
+    for name in ("check_perses", "check_harness_compilation", "check_reducer_crash_pattern",
                  "check_reducer_symbolized_crash_pattern", "check_reducer_symbolized_reduction_oracle",
                  "resolve_amortized_link_inputs", "format_reduced_harness", "_append_inline_stack_diagnostics"):
         monkeypatch.setattr(api, name, lambda *a, **kw: None)
@@ -231,7 +231,7 @@ def test_api_recovery_preserves_options_and_validation_order(tmp_path, monkeypat
             assert "HM_KEEP_INIT_" in text
         output.write_text(text)
         return str(output)
-    monkeypatch.setattr(api, "run_treereducer", reduce)
+    monkeypatch.setattr(api, "run_reducer", reduce)
     # The analyzer's command/diagnostic filtering is tested separately with Clang;
     # this test isolates retry orchestration and both existing validators.
     monkeypatch.setattr(recovery, "analyze_uninitialized", lambda *a: InitializationDiagnosis("uninitialized-use", ({},), 1, "log"))
@@ -279,7 +279,7 @@ def test_restore_result_and_snapshot_before_fdp_inlining(work, monkeypatch, symb
         # Real inlining/validation, including partial/zero replacements, has
         # separate tests. This verifies that it sees the original FDP call/ID.
         return PostReductionOutcome(source)
-    monkeypatch.setattr(api, "run_treereducer", reduce)
+    monkeypatch.setattr(api, "run_reducer", reduce)
     monkeypatch.setattr(api, "inline_literals_in_reduced_harness", inline)
     result = api._reduction_attempt(
         api.ReductionConfig(str(work), snapshot=True, symbolize=symbolize,
