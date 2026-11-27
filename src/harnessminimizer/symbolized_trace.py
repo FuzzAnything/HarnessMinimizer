@@ -60,12 +60,11 @@ def is_runtime_frame(line: str) -> bool:
 
 def normalize_crash_signature(signature: str, escape: bool = False) -> str:
     signature = signature.strip()
+    address_regex = r"0x[0-9a-fA-F]+"
     if escape:
-        placeholder = "__ADDR__"
-        signature = MEMORY_ADDRESS_PATTERN.sub(placeholder, signature)
-        signature = re.escape(signature)
-        return signature.replace(re.escape(placeholder), r"0x[0-9a-fA-F]+")
-    return MEMORY_ADDRESS_PATTERN.sub(r"0x[0-9a-fA-F]+", signature)
+        literal_parts = MEMORY_ADDRESS_PATTERN.split(signature)
+        return address_regex.join(re.escape(part) for part in literal_parts)
+    return MEMORY_ADDRESS_PATTERN.sub(address_regex, signature)
 
 
 def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> bool:

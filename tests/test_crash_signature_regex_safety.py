@@ -9,6 +9,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from harnessminimizer.reducer_runner import (  # noqa: E402
@@ -16,12 +18,13 @@ from harnessminimizer.reducer_runner import (  # noqa: E402
 )
 
 
-def _assert_matches_own_output(output: str) -> None:
+def _assert_matches_own_output(output: str) -> str:
     sig = _extract_crash_signature_from_output(output)
     assert sig, f"no signature extracted from {output!r}"
     assert re.search(sig, output), (
         f"signature {sig!r} does not match its own output {output!r}"
     )
+    return sig
 
 
 def test_abort_assert_path_with_plus_is_regex_safe():
@@ -40,6 +43,20 @@ def test_absl_check_condition_with_metachars_is_regex_safe():
     _assert_matches_own_output(
         "F0000 00:00:00: Check failed: (size_t)offset + len <= buf_size (5 vs. 4)"
     )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "fixture.out: /src/__ADDR__/file.c:358: Assertion `ready` failed.",
+        "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /src/__ADDR__/file.c:42:5",
+        "Check failed: marker == __ADDR__ (1 vs. 2)",
+    ],
+    ids=["assertion", "ubsan-summary", "absl-check"],
+)
+def test_literal_address_marker_remains_literal(output: str):
+    sig = _assert_matches_own_output(output)
+    assert re.search(sig, output.replace("__ADDR__", "0x2a")) is None
 
 
 def test_safe_branches_still_match():
