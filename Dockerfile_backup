@@ -142,6 +142,7 @@ RUN mkdir -p .tools/bin && \
 ENV VIRTUAL_ENV="/root/HarnessMinimizer/.venv"
 ENV PATH="/root/HarnessMinimizer/.venv/bin:/root/HarnessMinimizer/.tools/bin:${PATH}"
 RUN uv sync --frozen
+RUN python tools/treereduce/install.py --jobs "$ENGINE_BUILD_JOBS"
 
 # Keep the pinned upstream checkout, including its license and build files.
 RUN mkdir -p .tools/perses && \
@@ -150,8 +151,10 @@ RUN mkdir -p .tools/perses && \
     python tools/perses/install.py --source .tools/perses/source --jobs "$ENGINE_BUILD_JOBS" && \
     (cd .tools/perses/source && bazelisk shutdown)
 
-ENV HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
+ENV HARNESSMINIMIZER_TREEREDUCE="/root/HarnessMinimizer/.tools/bin/treereduce-c" \
+    HARNESSMINIMIZER_PERSES_JAR="/root/HarnessMinimizer/.tools/perses/perses_deploy.jar"
 RUN harnessminimizer --help >/dev/null && \
+    "$HARNESSMINIMIZER_TREEREDUCE" --harnessminimizer-supervisor-version && \
     java -jar "$HARNESSMINIMIZER_PERSES_JAR" --help >/dev/null
 
 ENV DEBUGINFOD_URLS="" \

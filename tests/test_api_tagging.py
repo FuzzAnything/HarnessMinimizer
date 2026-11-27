@@ -8,7 +8,7 @@ from harnessminimizer.api import tag_harness_with_fdp_ids
 
 class TestHarnessTagging(unittest.TestCase):
     def setUp(self):
-        reducer_runner._WORK_DIR = None
+        reducer_runner.TREEDUCER_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
 
     def test_work_dir_beside_source_does_not_overwrite_input(self):

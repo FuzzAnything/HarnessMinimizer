@@ -11,7 +11,6 @@ from unittest.mock import patch
 import pytest
 
 from harnessminimizer import api, reducer_runner as runner
-from harnessminimizer.reduction_engines import PersesRuntime
 
 
 REPORT = (
@@ -23,7 +22,7 @@ REPORT = (
 
 @pytest.fixture
 def reference(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "_WORK_DIR", None)
+    monkeypatch.setattr(runner, "TREEDUCER_DIR", None)
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", False)
     runner.configure_work_dir(str(tmp_path / "work"))
     runner.reset_stack_trace_state()
@@ -180,7 +179,7 @@ def test_native_recorder_reports_io_failure(dump_error_binary, tmp_path, kind, o
 def test_mixed_harness_reduces_and_exports_both_input_paths(tmp_path, monkeypatch, raw_input):
     if not shutil.which("clang++"):
         pytest.skip("clang++ is required")
-    monkeypatch.setattr(runner, "_WORK_DIR", None)
+    monkeypatch.setattr(runner, "TREEDUCER_DIR", None)
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", False)
     # One stability sample suffices for this deterministic fixture. Compilation,
     # execution, recording, plugin checks, inlining and final replay stay real.
@@ -210,26 +209,23 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     original = harness.read_bytes()
     seed = tmp_path / "seed"
     seed.write_bytes(b"R\x01" if raw_input else b"F\x01")
-    driver = tmp_path / "fixture-reducer"
-    driver.write_text(f"#!{sys.executable}\n" + '''import json, pathlib, subprocess, sys
+    driver = tmp_path / "treereduce-c"
+    driver.write_text(f"#!{sys.executable}\n" + '''import pathlib, subprocess, sys
 args = sys.argv[1:]
-candidate = pathlib.Path(args[args.index('--input-file') + 1])
-candidate.write_text(candidate.read_text().replace('int unused = 123;', ''))
-tester = json.loads((candidate.parents[2] / 'reduction_engine.json').read_text())['checker_command']
-script = args[args.index('--test-script') + 1]
+if '--help' in args: raise SystemExit(0)
+source = pathlib.Path(args[args.index('-s') + 1])
+candidate = source.with_name('candidate.cpp')
+candidate.write_text(source.read_text().replace('int unused = 123;', ''))
+tester = [str(candidate) if arg == '@@.cpp' else arg for arg in args[args.index('--') + 1:]]
 assert '--pch' in tester and '--amortized-runner-socket' in tester
-''' + f"assert ('--fdp-trace' in tester) == {not raw_input!r}\n" + '''result = subprocess.run([script], cwd=candidate.parent, capture_output=True, text=True)
-if result.returncode:
+''' + f"assert ('--fdp-trace' in tester) == {not raw_input!r}\n" + '''result = subprocess.run(tester, capture_output=True, text=True)
+if result.returncode != 77:
   print(result.stdout + result.stderr)
   raise SystemExit(1)
-output = pathlib.Path(args[args.index('--output-dir') + 1])
-output.mkdir()
-(output / candidate.name).write_bytes(candidate.read_bytes())
+pathlib.Path(args[args.index('-o') + 1]).write_bytes(candidate.read_bytes())
 ''')
     driver.chmod(0o755)
-    runtime = PersesRuntime((str(driver),), "fixture", "fixture", "fixture", None)
-    monkeypatch.setattr(api, "check_perses", lambda: runtime)
-    monkeypatch.setattr("harnessminimizer.reduction_engines.check_perses", lambda: runtime)
+    monkeypatch.setenv("HARNESSMINIMIZER_TREEREDUCE", str(driver))
     monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("DEBUGINFOD_URLS", "")
     monkeypatch.setattr(api, "format_reduced_harness", lambda path: None)

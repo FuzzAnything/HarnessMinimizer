@@ -154,10 +154,10 @@ class SourceAliasTests(unittest.TestCase):
         )
 
     def prepare_runner(self):
-        previous = runner._WORK_DIR, runner._IS_USER_WORK_DIR
+        previous = runner.TREEDUCER_DIR, runner._IS_USER_WORK_DIR
         def restore():
             runner.reset_stack_trace_state()
-            runner._WORK_DIR, runner._IS_USER_WORK_DIR = previous
+            runner.TREEDUCER_DIR, runner._IS_USER_WORK_DIR = previous
         self.addCleanup(restore)
         runner.configure_work_dir(str(Path(self.temp.name) / "work"))
         runner.reset_stack_trace_state()

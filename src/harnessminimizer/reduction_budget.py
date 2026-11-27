@@ -11,7 +11,7 @@ import subprocess
 import time
 from typing import TYPE_CHECKING
 
-from harnessminimizer.safe_files import copy_regular_file
+from harnessminimizer.safe_files import copy_regular_file, nonempty_regular_file
 from harnessminimizer.process_supervisor import run_supervised
 
 if TYPE_CHECKING:
@@ -80,8 +80,12 @@ def run_bounded_reduction(
         # The existing supervisor has stopped the reducer and its descendants
         # before returning control, including testers with their own groups.
         # Perses may have written an initial or intermediate result already;
-        # only a tester checkpoint qualifies for timeout recovery.
-        if not copy_regular_file(checkpoint, candidate, skip_empty=True, create_parent=True):
+        # only a tester checkpoint qualifies for its timeout recovery. Keep
+        # TreeReduce's completed -o result fallback (it writes no initial -o).
+        recovered = copy_regular_file(checkpoint, candidate, skip_empty=True, create_parent=True)
+        if not recovered and invocation is not None and invocation.metadata.get("tool") in {"perses", "wdd", "cdd"}:
+            raise RuntimeError("Reduction budget exhausted without a candidate.")
+        if not nonempty_regular_file(candidate):
             raise RuntimeError("Reduction budget exhausted without a candidate.")
         print(
             f"[+] Reduction budget exhausted after {timeout_seconds:g} seconds; "

@@ -31,18 +31,18 @@ class BudgetPipelineTests(unittest.TestCase):
         self._check_timeout_recovery(snapshot=False, with_fdp=True)
 
     def test_perses_timeout_inlines_fdp_and_restores_macros_with_amortized_linking(self):
-        self._check_timeout_recovery(snapshot=False, with_fdp=True, amortize=True)
+        self._check_timeout_recovery(snapshot=False, with_fdp=True, tool="perses")
 
     def test_perses_normal_completion_uses_its_output_with_the_same_validation(self):
-        self._check_timeout_recovery(snapshot=False, with_fdp=True, amortize=True, finish=True)
+        self._check_timeout_recovery(snapshot=False, with_fdp=True, tool="perses", finish=True)
 
-    def test_engine_error_recovers_without_amortized_linking(self):
+    def test_engine_error_recovers_accepted_tree_candidate_and_validates_export(self):
         self._check_timeout_recovery(snapshot=False, with_fdp=True, engine_error=True)
 
     def test_engine_error_recovers_accepted_perses_candidate_and_restores_macros(self):
-        self._check_timeout_recovery(snapshot=False, with_fdp=True, amortize=True, engine_error=True, with_callback=True)
+        self._check_timeout_recovery(snapshot=False, with_fdp=True, tool="perses", engine_error=True, with_callback=True)
 
-    def _check_timeout_recovery(self, *, snapshot, with_fdp=False, amortize=False, finish=False, engine_error=False, with_callback=False):
+    def _check_timeout_recovery(self, *, snapshot, with_fdp=False, tool="treereduce", finish=False, engine_error=False, with_callback=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             library = root / "library.cpp"
@@ -73,8 +73,21 @@ class BudgetPipelineTests(unittest.TestCase):
             seed.write_bytes(b"fixture")
             tools = root / "bin"
             tools.mkdir()
-            driver = tools / "budget-reducer"
-            driver.write_text(f"#!{sys.executable}\n" + '''import pathlib, shutil, subprocess, sys, time
+            driver = tools / "treereduce-c"
+            driver.write_text(f"#!{sys.executable}\n" + '''import pathlib, subprocess, sys, time
+args=sys.argv[1:]
+if '--help' in args: raise SystemExit(0)
+source=pathlib.Path(args[args.index('-s')+1])
+candidate=source.with_name('budget-candidate.cpp')
+candidate.write_text(source.read_text().replace('int unused = 0;', ''))
+tester=args[args.index('--')+1:]
+tester=[str(candidate) if a == '@@.cpp' else a for a in tester]
+result=subprocess.run(tester, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+if result.returncode != 77: raise SystemExit(1)
+time.sleep(60)
+''')
+            if tool == "perses":
+                driver.write_text(f"#!{sys.executable}\n" + '''import pathlib, shutil, subprocess, sys, time
 args=sys.argv[1:]
 source=pathlib.Path(args[args.index('--input-file')+1])
 script=pathlib.Path(args[args.index('--test-script')+1])
@@ -96,6 +109,7 @@ else:
                 **os.environ,
                 "PATH": os.pathsep.join([str(tools), str(Path(sys.executable).parent), os.environ["PATH"]]),
                 "DEBUGINFOD_URLS": "",
+                "HARNESSMINIMIZER_TREEREDUCE": str(driver),
                 "ASAN_OPTIONS": "detect_leaks=0",
             }
             # Formatting is cosmetic and clang-format isn't needed by the
@@ -103,16 +117,17 @@ else:
             with ExitStack() as stack:
                 stack.enter_context(patch.dict(os.environ, environment))
                 stack.enter_context(patch("harnessminimizer.api.format_reduced_harness"))
-                command = (sys.executable, str(driver)) + (("--finish-fixture",) if finish else ())
-                runtime = PersesRuntime(command, "fixture", "fixture", "fixture", None)
-                stack.enter_context(patch("harnessminimizer.api.check_perses", return_value=runtime))
-                stack.enter_context(patch("harnessminimizer.reduction_engines.check_perses", return_value=runtime))
+                if tool == "perses":
+                    command = (sys.executable, str(driver)) + (("--finish-fixture",) if finish else ())
+                    runtime = PersesRuntime(command, "fixture", "fixture", "fixture", None)
+                    stack.enter_context(patch("harnessminimizer.api.check_perses", return_value=runtime))
+                    stack.enter_context(patch("harnessminimizer.reduction_engines.check_perses", return_value=runtime))
                 result = reduce_with_config(ReductionConfig(
                     harness_path=str(harness),
                     compile_flags=f"-I{Path(__file__).resolve().parents[1] / 'include'}" if with_fdp else None,
                     link_flags=str(root / "libtarget.a"),
                     crash_input=str(seed), work_dir=str(root / "work"),
-                    tool="perses", jobs=8, amortize_link=amortize,
+                    tool=tool, jobs=8, amortize_link=tool == "perses",
                     compilation_mode="pch", stable=True, snapshot=snapshot,
                     reduction_timeout_seconds=10,
                 ))

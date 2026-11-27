@@ -18,7 +18,7 @@ from harnessminimizer.initializer_recovery import reduce_with_initializer_recove
 from harnessminimizer.initializer_protection import (
     prepare_initializer_protection, preparation_compile_flags, verify_preparation,
 )
-from harnessminimizer.process_supervisor import run_supervised, runner_request
+from harnessminimizer.process_supervisor import run_supervised, runner_request, treereduce_binary
 from harnessminimizer.reduction_engines import (
     PersesRuntime, absolute_checker_paths, perses_flags, prepare_reducer_invocation,
     write_perses_test_script,
@@ -61,7 +61,7 @@ def c_case(tmp_path, monkeypatch):
             pytest.skip(f'{name} is required')
     monkeypatch.setenv('PATH', str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('DEBUGINFOD_URLS', '')
-    monkeypatch.setattr(runner, '_WORK_DIR', None)
+    monkeypatch.setattr(runner, 'TREEDUCER_DIR', None)
     monkeypatch.setattr(runner, '_IS_USER_WORK_DIR', False)
     runner.configure_work_dir(str(tmp_path / 'work'))
     runner.reset_stack_trace_state()
@@ -140,22 +140,20 @@ def install_deterministic_reducer(case, monkeypatch, *, stall=False, damage=Fals
     driver.write_text(f'#!{sys.executable}\n' + f'''
 import pathlib, subprocess, sys, time
 args = sys.argv[1:]
-candidate = pathlib.Path(args[args.index('--input-file') + 1])
-candidate.write_text(candidate.read_text().replace('int unused = 0;', ''))
-script = args[args.index('--test-script') + 1]
-result = subprocess.run([script], cwd=candidate.parent)
-if result.returncode: raise SystemExit(1)
+if '--help' in args: raise SystemExit(0)
+source = pathlib.Path(args[args.index('-s') + 1])
+candidate = source.with_name('accepted.c')
+candidate.write_text(source.read_text().replace('int unused = 0;', ''))
+checker = [str(candidate) if a == '@@.c' else a for a in args[args.index('--') + 1:]]
+result = subprocess.run(checker)
+if result.returncode != 77: raise SystemExit(1)
 if {stall!r}: time.sleep(60)
 text = candidate.read_text()
 if {damage!r}: text = text.replace('target(_Generic(data[0], unsigned char: data[0]))', '(void)0')
-output = pathlib.Path(args[args.index('--output-dir') + 1])
-output.mkdir()
-(output / candidate.name).write_text(text)
+pathlib.Path(args[args.index('-o') + 1]).write_text(text)
 ''')
     driver.chmod(0o700)
-    runtime = PersesRuntime((str(driver),), "fixture", "fixture", "fixture", None)
-    monkeypatch.setattr(api, "check_perses", lambda: runtime)
-    monkeypatch.setattr("harnessminimizer.reduction_engines.check_perses", lambda: runtime)
+    monkeypatch.setenv('HARNESSMINIMIZER_TREEREDUCE', str(driver))
 
 
 def assert_portable_c_export(case, result):
@@ -355,8 +353,9 @@ def test_native_c_cli_stages_portable_header(c_case, monkeypatch):
     ])
 
 
-@pytest.mark.skipif(os.environ.get("HARNESSMINIMIZER_TEST_PERSES") != "1", reason="opt-in real Perses test")
-def test_real_perses_parses_native_c(tmp_path):
+def test_real_tree_reducer_parses_native_c(tmp_path):
+    if not shutil.which(treereduce_binary()):
+        pytest.skip('The pinned treereduce-c executable is unavailable')
     source = tmp_path / 'original.c'
     source.write_text(
         '#ifdef __cplusplus\n#error Must compile as C\n#endif\n'

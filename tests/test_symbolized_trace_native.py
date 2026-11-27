@@ -9,14 +9,13 @@ import sys
 import pytest
 
 from harnessminimizer import api, reducer_runner as runner
-from harnessminimizer.reduction_engines import PersesRuntime
 from harnessminimizer.symbolized_trace import TRACE_SET_ENV
 
 
 def test_symbolized_trace_variants_with_pch_and_amortized_link(tmp_path, monkeypatch):
     if not shutil.which("clang++"):
         pytest.skip("clang++ is required")
-    monkeypatch.setattr(runner, "_WORK_DIR", None)
+    monkeypatch.setattr(runner, "TREEDUCER_DIR", None)
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", False)
     # The collector's exact 20-run count is separately tested. Two native
     # samples exercise both variants without repeating expensive compilation.
@@ -72,29 +71,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 '''.replace("COUNTER_PATH", '"' + str(counter) + '"'))
     seed = tmp_path / "seed"
     seed.write_bytes(b"x")
-    driver = tmp_path / "fixture-reducer"
-    driver.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, subprocess, sys
+    driver = tmp_path / "treereduce-c"
+    driver.write_text(f"#!{sys.executable}\n" + '''import os, pathlib, subprocess, sys
 args = sys.argv[1:]
-candidate = pathlib.Path(args[args.index('--input-file') + 1])
-candidate.write_text(candidate.read_text().replace('int unused = 123;', ''))
-tester = json.loads((candidate.parents[2] / 'reduction_engine.json').read_text())['checker_command']
-script = args[args.index('--test-script') + 1]
+if '--help' in args: raise SystemExit(0)
+source = pathlib.Path(args[args.index('-s') + 1])
+candidate = source.with_name('candidate.cpp')
+candidate.write_text(source.read_text().replace('int unused = 123;', ''))
+tester = [str(candidate) if arg == '@@.cpp' else arg for arg in args[args.index('--') + 1:]]
 assert '--pch' in tester and '--amortized-runner-socket' in tester
 assert '--require-reference-traces' in tester
 assert '--stack-depth' not in tester and '--stack-trace-file' not in tester
 assert os.environ.get('HARNESSMINIMIZER_SYMBOLIZED_TRACE_SET')
-check = subprocess.run([script], cwd=candidate.parent, capture_output=True, text=True)
-if check.returncode:
+check = subprocess.run(tester, capture_output=True, text=True)
+if check.returncode != 77:
   print(check.stdout + check.stderr)
   raise SystemExit(1)
-output = pathlib.Path(args[args.index('--output-dir') + 1])
-output.mkdir()
-(output / candidate.name).write_bytes(candidate.read_bytes())
+pathlib.Path(args[args.index('-o') + 1]).write_bytes(candidate.read_bytes())
 ''')
     driver.chmod(0o755)
-    runtime = PersesRuntime((str(driver),), "fixture", "fixture", "fixture", None)
-    monkeypatch.setattr(api, "check_perses", lambda: runtime)
-    monkeypatch.setattr("harnessminimizer.reduction_engines.check_perses", lambda: runtime)
+    monkeypatch.setenv("HARNESSMINIMIZER_TREEREDUCE", str(driver))
     monkeypatch.setenv("PATH", str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"])
     monkeypatch.setattr(api, "format_reduced_harness", lambda path: None)
     result = api.reduce_with_config(api.ReductionConfig(

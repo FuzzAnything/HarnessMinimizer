@@ -11,7 +11,8 @@ from harnessminimizer.reduction_engines import ReducerInvocation
 @pytest.mark.parametrize('checkpoint_kind,recovers', [
     ('accepted', True), ('missing', False), ('stale', False), ('empty', False), ('unchanged', False),
 ])
-def test_failed_engine_ignores_unverified_output(tmp_path, monkeypatch, checkpoint_kind, recovers):
+@pytest.mark.parametrize('tool', ['treereduce', 'perses'])
+def test_failed_engine_ignores_unverified_output(tmp_path, monkeypatch, checkpoint_kind, recovers, tool):
     runner.configure_work_dir(str(tmp_path / 'work'))
     runner.reset_stack_trace_state()
     runner.configure_debug_logging(False)
@@ -22,7 +23,7 @@ def test_failed_engine_ignores_unverified_output(tmp_path, monkeypatch, checkpoi
     checkpoint = Path(runner.get_last_interesting_file())
     if checkpoint_kind == 'stale':
         checkpoint.write_text('int stale;\n')
-    invocation = ReducerInvocation(['fake-engine'], result, exported, {'tool': 'perses'})
+    invocation = ReducerInvocation(['fake-engine'], result, exported, {'tool': tool})
     monkeypatch.setattr(reduction_engines, 'prepare_reducer_invocation', lambda **kwargs: invocation)
     monkeypatch.setattr(runner, 'calibrate_exec_timeout_ms', lambda *a, **k: 1000)
 
@@ -37,12 +38,12 @@ def test_failed_engine_ignores_unverified_output(tmp_path, monkeypatch, checkpoi
     monkeypatch.setattr(runner, 'run_supervised', fail)
     kwargs = dict(harness_path=str(source), fdp_trace_file=None, crash_pattern='crash',
                   compile_flags=None, link_flags=None, crash_input=None,
-                  compilation_mode='direct', symbolize=False, snapshot=True, tool="perses")
+                  compilation_mode='direct', symbolize=False, snapshot=True, tool=tool)
     if recovers:
-        output = runner.run_reducer(**kwargs)
+        output = runner.run_treereducer(**kwargs)
         assert Path(output).read_text() == 'int original;\n'
     else:
         with pytest.raises(RuntimeError, match='Failed to run'):
-            runner.run_reducer(**kwargs)
+            runner.run_treereducer(**kwargs)
         assert not exported.exists()
     runner.reset_stack_trace_state()

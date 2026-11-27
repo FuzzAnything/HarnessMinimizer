@@ -31,8 +31,30 @@ under LICENSE, with the applicable upstream Apache-2.0 WITH LLVM-exception
 conditions preserved. The original LLVM attribution and SPDX notice are
 retained as upstream notices.
 
-External Perses engine
-----------------------
+treereduce
+----------
+
+Upstream project: treereduce
+Source: https://github.com/langston-barrett/treereduce
+Pinned revision: 47655579ae4a19e95d7c4f7911d7ded7719b6d22
+Upstream license: MIT
+Copyright (c) 2025 Brian Langston Barrett
+Full upstream license text: THIRD_PARTY_LICENSES/treereduce.txt
+License source: https://github.com/langston-barrett/treereduce/blob/47655579ae4a19e95d7c4f7911d7ded7719b6d22/LICENSE
+
+Applicable local files and installed component:
+- tools/treereduce/process-cleanup.patch modifies upstream treereduce and
+  includes upstream context and removed lines.
+- tools/treereduce/install.py downloads and verifies the pinned upstream source,
+  applies the patch, and installs the treereduce-c executable.
+
+HarnessMinimizer Authors added process-group cleanup for timeouts/cancellation
+and a supervisor version probe. The patched treereduce source and executable
+are distributed as a whole under LICENSE, with the upstream MIT copyright
+and permission notice preserved. The installer is also covered by LICENSE.
+
+Optional external Perses engines
+-------------------------------
 
 Upstream project: Perses
 Source: https://github.com/uw-pluverse/perses
@@ -47,9 +69,9 @@ Applicable HarnessMinimizer integration files:
 - src/harnessminimizer/reduction_engines.py invokes Perses through its
   command-line interface.
 
-Perses is a separate external program and is not part of the
-HarnessMinimizer distribution. It provides the perses, wdd, and cdd
-presets. Users obtain it separately from upstream; no Perses source or binaries
+Perses is a separate, optional external program and is not part of the
+HarnessMinimizer distribution. It provides the optional perses, wdd, and cdd
+engines. Users obtain it separately from upstream; no Perses source or binaries
 are bundled with HarnessMinimizer.
 
 Our installer and command-line adapter are covered by LICENSE. The separately

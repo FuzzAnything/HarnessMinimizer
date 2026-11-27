@@ -207,7 +207,7 @@ def render_profile_text(summary: dict[str, object]) -> str:
         "",
         "Reducer throughput",
         "------------------",
-        f"tool: {configuration.get('tool', 'unknown')}",
+        f"tool: {configuration.get('tool', 'treereduce')}",
         f"jobs: {configuration.get('jobs')}",
         f"compilation_mode: {configuration.get('compilation_mode')}",
         f"amortize_link: {configuration.get('amortize_link')}",

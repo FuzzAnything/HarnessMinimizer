@@ -20,7 +20,7 @@
 ### Reduction budgets and recovery
 
 - `ReductionConfig.reduction_timeout_seconds` bounds reduction search for
-  all Perses presets. Preparation and final validation are outside
+  TreeReduce, Perses, WDD, and CDD. Preparation and final validation are outside
   that budget. Budget-driven checkpoints start only during the final four
   minutes; do not seed an initial checkpoint.
 - `search_timeout_seconds`, when supplied together with the reduction budget,
@@ -34,7 +34,8 @@
   destinations, and result publication mechanism. The reducer and descendant
   testers must stop before result recovery.
 - On a Perses/WDD/CDD timeout, recover only a current-run accepted checkpoint;
-  the engine's output may still contain its initial input. Clear previous-run
+  the engine's output may still contain its initial input. TreeReduce can also
+  recover a completed, nonempty output file. Clear previous-run
   checkpoints and outputs before starting a new run.
 - On an engine error, checkpoint recovery requires checkpoint saving to be
   enabled. Reject missing, empty, stale, or unchanged checkpoints; do not

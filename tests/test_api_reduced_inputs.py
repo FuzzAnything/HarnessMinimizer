@@ -303,7 +303,7 @@ def test_pipeline_validates_reduced_no_input_harness(tmp_path: Path, optimized, 
     with ExitStack() as stack:
         for name in (
             "configure_work_dir", "reset_stack_trace_state", "reset_last_interesting_state",
-            "reset_poc_runtime_args", "check_perses",
+            "reset_poc_runtime_args", "check_tree_reducer",
             "resolve_amortized_link_inputs", "check_harness_compilation", "check_reducer_crash_pattern",
             "check_reducer_symbolized_crash_pattern", "check_reducer_symbolized_reduction_oracle",
             "format_reduced_harness",
@@ -316,7 +316,7 @@ def test_pipeline_validates_reduced_no_input_harness(tmp_path: Path, optimized, 
         stack.enter_context(patch.object(api, "tag_harness_with_fdp_ids", return_value=api.TaggedHarness(str(reduced), int(fdp_trace))))
         stack.enter_context(patch.object(api, "compile_dump_mode_harness", return_value="unused.out"))
         stack.enter_context(patch.object(api, "dump_fdp_trace", return_value=str(trace)))
-        reducer = stack.enter_context(patch.object(api, "run_reducer", return_value=str(reduced)))
+        reducer = stack.enter_context(patch.object(api, "run_treereducer", return_value=str(reduced)))
         selected, other = validators(stack, not optimized, iter([True]))
         result = api.reduce_with_config(config)
     assert result.success

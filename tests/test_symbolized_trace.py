@@ -236,7 +236,7 @@ def test_verified_aliases_apply_to_every_frame_without_rereading_files(tmp_path,
 
 @pytest.fixture
 def collection_state(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "_WORK_DIR", None)
+    monkeypatch.setattr(runner, "TREEDUCER_DIR", None)
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", False)
     runner.configure_work_dir(str(tmp_path / "work"))
     runner.reset_stack_trace_state()

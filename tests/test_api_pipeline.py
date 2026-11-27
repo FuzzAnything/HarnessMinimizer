@@ -18,7 +18,7 @@ from harnessminimizer.reducer_runner import HarnessCrashDetected
 class TestApiPipeline(unittest.TestCase):
     def test_defaults_use_unoptimized_configuration(self):
         config = ReductionConfig("h.cpp")
-        self.assertEqual(config.tool, "perses")
+        self.assertEqual(config.tool, "treereduce")
         self.assertEqual(config.compilation_mode, "split")
         self.assertTrue(config.symbolize)
         self.assertFalse(config.amortize_link)
@@ -149,10 +149,10 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_uses_prepared_missing_return_harness(
         self,
-        mock_check_perses,
+        mock_check_tree,
         mock_check_compile,
         mock_extract,
     ):
@@ -188,7 +188,7 @@ class TestApiPipeline(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("harness.cpp:4:1", result.failure_reason)
             self.assertIsNone(result.validation_log)
-            mock_check_perses.assert_called_once_with()
+            mock_check_tree.assert_called_once_with()
             prepared_path = mock_check_compile.call_args.args[0]
             prepared_flags = mock_check_compile.call_args.args[1]
             self.assertNotEqual(prepared_path, str(harness))
@@ -204,17 +204,17 @@ class TestApiPipeline(unittest.TestCase):
                 link_flags=None,
             )
 
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.tag_harness_with_fdp_ids")
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     @patch("harnessminimizer.api.resolve_amortized_link_inputs")
     def test_pch_amortized_link_stops_before_reduction_for_harness_crash(
         self,
         mock_resolve_amortized,
-        mock_check_perses,
+        mock_check_tree,
         mock_check_compile,
         mock_extract,
         mock_check_pattern,
@@ -237,7 +237,7 @@ class TestApiPipeline(unittest.TestCase):
 
         self.assertFalse(result.success)
         mock_resolve_amortized.assert_called_once_with("-lm")
-        mock_check_perses.assert_called_once()
+        mock_check_tree.assert_called_once()
         mock_check_compile.assert_called_once()
         mock_check_pattern.assert_not_called()
         self.mock_check_symbolized_pattern.assert_not_called()
@@ -247,7 +247,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.apply_coverage_guided_slice")
@@ -258,7 +258,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_returns_result(
         self,
         mock_check,
@@ -358,7 +358,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
-            tool="perses",
+            tool="treereduce",
             reduction_timeout_seconds=37,
         )
         mock_format.assert_called_once_with(self.reduced_path)
@@ -381,7 +381,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.reset_last_interesting_state")
@@ -391,7 +391,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_passes_snapshot_when_enabled(
         self,
         mock_check,
@@ -430,7 +430,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.apply_coverage_guided_slice")
@@ -441,7 +441,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_pch_mode_is_used_only_for_tree_reduction(
         self,
         mock_check,
@@ -540,7 +540,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.apply_coverage_guided_slice")
@@ -551,7 +551,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_skips_dynamic_slicing_by_default(
         self,
         mock_check,
@@ -592,7 +592,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.reset_last_interesting_state")
@@ -602,7 +602,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_skips_fdp_dump_for_direct_input_harness(
         self,
         mock_check,
@@ -651,7 +651,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
-            tool="perses",
+            tool="treereduce",
             reduction_timeout_seconds=None,
         )
 
@@ -659,7 +659,7 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.validate_crash_pattern")
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.dump_fdp_trace")
     @patch("harnessminimizer.api.compile_dump_mode_harness")
     @patch("harnessminimizer.api.reset_last_interesting_state")
@@ -669,10 +669,10 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_debug_tree_validation_enables_oom_retry(
         self,
-        mock_check_perses,
+        mock_check_tree,
         mock_check_compile,
         mock_extract,
         mock_check_pattern,
@@ -725,7 +725,7 @@ class TestApiPipeline(unittest.TestCase):
 
     @patch("harnessminimizer.api.inline_literals_in_reduced_harness")
     @patch("harnessminimizer.api.format_reduced_harness")
-    @patch("harnessminimizer.api.run_reducer")
+    @patch("harnessminimizer.api.run_treereducer")
     @patch("harnessminimizer.api.reset_last_interesting_state")
     @patch("harnessminimizer.api.reset_stack_trace_state")
     @patch("harnessminimizer.api.configure_work_dir")
@@ -734,10 +734,10 @@ class TestApiPipeline(unittest.TestCase):
     @patch("harnessminimizer.api.check_reducer_crash_pattern")
     @patch("harnessminimizer.api.extract_crash_pattern_from_output")
     @patch("harnessminimizer.api.check_harness_compilation")
-    @patch("harnessminimizer.api.check_perses")
+    @patch("harnessminimizer.api.check_tree_reducer")
     def test_reduce_with_config_defaults_to_symbolized_reduction_oracle(
         self,
-        mock_check_perses,
+        mock_check_tree,
         mock_check_compile,
         mock_extract,
         mock_check_pattern,
@@ -799,7 +799,7 @@ class TestApiPipeline(unittest.TestCase):
             jobs=60,
             profile=False,
             auto_var_init_pattern=False,
-            tool="perses",
+            tool="treereduce",
             reduction_timeout_seconds=None,
         )
         mock_inline.assert_called_once_with(

@@ -103,6 +103,14 @@ def terminate_process_group(process: subprocess.Popen, grace: float = 1.0) -> No
     process.wait(timeout=5)
 
 
+def treereduce_binary() -> str:
+    override = os.environ.get("HARNESSMINIMIZER_TREEREDUCE")
+    if override:
+        return override
+    local = Path(__file__).resolve().parents[2] / ".tools/bin/treereduce-c"
+    return str(local) if local.is_file() else "treereduce-c"
+
+
 def runner_request(socket_path, plugin_path, timeout=305.0):
     """Read either runner protocol using one absolute request deadline."""
     deadline = time.monotonic() + timeout

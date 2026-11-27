@@ -17,7 +17,7 @@ from pathlib import Path
 from harnessminimizer.debug_log import open_debug_log
 from harnessminimizer.safe_files import copy_regular_file, nonempty_regular_file
 from harnessminimizer.process_supervisor import (
-    run_supervised, terminate_process_group, DEFAULT_COMMAND_TIMEOUT,
+    run_supervised, terminate_process_group, treereduce_binary, DEFAULT_COMMAND_TIMEOUT,
 )
 from harnessminimizer.crash_evidence import (
     CANDIDATE_EVIDENCE_ATTEMPTS, REFERENCE_EVIDENCE_ATTEMPTS, EvidenceResult, retry_missing_evidence,
@@ -35,7 +35,7 @@ from harnessminimizer.symbolized_trace import (
     normalize_crash_signature, _frame_matches_harness_source, is_runtime_frame,
 )
 
-_WORK_DIR: str | None = None
+TREEDUCER_DIR: str | None = None
 _IS_USER_WORK_DIR = False
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -69,8 +69,8 @@ REDUCTION_PROFILE_JSON_FILE_NAME = "reduction_profile.json"
 REDUCTION_PROFILE_TEXT_FILE_NAME = "reduction_profile.txt"
 SLICED_HARNESS_SUFFIX = ".sliced"
 DEFAULT_EXEC_TIMEOUT_MS = 300_000
-DEFAULT_REDUCER_JOBS = 60
-MAX_REDUCER_JOBS = 63
+DEFAULT_TREEREDUCE_JOBS = 60
+MAX_TREEREDUCE_JOBS = 63
 CALIBRATED_EXEC_TIMEOUT_MIN_MS = 2_000
 CALIBRATED_EXEC_TIMEOUT_MAX_MS = 60_000
 CALIBRATION_PROBE_RUNS = 5
@@ -221,11 +221,13 @@ class StaticArchiveLinkPlan:
 
 
 def cleanup() -> None:
-    if _WORK_DIR is None or _IS_USER_WORK_DIR:
+    global TREEDUCER_DIR
+
+    if TREEDUCER_DIR is None or _IS_USER_WORK_DIR:
         return
 
     try:
-        shutil.rmtree(_WORK_DIR, ignore_errors=True)
+        shutil.rmtree(TREEDUCER_DIR, ignore_errors=True)
     except OSError:
         pass
 
@@ -436,7 +438,7 @@ def sanitizer_asan_options(
 
 
 def absolutize_link_flags(link_flags: str | None) -> str | None:
-    """Make path-bearing link flags stable when the reducer changes cwd."""
+    """Make path-bearing link flags stable when treereduce changes cwd."""
     if not link_flags:
         return link_flags
     tokens = _split_flags(link_flags)
@@ -1266,7 +1268,7 @@ def filter_amortized_shared_libraries_for_reference(
                     owners = alias_owners.get(name)
                     if owners is None and not Path(name).is_absolute():
                         # The reference was linked before relative input paths
-                        # were made absolute for the reducer's changed cwd.
+                        # were made absolute for treereduce's changed cwd.
                         owners = alias_owners.get(str(Path(name).absolute()))
                     if owners is not None:
                         needed_alias_owners[name] = owners
@@ -1999,19 +2001,19 @@ def pch_tester_args(artifacts: PchArtifacts | None, compilation_mode: str) -> li
 
 
 def configure_work_dir(work_dir: str | None) -> str:
-    global _WORK_DIR, _IS_USER_WORK_DIR
+    global TREEDUCER_DIR, _IS_USER_WORK_DIR
 
     if work_dir:
         path = str(Path(work_dir).expanduser().resolve())
         Path(path).mkdir(parents=True, exist_ok=True)
-        _WORK_DIR = path
+        TREEDUCER_DIR = path
         _IS_USER_WORK_DIR = True
-        return _WORK_DIR
+        return TREEDUCER_DIR
 
-    if _WORK_DIR is None:
-        _WORK_DIR = tempfile.mkdtemp(prefix="harness_minimizer_")
+    if TREEDUCER_DIR is None:
+        TREEDUCER_DIR = tempfile.mkdtemp(prefix="harness_minimizer_")
         _IS_USER_WORK_DIR = False
-    return _WORK_DIR
+    return TREEDUCER_DIR
 
 
 def get_work_dir() -> str:
@@ -2021,15 +2023,15 @@ def get_work_dir() -> str:
 @contextmanager
 def isolated_attempt_work_dir(path: Path):
     """Temporarily switch artifacts, preserving original reference globals."""
-    global _WORK_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
+    global TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
     global SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED
-    previous = _WORK_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
+    previous = TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES
     previous_traces = SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED
     configure_work_dir(str(path))
     try:
         yield
     finally:
-        _WORK_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES = previous
+        TREEDUCER_DIR, _IS_USER_WORK_DIR, REFERENCE_SOURCE_ALIASES = previous
         SYMBOLIZED_TRACE_REFERENCE, SYMBOLIZED_TRACE_REQUIRED = previous_traces
 
 
@@ -2213,6 +2215,15 @@ def _append_restore_transition_stack_diagnostics(
 
     with Path(log_path).open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
+
+
+def check_tree_reducer() -> None:
+    print("[+] Checking for tree-reducer availability...")
+    run_command(
+        [treereduce_binary(), "--help"],
+        "tree-reducer is not available. Run python3 tools/treereduce/install.py or configure HARNESSMINIMIZER_TREEREDUCE",
+    )
+    print("[+] tree-reducer is available.")
 
 
 def reference_harness_compile_command(
@@ -3766,7 +3777,7 @@ def ubsan_pattern_variation_tester_args() -> list[str]:
     return []
 
 
-def run_reducer(
+def run_treereducer(
     harness_path: str,
     fdp_trace_file: str | None,
     crash_pattern: str,
@@ -3778,10 +3789,10 @@ def run_reducer(
     snapshot: bool = False,
     amortize_link: bool = False,
     symbolize: bool = True,
-    jobs: int = DEFAULT_REDUCER_JOBS,
+    jobs: int = DEFAULT_TREEREDUCE_JOBS,
     profile: bool = False,
     auto_var_init_pattern: bool = False,
-    tool: str = "perses",
+    tool: str = "treereduce",
     reduction_timeout_seconds: float | None = None,
 ) -> str:
     from harnessminimizer.reduction_engines import prepare_reducer_invocation, validate_tool
@@ -3795,9 +3806,9 @@ def run_reducer(
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
     validate_compilation_mode(compilation_mode)
-    if not 1 <= jobs <= MAX_REDUCER_JOBS:
+    if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
-            f"Reducer jobs must be between 1 and {MAX_REDUCER_JOBS}."
+            f"Reducer jobs must be between 1 and {MAX_TREEREDUCE_JOBS}."
         )
     if amortize_link and compilation_mode == PHASE3_DIRECT:
         raise ValueError("Amortized linking requires split or PCH mode.")

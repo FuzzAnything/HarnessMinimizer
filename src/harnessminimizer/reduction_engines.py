@@ -18,13 +18,13 @@ import subprocess
 import sys
 import tempfile
 
-from harnessminimizer.process_supervisor import run_supervised
+from harnessminimizer.process_supervisor import run_supervised, treereduce_binary
 from harnessminimizer.safe_files import replace_regular_file
 from harnessminimizer.macro_headers import MacroPreparation, prepare_macro_headers
 from harnessminimizer.source_language import CPP, SourceLanguage, language_for_path
 
 
-TOOL_CHOICES = ("perses", "wdd", "cdd")
+TOOL_CHOICES = ("treereduce", "perses", "wdd", "cdd")
 PERSES_COMMIT = "43c619a54f883169077b2218cd9c4b395e8927c4"
 CANDIDATE_PLACEHOLDER = "@@.cpp"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +40,8 @@ def perses_flags(
     tool: str, *, stable: bool, jobs: int, language: SourceLanguage = CPP,
 ) -> list[str]:
     validate_tool(tool)
+    if tool == "treereduce":
+        raise ValueError("treereduce does not use Perses settings")
     flag_values = {
         "--alg": "node_priority",
         "--cleanup-alg": "node_priority",
@@ -319,7 +321,7 @@ class ReducerInvocation:
 def prepare_reducer_invocation(
     *, source: str, output: str, checker_command: list[str],
     stable: bool, jobs: int, candidate_timeout_seconds: int = 300,
-    tool: str = "perses",
+    tool: str = "treereduce",
 ) -> ReducerInvocation:
     validate_tool(tool)
     language = language_for_path(source)
@@ -328,6 +330,7 @@ def prepare_reducer_invocation(
     if candidate_timeout_seconds <= 0:
         raise ValueError("The candidate timeout must be positive")
     destination = Path(output)
+    # This is deliberately shared by every engine and runs after any PCH split.
     # Do not change the checker: the compiler reads the ordinary macro headers.
     macros = prepare_macro_headers(Path(source), destination.resolve().parent)
     if macros.headers:
@@ -341,6 +344,15 @@ def prepare_reducer_invocation(
         if argument.startswith("--last-interesting-file=")
         or (argument == "--last-interesting-file" and index + 1 < len(checker_command))
     )
+    if tool == "treereduce":
+        command = [treereduce_binary(), "-j", str(jobs), "-s", prepared_source, "-o", output]
+        command.extend(["--stable", "--min-reduction", "1"] if stable else ["--fast"])
+        command.extend(["--timeout", str(candidate_timeout_seconds), "--interesting-exit-code", "77", "--", *checker_command])
+        return ReducerInvocation(
+            command=command, result=destination, destination=destination,
+            metadata={"tool": tool, "command": command, "macro_preparation": macros.metadata()},
+            macros=macros, snapshot_paths=snapshot_paths,
+        )
     checker_cwd = Path.cwd()
     runtime = check_perses()
     checker_command = absolute_checker_paths(checker_command, language=language)

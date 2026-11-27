@@ -1,6 +1,6 @@
 <h1 align="center">HarnessMinimizer</h1>
 
-API callers may set `ReductionConfig.reduction_timeout_seconds`
+API callers using TreeReduce may set `ReductionConfig.reduction_timeout_seconds`
 to bound tree reduction. At the deadline the reducer and its testers stop,
 and a current-run atomic interesting-candidate snapshot goes through normal
 PoC finalization. This does not claim global minimality; callers must still
@@ -65,7 +65,7 @@ Optimized pipeline:
 
 ```bash
 harnessminimizer /path/to/harness.cpp \
-  --tool perses \
+  --tool treereduce \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -77,7 +77,7 @@ Unoptimized pipeline:
 
 ```bash
 harnessminimizer /path/to/harness.cpp \
-  --tool perses \
+  --tool treereduce \
   --compile-flags="-I/path/to/library/include" \
   --link-flags="-L/path/to/library/lib -ltarget" \
   --crash-input /path/to/inputs/crash-input \
@@ -109,8 +109,8 @@ FuzzedDataProvider transformation remains specific to C++ harnesses.
 
 The default is the **unoptimized configuration**: **split compilation** with
 **symbolization on**, **PCH off**, and **amortized linking off**. HarnessMinimizer
-uses **Perses** and **60 workers** by default. The `wdd` and `cdd` presets select
-alternative Perses list minimizers.
+uses **treereduce** and **60 workers** by default. Replace `--tool treereduce`
+with `--tool perses`, `--tool wdd`, or `--tool cdd` to use an optional engine.
 Profiling and stable mode are **off** unless explicitly enabled.
 
 <a id="arguments"></a>
@@ -127,7 +127,7 @@ Profiling and stable mode are **off** unless explicitly enabled.
 | `--crash-input` | Optional crashing input file passed to the harness. |
 | `--compile-flags="..."` | Compiler flags, such as include paths, defines, and language standard. |
 | `--link-flags="..."` | Linker flags, such as library paths, library names, or full archive paths. |
-| `--tool` | Perses preset, one of `perses` (default), `wdd`, or `cdd`. |
+| `--tool` | Reduction engine: `treereduce` (default), `perses`, `wdd`, or `cdd`. |
 | `-j`, `--jobs` | Requested concurrent candidate checks: 1–63, default 60. |
 | `--direct`, `--split`, `--pch` | Compile and link in one step; compile then link separately (default); or use precompiled headers with separate compilation and linking. |
 | `--amortize-link` | Reuse a persistent runner and shared/static target libraries. |
@@ -155,7 +155,7 @@ from harnessminimizer import ReductionConfig, reduce_with_config
 
 result = reduce_with_config(ReductionConfig(
     harness_path="/path/to/harness.cpp",
-    tool="perses",
+    tool="treereduce",
     crash_input="/path/to/inputs/crash-input",
     compile_flags="-I/path/to/library/include",
     link_flags="-L/path/to/library/lib -ltarget",
@@ -176,6 +176,7 @@ the files in `result.generated_headers` alongside it.
 
 Supported reduction engines:
 
+- Treereduce: [https://github.com/langston-barrett/treereduce](https://github.com/langston-barrett/treereduce)
 - Perses, WDD and CDD: [https://github.com/uw-pluverse/perses](https://github.com/uw-pluverse/perses)
 
 ## License
@@ -196,12 +197,12 @@ You can choose either option:
    This repository does not grant a commercial license.
 
 **Third-party code.** Upstream license conditions and notices for LLVM's
-FuzzedDataProvider (**Apache-2.0 with LLVM exceptions**)
+FuzzedDataProvider (**Apache-2.0 with LLVM exceptions**) and treereduce (**MIT**)
 remain applicable under either option. See
 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for details and
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES/) for the upstream license texts.
 
-**Perses.** Perses is a separate external program under
+**Optional Perses engines.** Perses is a separate external program under
 [GPL-3.0-or-later](https://github.com/uw-pluverse/perses/blob/43c619a54f883169077b2218cd9c4b395e8927c4/LICENSE).
 It is **not bundled in HarnessMinimizer's source repository or Python packages**:
 users obtain and build it separately, or the Docker build downloads and installs

@@ -14,7 +14,7 @@ from harnessminimizer.process_supervisor import runner_request
 def work_dir(tmp_path, monkeypatch):
     if not shutil.which("clang++"):
         pytest.skip("clang++ is required")
-    monkeypatch.setattr(runner, "_WORK_DIR", None)
+    monkeypatch.setattr(runner, "TREEDUCER_DIR", None)
     monkeypatch.setattr(runner, "_IS_USER_WORK_DIR", False)
     runner.configure_work_dir(str(tmp_path / "work"))
 

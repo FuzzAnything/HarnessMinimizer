@@ -34,7 +34,7 @@ def fake_runtime():
 class TestEngineSelection(unittest.TestCase):
     def test_cli_defaults_and_choices(self):
         parser = build_parser()
-        self.assertEqual(parser.parse_args(["h.cpp", "-o", "r.cpp"]).tool, "perses")
+        self.assertEqual(parser.parse_args(["h.cpp", "-o", "r.cpp"]).tool, "treereduce")
         for tool in TOOL_CHOICES:
             args = parser.parse_args(["h.cpp", "-o", "r.cpp", "--tool", tool, "--jobs", "4"])
             self.assertEqual((args.tool, args.jobs), (tool, 4))
@@ -59,14 +59,16 @@ class TestEngineSelection(unittest.TestCase):
                         self.assertEqual(opts[f"--{method}-fixpoint"], str(stable and method == tool).lower())
 
 
-    def test_presets_probe_perses_before_compilation(self):
+    def test_perses_api_preflight_does_not_require_treereduce(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(api, "check_perses") as probe, \
+             patch.object(api, "check_tree_reducer") as tree_probe, \
              patch.object(api, "check_harness_compilation", side_effect=RuntimeError("stop after preflight")):
             for tool in ("perses", "wdd", "cdd"):
                 with self.assertRaisesRegex(RuntimeError, "stop after preflight"):
                     api.reduce_with_config(api.ReductionConfig("unused.cpp", work_dir=tmp, tool=tool))
             self.assertEqual(probe.call_count, 3)
+            tree_probe.assert_not_called()
 
     def test_process_api_passes_tool(self):
         with patch.object(api, "reduce_with_config", return_value=api.ReductionResult("r.cpp", "t.cpp", None)) as reduce:
@@ -273,7 +275,7 @@ class TestPersesAdapter(unittest.TestCase):
 
 class TestEngineRunnerRouting(unittest.TestCase):
     def tearDown(self):
-        reducer_runner._WORK_DIR = None
+        reducer_runner.TREEDUCER_DIR = None
         reducer_runner._IS_USER_WORK_DIR = False
         reducer_runner.reset_stack_trace_state()
 
@@ -286,7 +288,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                 source.write_text("#define VALUE 7\nint value;\n")
                 reducer_runner.configure_work_dir(tmp)
                 module = reducer_runner
-                run = reducer_runner.run_reducer
+                run = reducer_runner.run_treereducer
 
                 def pretend_perses(command, **kwargs):
                     output = Path(command[command.index("--output-dir") + 1])
@@ -358,7 +360,7 @@ class TestEngineRunnerRouting(unittest.TestCase):
                  patch.object(reducer_runner, "_append_restore_transition_stack_diagnostics"), \
                  patch.object(reducer_runner, "restore_pch_includes") as restore, \
                  patch.object(reducer_runner, "run_supervised", side_effect=pretend_perses):
-                result = reducer_runner.run_reducer(
+                result = reducer_runner.run_treereducer(
                     str(source), str(root / "trace.log"), "pattern", None, None,
                     str(root / "input.bin"), tool="perses", compilation_mode="pch", amortize_link=True,
                     symbolize=False,
@@ -373,6 +375,25 @@ class TestEngineRunnerRouting(unittest.TestCase):
             self.assertEqual(Path(result).read_text(), "int reduced;")
 
 
+@pytest.mark.parametrize("stable", [False, True])
+@pytest.mark.parametrize("jobs", [1, 63])
+def test_treereduce_command_preserves_checker_arguments(tmp_path, stable, jobs):
+    source = tmp_path / "quoted ' source.cpp"
+    source.write_text("int main() { return 7; }\n")
+    output = tmp_path / "reduced.cpp"
+    checker = ["checker.py", "@@.cpp", "--compile-flags=-I/path with spaces", "$(literal)"]
+    with patch("harnessminimizer.reduction_engines.treereduce_binary", return_value="/tools/treereduce-c"):
+        invocation = prepare_reducer_invocation(
+           source=str(source), output=str(output), checker_command=checker,
+            stable=stable, jobs=jobs,
+        )
+    expected = ["/tools/treereduce-c", "-j", str(jobs), "-s", str(source), "-o", str(output)]
+    expected += ["--stable", "--min-reduction", "1"] if stable else ["--fast"]
+    expected += ["--timeout", "300", "--interesting-exit-code", "77", "--", *checker]
+    assert invocation.command == expected
+    assert invocation.metadata["tool"] == "treereduce"
+
+
 @pytest.mark.parametrize("jobs", [0, 64])
 def test_worker_validation_precedes_source_preparation(tmp_path, jobs):
     with pytest.raises(ValueError, match="between 1 and 63"):
@@ -384,12 +405,12 @@ def test_worker_validation_precedes_source_preparation(tmp_path, jobs):
 
 def test_invocation_preserves_supervision_and_failure_status(tmp_path):
     output = tmp_path / "reduced.cpp"
-    invocation = ReducerInvocation(["fixture-engine"], output, output, {})
+    invocation = ReducerInvocation(["treereduce-c"], output, output, {})
     failure = subprocess.CompletedProcess(invocation.command, 1, "failure", "")
     supervisor = Mock(return_value=failure)
     assert invocation.run(supervisor) is failure
     supervisor.assert_called_once_with(
-        ["fixture-engine"], stderr=subprocess.STDOUT, text=True,
+        ["treereduce-c"], stderr=subprocess.STDOUT, text=True,
         check=False, timeout=None, private_tmpdir=True,
     )
     with pytest.raises(RuntimeError, match="expected result"):
@@ -418,16 +439,18 @@ def test_engine_records_observed_exit_status(tmp_path, status, code):
     assert Path(metadata["log"]).read_bytes() == b"Level=3, count=22\n"
 
 
-def test_default_api_checks_perses_before_compiling(tmp_path):
-    with patch.object(api, "check_perses", side_effect=RuntimeError("missing Perses")) as check, \
-            patch.object(api, "check_harness_compilation") as compile:
-        with pytest.raises(RuntimeError, match="missing Perses"):
+def test_api_checks_treereduce_before_compiling(tmp_path):
+    with patch.object(api, "check_tree_reducer", side_effect=RuntimeError("missing treereduce")) as check, \
+            patch.object(api, "check_harness_compilation") as compile, \
+            patch.object(api, "check_perses") as perses:
+        with pytest.raises(RuntimeError, match="missing treereduce"):
             api.reduce_with_config(api.ReductionConfig("h.cpp", work_dir=str(tmp_path)))
     check.assert_called_once_with()
     compile.assert_not_called()
+    perses.assert_not_called()
 
 
-@pytest.mark.parametrize("tool", ["treereduce", "sfc", "vulcan", "all", "invalid"])
+@pytest.mark.parametrize("tool", ["sfc", "vulcan", "all", "invalid"])
 def test_invalid_api_engine_is_rejected_without_creating_work(tmp_path, tool):
     work = tmp_path / "not-created"
     with pytest.raises(ValueError, match="Unknown reduction tool"):
@@ -453,7 +476,7 @@ def test_perses_preflight_rejects_missing_tools_and_invalid_heap(tmp_path, monke
 
 @pytest.mark.parametrize("tool", ["perses", "wdd", "cdd"])
 def test_failed_perses_engine_does_not_publish_or_fall_back(tmp_path, monkeypatch, tool):
-    monkeypatch.setattr(reducer_runner, "_WORK_DIR", str(tmp_path))
+    monkeypatch.setattr(reducer_runner, "TREEDUCER_DIR", str(tmp_path))
     source = tmp_path / "source.cpp"
     source.write_text("int value;\n")
 
@@ -462,11 +485,13 @@ def test_failed_perses_engine_does_not_publish_or_fall_back(tmp_path, monkeypatc
         return subprocess.CompletedProcess(command, 1)
 
     with patch("harnessminimizer.reduction_engines.check_perses", return_value=fake_runtime()), \
+            patch("harnessminimizer.reduction_engines.treereduce_binary") as tree, \
             patch.object(ReducerInvocation, "publish_result") as publish, \
             patch.object(reducer_runner, "calibrate_exec_timeout_ms", return_value=2000), \
             patch.object(reducer_runner, "run_supervised", side_effect=fail):
         with pytest.raises(RuntimeError, match=f"Failed to run {tool} reducer"):
-            reducer_runner.run_reducer(str(source), None, "pattern", None, None, None,
+            reducer_runner.run_treereducer(str(source), None, "pattern", None, None, None,
                                          tool=tool, symbolize=False, jobs=1)
+    tree.assert_not_called()
     publish.assert_not_called()
     assert not list(tmp_path.glob("*profile*"))
