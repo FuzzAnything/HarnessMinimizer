@@ -14,6 +14,11 @@ STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
+_SIGNATURE_PART_PATTERN = re.compile(
+    rf"(?:(?<!\S)[^:\s()/]+)?{SOURCE_LOCATION_PATTERN.pattern}|"
+    r"(?<=\()[^()\r\n]+(?=\+0x[0-9a-fA-F]+\))|"
+    rf"(?P<address>{MEMORY_ADDRESS_PATTERN.pattern})"
+)
 # Recognize runtime families, including source-less frames. Do not classify a
 # frame merely because its name/path contains words such as "sanitizer".
 _SANITIZER_SYMBOL = re.compile(
@@ -59,12 +64,18 @@ def is_runtime_frame(line: str) -> bool:
 
 
 def normalize_crash_signature(signature: str, escape: bool = False) -> str:
+    """Normalize addresses while keeping source and module paths literal."""
     signature = signature.strip()
-    address_regex = r"0x[0-9a-fA-F]+"
-    if escape:
-        literal_parts = MEMORY_ADDRESS_PATTERN.split(signature)
-        return address_regex.join(re.escape(part) for part in literal_parts)
-    return MEMORY_ADDRESS_PATTERN.sub(address_regex, signature)
+    literal = re.escape if escape else str
+    parts = []
+    end = 0
+    for match in _SIGNATURE_PART_PATTERN.finditer(signature):
+        if match.lastgroup == "address":
+            parts.append(literal(signature[end:match.start()]))
+            parts.append(r"0x[0-9a-fA-F]+")
+            end = match.end()
+    parts.append(literal(signature[end:]))
+    return "".join(parts)
 
 
 def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> bool:

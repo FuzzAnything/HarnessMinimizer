@@ -59,6 +59,43 @@ def test_literal_address_marker_remains_literal(output: str):
     assert re.search(sig, output.replace("__ADDR__", "0x2a")) is None
 
 
+@pytest.mark.parametrize(
+    "output",
+    [
+        "fixture.out: /src/0x12/file.c:358: Assertion `ready` failed.",
+        "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /src/0x12/file.c:42:5",
+        "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior 0x12/src/file.c:42:5",
+    ],
+    ids=["assertion", "ubsan-absolute", "ubsan-relative"],
+)
+def test_address_shaped_source_directory_remains_literal(output: str):
+    sig = _assert_matches_own_output(output)
+    assert re.search(sig, output.replace("0x12", "0x34")) is None
+
+
+@pytest.mark.parametrize(
+    "condition,other",
+    [
+        ("used + (int)len < limit", "used + (int)extra <= capacity"),
+        ('render("label (a vs. b) text") == value', 'render("label (a vs. b) text") == other'),
+        ("value == parse", "value == parse (arg) + extra"),
+        ("code == 0x12", "code == 0x34"),
+    ],
+    ids=["cast", "quoted-text", "longer-condition", "hex-literal"],
+)
+def test_absl_comparison_distinguishes_conditions(condition: str, other: str):
+    sig = _assert_matches_own_output(f"Check failed: {condition} (5 vs. 4)")
+    assert re.search(sig, f"Check failed: {condition} (7 vs. (null)) details")
+    assert re.search(sig, f"Check failed: {other} (5 vs. 4)") is None
+
+
+def test_plain_absl_check_keeps_full_condition():
+    sig = _assert_matches_own_output("Check failed: items.empty()")
+    assert re.search(sig, "F0000 Check failed: items.empty()\r\nnext line")
+    assert re.search(sig, "Check failed: items.empty() && enabled") is None
+    assert re.search(sig, "Check failed: items.empty(1)") is None
+
+
 def test_safe_branches_still_match():
     _assert_matches_own_output("SUMMARY: AddressSanitizer: heap-buffer-overflow")
     _assert_matches_own_output("SUMMARY: libFuzzer: deadly signal")

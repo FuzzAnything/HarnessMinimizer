@@ -583,6 +583,20 @@ class TestNormalizeCrashSignature(unittest.TestCase):
         self.assertIn(r"\#", result)  # # is escaped
         self.assertIn(r"/root", result)
 
+    def test_keeps_address_shaped_paths_literal(self):
+        for location in (
+            "/src/0x12/file.c:42:5",
+            "0x12/src/file.c:42:5",
+            "(/src/0x12/libfixture.so+0x67)",
+        ):
+            with self.subTest(location=location):
+                original = f"#0 0x19 in report {location}"
+                shifted = original.replace("0x19", "0x82").replace("+0x67", "+0x83")
+                self.assertIn("0x12/", normalize_crash_signature(original))
+                pattern = normalize_crash_signature(original, escape=True)
+                self.assertIsNotNone(re.fullmatch(pattern, shifted))
+                self.assertIsNone(re.fullmatch(pattern, shifted.replace("0x12", "0x34")))
+
     def test_escape_false_keeps_text(self):
         sig = "SUMMARY: AddressSanitizer: heap-buffer-overflow at 0xdeadbeef"
         result = normalize_crash_signature(sig, escape=False)
