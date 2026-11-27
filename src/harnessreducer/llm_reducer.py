@@ -96,8 +96,11 @@ Here is the reduced harness:
         return None
     output = content.strip()
     
-    # Extract the code block if it is enclosed in markdown
-    match = re.search(r"```(?:cpp|c|c\+\+)?\s*(.*?)\s*```", output, re.DOTALL | re.IGNORECASE)
+    # Extract the code block if it is enclosed in markdown.
+    # Longest-alternative-first: `c++` before `c`, otherwise a ```c++ fence
+    # loses its language tag into the capture and the code gains a leading
+    # "++" line (#4).
+    match = re.search(r"```(?:c\+\+|cpp|c)?\s*(.*?)\s*```", output, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(1).strip()
 

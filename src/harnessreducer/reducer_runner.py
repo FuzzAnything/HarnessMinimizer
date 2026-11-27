@@ -2471,6 +2471,9 @@ def reset_last_interesting_state() -> None:
 
 def candidate_files_match(path_a: str, path_b: str) -> bool:
     try:
+        # filecmp.cmp caches by (type, size, mtime) signatures; a same-length
+        # rewrite inside one mtime tick would reuse a stale cached True (#3).
+        filecmp.clear_cache()
         return filecmp.cmp(path_a, path_b, shallow=False)
     except FileNotFoundError:
         return False
@@ -2844,7 +2847,9 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
     if abort_assert_match:
         parts = abort_assert_match.group(0).split(":")
         signature = parts[0] + ":" + parts[1]
-        return normalize_crash_signature(signature)
+        # R93: path may contain regex metachars (c++ dirs); the signature is
+        # consumed as a regex by crash_tester (re.search(crash_pattern,...)).
+        return normalize_crash_signature(signature, escape=True)
 
     asan_summary_match = ASAN_SUMMARY_PATTERN.search(output)
     if asan_summary_match:
@@ -2864,11 +2869,13 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
 
     ubsan_match = UBSAN_PATTERN.search(output)
     if ubsan_match:
-        return normalize_crash_signature(ubsan_match.group(0))
+        # R93: group(0) embeds the source path (may contain c++ etc.).
+        return normalize_crash_signature(ubsan_match.group(0), escape=True)
 
     absl_check_match = ABSL_CHECK_PATTERN.search(output)
     if absl_check_match:
-        return normalize_crash_signature(absl_check_match.group(1))
+        # R93: condition text commonly carries casts/parens/plus.
+        return normalize_crash_signature(absl_check_match.group(1), escape=True)
 
     libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
     if libfuzzer_signal_match:

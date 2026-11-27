@@ -217,6 +217,11 @@ def _update_last_interesting_file(source_path: str, snapshot_path: str | None) -
     snapshot = Path(snapshot_path)
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # filecmp.cmp caches outcomes keyed by (type, size, mtime) stat
+        # signatures; a same-length rewrite inside one mtime tick keeps the
+        # signature identical and would reuse a stale cached True, leaving the
+        # checkpoint on old bytes (#3).
+        filecmp.clear_cache()
         if snapshot.exists() and filecmp.cmp(source_path, snapshot_path, shallow=False):
             return
     except FileNotFoundError:

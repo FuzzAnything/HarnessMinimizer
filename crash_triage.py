@@ -773,6 +773,9 @@ def compile_include_roots(compile_flags: str | None) -> list[Path]:
         elif token.startswith("-iquote") and len(token) > len("-iquote"):
             candidate = token[len("-iquote") :]
             index += 1
+        elif token.startswith("-idirafter") and len(token) > len("-idirafter"):  # HarnessMinimizer#6: attached -idirafterDIR is valid gcc syntax; include root was being dropped
+            candidate = token[len("-idirafter") :]
+            index += 1
         else:
             index += 1
 
