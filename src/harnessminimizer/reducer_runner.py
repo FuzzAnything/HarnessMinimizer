@@ -32,7 +32,7 @@ from harnessminimizer.source_alias import (
 )
 from harnessminimizer.symbolized_trace import (
     TRACE_SET_ENV, SymbolizedTraceReference, extract_stack_trace,
-    normalize_crash_signature, _frame_matches_harness_source,
+    normalize_crash_signature, _frame_matches_harness_source, is_runtime_frame,
 )
 
 _WORK_DIR: str | None = None
@@ -2362,58 +2362,6 @@ def extract_first_sanitizer_stack_trace(output: str) -> str | None:
     return "\n".join(frames)
 
 
-_GENERIC_ABORT_FRAME_TOKENS = (
-    " in __pthread_kill_implementation ",
-    " in __pthread_kill_internal ",
-    " in pthread_kill ",
-    " in raise ",
-    " in abort ",
-    " in __assert_fail ",
-)
-
-_GENERIC_ABORT_LOCATION_SUFFIXES = (
-    "/pthread_kill.c",
-    "/raise.c",
-    "/abort.c",
-    "/assert.c",
-)
-
-_GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS = (
-    " in __asan_memset ",
-    " in __asan_memcpy ",
-    " in __asan_memmove ",
-    " in __interceptor_memset ",
-    " in __interceptor_memcpy ",
-    " in __interceptor_memmove ",
-)
-
-_GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES = (
-    "/asan_interceptors_memintrinsics.cpp",
-    "/sanitizer_common_interceptors_memintrinsics.inc",
-    "/asan_malloc_linux.cpp",
-    "/asan_malloc.cpp",
-    "/asan_new_delete.cpp",
-    "/sanitizer_allocator_dlsym.h",
-    "/sanitizer_allocator.cpp",
-    "/sanitizer_allocator.h",
-)
-
-
-def _is_generic_abort_frame(line: str, location: str) -> bool:
-    location_path = location.split(":", 1)[0]
-    return any(token in line for token in _GENERIC_ABORT_FRAME_TOKENS) or any(
-        location_path.endswith(suffix) for suffix in _GENERIC_ABORT_LOCATION_SUFFIXES
-    )
-
-
-def _is_generic_sanitizer_wrapper_frame(line: str, location: str) -> bool:
-    location_path = location.split(":", 1)[0]
-    return any(token in line for token in _GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS) or any(
-        location_path.endswith(suffix)
-        for suffix in _GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES
-    )
-
-
 def extract_symbolized_crash_location(
     output: str,
     harness_path: str | None = None,
@@ -2422,18 +2370,11 @@ def extract_symbolized_crash_location(
     trace = extract_stack_trace(output, harness_path=harness_path)
     if not trace:
         return None
-    first_location: str | None = None
     for line in trace.splitlines():
         match = SOURCE_LOCATION_PATTERN.search(line)
         if match:
-            location = match.group(0)
-            if first_location is None:
-                first_location = location
-            if not _is_generic_abort_frame(line, location) and not _is_generic_sanitizer_wrapper_frame(
-                line, location
-            ):
-                return location
-    return first_location
+            return match.group(0)
+    return None
 
 
 def extract_harness_crash_location(
@@ -2460,13 +2401,10 @@ def extract_harness_crash_location(
     for line in trace.splitlines():
         match = SOURCE_LOCATION_PATTERN.search(line)
         location = match.group(0) if match else ""
-        if location and (
-            _is_generic_abort_frame(line, location)
-            or _is_generic_sanitizer_wrapper_frame(line, location)
-        ):
-            continue
         if _frame_matches_harness_source(line, harness_path):
             return location or line.strip()
+        if is_runtime_frame(line):
+            continue
         if location:
             return None
     return None

@@ -55,10 +55,14 @@
 - In symbolized mode, UBSan diagnostic wording may differ only when the recorded
   crash location and a complete recorded library trace match. This exception
   does not apply to unsymbolized crash-pattern checks.
-- Generated executable paths and build IDs may be normalized for source-less
-  ASan `memcpy`, `memmove`, and `memset` interceptor frames. Keep the interceptor
-  identity, frame order/depth, and project source coordinates significant.
-  Retained crash evidence must remain unchanged.
+- Trace extraction excludes identifiable sanitizer and generic abort wrappers,
+  then stops at the first harness frame. Runtime classification uses reserved
+  symbol families, compiler-rt source paths, and sanitizer shared-library names;
+  unknown frames are retained. Renumber only retained frames so runtime depth
+  changes do not affect matching. Keep library functions, order, source
+  coordinates, and verified path aliases significant. Crash-location selection
+  and harness-crash detection use the same runtime classifier. Preserve raw
+  diagnostic traces and unsymbolized frame-depth counting.
 - Reference, plugin, and candidate replays inherit an embedding application's
   explicit `ASAN_OPTIONS` setting of `detect_leaks=0` or `detect_leaks=1`.
   Other required ASan settings, including exit status, symbolization, and

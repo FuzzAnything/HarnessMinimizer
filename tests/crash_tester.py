@@ -868,7 +868,7 @@ def _check_stack_trace(
         print("[-] No stack trace found in symbolized output.")
         return False
 
-    if re.search(stored_pattern, run_log) is not None:
+    if re.search(stored_pattern, raw_trace) is not None:
         print("[+] Stack trace validation passed.")
         return True
 

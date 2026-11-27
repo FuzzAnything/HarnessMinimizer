@@ -14,23 +14,48 @@ STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
 MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
-_RUNTIME_MEMORY_FRAME = re.compile(
-    r"\bin (?:__asan_|__interceptor_)(?:memcpy|memmove|memset)\s+"
-    r"\([^()\n]+\+0x[0-9a-fA-F]+\)(?:\s+\(BuildId: [0-9a-fA-F]+\))?\s*$"
+# Recognize runtime families, including source-less frames. Do not classify a
+# frame merely because its name/path contains words such as "sanitizer".
+_SANITIZER_SYMBOL = re.compile(
+    r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in (?:__(?:asan|ubsan|msan|tsan|hwasan|lsan|dfsan|sanitizer|interception)"
+    r"(?:::|_)|___?interceptor_)"
+)
+_SANITIZER_SOURCE = re.compile(
+    r"(?:^|/)compiler-rt/lib/"
+    r"(?:asan|ubsan|msan|tsan|hwasan|lsan|dfsan|sanitizer_common|interception)/"
+)
+# Source remapping can remove the compiler-rt directory. Keep recognition of
+# the runtime files used by the crash-location selector in that case.
+_SANITIZER_SOURCE_NAMES = {
+    "asan_interceptors_memintrinsics.cpp", "sanitizer_common_interceptors_memintrinsics.inc",
+    "asan_malloc_linux.cpp", "asan_malloc.cpp", "asan_new_delete.cpp",
+    "sanitizer_allocator_dlsym.h", "sanitizer_allocator.cpp", "sanitizer_allocator.h",
+}
+_SANITIZER_MODULE = re.compile(
+    r"\((?:[^()\n]*/)?(?:lib(?:asan|ubsan|msan|tsan|hwasan|lsan)"
+    r"|libclang_rt\.(?:asan|ubsan|msan|tsan|hwasan|lsan|dfsan)(?:[-_.][^/()\s+]*)?)"
+    r"\.so(?:\.[0-9]+)*\+0x[0-9a-fA-F]+\)"
+)
+_ABORT_SYMBOL = re.compile(
+    r"^\s*#\d+\s+0x[0-9a-fA-F]+\s+in (?:__GI_)?"
+    r"(?:__pthread_kill_implementation|__pthread_kill_internal|pthread_kill|"
+    r"raise|abort|__assert_fail)(?=\s|\(|$)"
 )
 
 
-def _canonical_runtime_frame(line: str) -> str:
-    # Some compiler-rt builds lack source coordinates for their memory
-    # interceptors. ASan then reports the *generated executable's* path/build ID.
-    # Reference sampling, PCH validation and the amortized runner link distinct
-    # executables, so those image annotations are not a target crash identity.
-    # Keep frame order, count, PC and exact interceptor name; project frames and
-    # runtime frames with source coordinates remain unchanged.
-    match = _RUNTIME_MEMORY_FRAME.search(line)
-    if match is None or SOURCE_LOCATION_PATTERN.search(line):
-        return line
-    return line[:match.start()] + match.group().split(" (", 1)[0]
+def is_runtime_frame(line: str) -> bool:
+    """Identify sanitizer and generic abort wrappers without discarding unknown frames."""
+    if _SANITIZER_SYMBOL.search(line) or _SANITIZER_MODULE.search(line) or _ABORT_SYMBOL.search(line):
+        return True
+    location = SOURCE_LOCATION_PATTERN.search(line)
+    if location is None:
+        return False
+    path = location.group(1)
+    name = path.rsplit("/", 1)[-1]
+    return (
+        bool(_SANITIZER_SOURCE.search(path))
+        or name in _SANITIZER_SOURCE_NAMES
+    )
 
 
 def normalize_crash_signature(signature: str, escape: bool = False) -> str:
@@ -62,7 +87,12 @@ def _frame_matches_harness_source(frame_line: str, harness_path: str | None) -> 
 
 
 def extract_stack_trace(output: str, harness_path: str | None = None) -> str | None:
-    """Extract only the first contiguous trace, stopping before harness frames."""
+    """Extract library frames from the first trace, stopping before the harness.
+
+    Drop identifiable sanitizer/abort frames even when interleaved with library
+    frames. Renumber the retained frames so runtime depth does not affect trace
+    identity. Preserve unknown frames and all library source coordinates.
+    """
     frames = []
     in_first_trace = False
     for line in output.splitlines():
@@ -72,7 +102,9 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
                 break
             if LLVMFuzzerTestOneInput_PATTERN.search(line):
                 break
-            frames.append(_canonical_runtime_frame(line))
+            if is_runtime_frame(line):
+                continue
+            frames.append(re.sub(r"^\s*#\d+", f"    #{len(frames)}", line))
         elif in_first_trace:
             break
     return "\n".join(frames) if frames else None

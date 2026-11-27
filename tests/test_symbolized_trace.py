@@ -47,7 +47,7 @@ def test_address_and_harness_changes_are_ignored_but_library_changes_are_not():
         assert recorded.evaluate(report(frames), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
 
 
-def test_runtime_memcpy_image_does_not_change_the_same_target_crash_identity():
+def test_runtime_wrappers_do_not_change_the_same_target_crash_identity():
     def stack(image, build, *, wrapper="__asan_memcpy", line=69):
         return (
             f"    #0 0x5555559e763e in {wrapper} ({image}+0x49363e) (BuildId: {build})\n"
@@ -58,17 +58,125 @@ def test_runtime_memcpy_image_does_not_change_the_same_target_crash_identity():
     for image in ["/work/calibration/1.out", "/work/pch/candidate.out", "/work/harness_runner"]:
         assert recorded.evaluate(stack(image, "f12cdb87d4f0fa99"), "/tmp/harness.cpp")[0] is EvidenceResult.MATCH
     assert recorded.evaluate(stack("/work/candidate.out", "abc", line=70), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
-    assert recorded.evaluate(stack("/work/candidate.out", "abc", wrapper="__asan_memmove"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+    assert recorded.evaluate(stack("/work/candidate.out", "abc", wrapper="__asan_memmove"), "/tmp/harness.cpp")[0] is EvidenceResult.MATCH
+
+
+def test_runtime_internal_memmove_image_does_not_change_the_same_target_crash_identity():
+    def stack(image, build, *, line=3345):
+        return (
+            f"    #0 0x620af9b9e670 in __sanitizer_internal_memmove "
+            f"({image}+0x24b670) (BuildId: {build})\n"
+            f"    #1 0x620af9b833fa in __asan_memmove "
+            f"({image}+0x2303fa) (BuildId: {build})\n"
+            f"    #2 0x620af9c3fb5c in TIFFReadRGBATileExt "
+            f"/job/source/libtiff/tif_getimage.c:{line}:9\n"
+            "    #3 0x620af9bcad72 in LLVMFuzzerTestOneInput /job/source/harness.cpp:40:17\n"
+        )
+
+    recorded = reference(stack(
+        "/tmp/stack_depth_stability_probes/symbolize1_1.out", "9d7e563e3f1c864f",
+    ))
+    replay = stack("/tmp/precheck/poc.out", "abcdef0123456789")
+    assert recorded.evaluate(replay, "/job/source/harness.cpp") == (EvidenceResult.MATCH, 1)
+
+    changed_library_line = stack("/tmp/precheck/poc.out", "abcdef0123456789", line=3346)
+    assert recorded.evaluate(changed_library_line, "/job/source/harness.cpp")[0] is EvidenceResult.MISMATCH
 
 
 @pytest.mark.parametrize("frame", [
     "target_memcpy (/work/reference.out+0x123) (BuildId: abc)",
-    "__asan_memcpy /compiler/asan_interceptors.cpp:12:4 (/work/reference.out+0x123) (BuildId: abc)",
+    "target_memmove /project/sanitizer/buffer.cpp:12:4 (/work/reference.out+0x123) (BuildId: abc)",
 ])
-def test_non_runtime_image_identity_and_source_coordinates_remain_strict(frame):
+def test_unknown_image_identity_and_source_coordinates_remain_strict(frame):
     stack = "    #0 0x123 in " + frame + "\n" + report(A)
     recorded = reference(stack)
     assert recorded.evaluate(stack.replace("reference.out", "different.out"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+
+
+def runtime_report(runtime_frames, *, library_frames=A):
+    frames = [*runtime_frames, *(
+        f"in {name} {path}:{line}:3" for name, path, line in library_frames
+    ), "in helper /tmp/harness.cpp:99:1", "in outer /src/outer.cc:1:1"]
+    return "\n".join(f"    #{index} 0x{index+100:x} {frame}" for index, frame in enumerate(frames)) + "\n"
+
+
+@pytest.mark.parametrize("runtime", [
+    "in __sanitizer_internal_memmove (/tmp/ref.out+0x123) (BuildId: abc)",
+    "in __sanitizer::BufferedStackTrace::UnwindImpl(int) /rt/unwind.cpp:9:2",
+    "in __asan::ReportGenericError(int) (/tmp/ref.out+0x456)",
+    "in __ubsan_handle_type_mismatch_v1 (/tmp/ref.out+0x789)",
+    "in __ubsan::Diag::~Diag() /rt/ubsan_diag.cpp:12:2",
+    "in __msan_warning (/tmp/ref.out+0x123)",
+    "in __tsan::ReportRace() (/tmp/ref.out+0x123)",
+    "in __hwasan_tag_mismatch4 (/tmp/ref.out+0x123)",
+    "in __lsan::CheckForLeaks() (/tmp/ref.out+0x123)",
+    "in __interceptor_strlen (/tmp/ref.out+0x123)",
+    "in ___interceptor_strcmp (/tmp/ref.out+0x123)",
+    "in malloc /opt/llvm/compiler-rt/lib/asan/asan_malloc_linux.cpp:65:7",
+    "in Use /opt/llvm/compiler-rt/lib/asan/../sanitizer_common/sanitizer_allocator_dlsym.h:27:43",
+    "in HandleAllocation /build/compiler-rt/lib/msan/msan_allocator.cpp:92:1",
+    "(/usr/lib/libasan.so.8+0x123)",
+    "(/opt/clang/lib/libclang_rt.ubsan_standalone-x86_64.so+0x123)",
+    "in abort /build/glibc/stdlib/abort.c:79:7",
+])
+def test_runtime_families_are_removed_from_all_symbolized_oracles(runtime):
+    output = runtime_report([runtime])
+    trace = extract_stack_trace(output, "/tmp/harness.cpp")
+    assert normalize_crash_signature(trace) == normalize_crash_signature(
+        extract_stack_trace(report(A), "/tmp/harness.cpp"),
+    )
+    assert runner.extract_symbolized_crash_location(output, "/tmp/harness.cpp") == "/src/library.cc:7:3"
+    assert runner.count_first_stack_trace_frames(output) == 5
+    assert runner.extract_harness_crash_location(output, "/tmp/harness.cpp") is None
+    # The same filtering still exposes an actual crash inside a harness helper.
+    harness_crash = runtime_report([runtime], library_frames=[])
+    assert runner.extract_harness_crash_location(harness_crash, "/tmp/harness.cpp") == "/tmp/harness.cpp:99:1"
+    assert extract_stack_trace(harness_crash, "/tmp/harness.cpp") is None
+
+
+def test_runtime_count_and_positions_do_not_change_library_trace_identity(tmp_path):
+    original = runtime_report(["in __asan_memcpy (/tmp/ref.out+0x123)"])
+    replay = """    #0 0xaaa in __sanitizer_internal_memmove (/work/candidate.out+0x123) (BuildId: def)
+    #1 0xbbb in __asan_memmove (/work/candidate.out+0x456)
+    #2 0xccc in crash /src/library.cc:7:3
+    #3 0xddd in __interceptor_strlen (/work/candidate.out+0x789)
+    #4 0xeee in via_a /src/library.cc:12:3
+    #5 0xfff in helper /tmp/harness.cpp:40:1
+    #6 0x123 in should_not_be_included /src/later.cc:50:1
+"""
+    recorded = reference(original, replay)
+    assert len(recorded.normalized_patterns) == 1
+    assert recorded.evaluate(replay, "/tmp/harness.cpp") == (EvidenceResult.MATCH, 1)
+    assert recorded.evaluate(replay.replace("via_a", "via_b"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+    assert recorded.evaluate(replay.replace("library.cc:7:3", "library.cc:8:3"), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+    assert recorded.evaluate(replay.replace("    #4 0xeee in via_a /src/library.cc:12:3\n", ""), "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+    # Legacy stack-file validation must compare the filtered trace too.
+    from tests.crash_tester import _check_stack_trace
+    pattern = tmp_path / "stack.pattern"
+    pattern.write_text(recorded.normalized_patterns[0])
+    assert _check_stack_trace(replay, str(pattern), "/tmp/harness.cpp")
+
+
+@pytest.mark.parametrize("frame", [
+    "in target_memcpy /src/target.cpp:1:2",
+    "in my__asan_memcpy /src/target.cpp:1:2",
+    "in sanitize_buffer /project/sanitizer/process.cpp:2:3",
+    "in check_condition /src/library/assert.c:3:4",
+    "in call(__sanitizer::Thing*) /src/target.cpp:1:2",
+    "(/usr/lib/libasan_helper.so+0x123)",
+    "(/tmp/candidate.out+0x123) (BuildId: abc)",
+])
+def test_unknown_or_target_frames_are_not_discarded(frame):
+    output = runtime_report([frame])
+    assert frame in extract_stack_trace(output, "/tmp/harness.cpp")
+    assert reference(report(A)).evaluate(output, "/tmp/harness.cpp")[0] is EvidenceResult.MISMATCH
+
+
+def test_runtime_only_first_trace_does_not_fall_through_to_another_trace():
+    output = "    #0 0xaaa in __asan::ReportGenericError() (/tmp/poc.out+0x123)\n\n" + report(A)
+    assert extract_stack_trace(output, "/tmp/harness.cpp") is None
+    assert runner.extract_symbolized_crash_location(output, "/tmp/harness.cpp") is None
+    assert reference(report(A)).evaluate(output, "/tmp/harness.cpp")[0] is EvidenceResult.MISSING_EVIDENCE
 
 
 def test_recorded_alternatives_match_without_learning_another():
