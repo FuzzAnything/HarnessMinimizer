@@ -203,6 +203,8 @@ class MacroPreparation:
 
 
 def prepare_macro_headers(source_path: Path, work_dir: Path) -> MacroPreparation:
+    if source_path.suffix == ".rs":
+        return MacroPreparation(source_path)
     source = _read(source_path)
     definitions = [directive for directive in _directives(source) if directive.keyword == "define"]
     if not definitions:

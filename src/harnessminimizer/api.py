@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import re
@@ -9,7 +9,7 @@ from harnessminimizer.safe_files import open_regular_file, replace_regular_file,
 from harnessminimizer.process_supervisor import termination_guard
 from harnessminimizer.source_cleanup import clean_reduced_source
 from harnessminimizer.source_language import (
-    C, CPP, SourceLanguage, language_for_path, language_scope,
+    C, CPP, RUST, SourceLanguage, language_for_path, language_scope,
     iter_nodes as _iter_nodes, node_text as _node_text,
 )
 from harnessminimizer.reduction_engines import check_perses, validate_tool
@@ -180,7 +180,7 @@ def tag_harness_with_fdp_ids(
 ) -> TaggedHarness:
     source_path = Path(harness_path)
     source = source_path.read_bytes().decode("utf-8")
-    if language_for_path(source_path) == C:
+    if language_for_path(source_path) in {C, RUST}:
         transformed, count = source, 0
     else:
         transformed, count = inject_ids(source, start_id, marker)
@@ -227,14 +227,14 @@ def _clean_source_file(path: Path, start_id: int | None, marker: str, *, add_hea
 
 
 def _prepend_additional_headers(harness_path: str) -> None:
-    if language_for_path(harness_path) == C:
+    if language_for_path(harness_path) in {C, RUST}:
         return
     _clean_source_file(Path(harness_path), None, "FDP_ID", add_headers=True)
 
 
 
 def _finalize_fallback_harness(reduced_harness_path: str, start_id: int | None, marker: str = "FDP_ID") -> str:
-    if language_for_path(reduced_harness_path) == C:
+    if language_for_path(reduced_harness_path) in {C, RUST}:
         return reduced_harness_path
     removed = _clean_source_file(Path(reduced_harness_path), start_id, marker, add_headers=True)
     if removed:
@@ -723,10 +723,13 @@ def _prepare_fuzzer_entry_return(
     source_path = Path(harness_path)
     if not source_path.is_file():
         return PreparedHarnessSource(harness_path, compile_flags)
+    language = language_for_path(source_path)
+    if language == RUST:
+        return PreparedHarnessSource(harness_path, compile_flags)
 
     source = source_path.read_bytes().decode("utf-8")
     source_bytes = source.encode("utf-8")
-    tree = language_for_path(source_path).parser().parse(source_bytes)
+    tree = language.parser().parse(source_bytes)
     matches = []
     for node in _iter_nodes(tree.root_node):
         if node.type != "function_definition":
@@ -918,35 +921,57 @@ def _inline_direct_input_in_reduced_harness(
         inline_harness_path = str(Path(base_harness_path).with_suffix(f".inline{language.suffix}"))
         header_path = Path(inline_harness_path).with_name(DIRECT_INPUT_HEADER_NAME)
         generated_headers: tuple[str, ...] = ()
-        language_kwargs = (
-            {"language": language, "input_names": _c_input_names(source)} if language == C else {}
-        )
-        try:
-            transformed = _inline_direct_input_source(
-                source,
-                DIRECT_INPUT_HEADER_NAME,
-                **language_kwargs,
-            )
-        except ValueError as exc:
-            transformed = source
-            print(
-                "[!] Input parameters could not be mapped safely; validating without "
-                f"direct-input inlining for the {attempt_label} harness: {exc}"
-            )
-        else:
-            if transformed == source:
+        if language == RUST:
+            from harnessminimizer.rust_support import inline_rust_direct_input
+            try:
+                transformed = inline_rust_direct_input(source, crash_bytes)
+            except ValueError as exc:
+                transformed = source
                 print(
-                    "[+] No named input parameters remain; validating without "
-                    "direct-input inlining."
+                    "[!] Rust input parameter could not be mapped safely; validating without "
+                    f"direct-input inlining for the {attempt_label} harness: {exc}"
                 )
-
-        if transformed != source:
-            replace_regular_file(header_path, (_direct_input_header_source(crash_bytes, **language_kwargs)).encode("utf-8"))
-            generated_headers = (str(header_path),)
-            print(
-                f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
-                f"{inline_harness_path} using {header_path}"
+            else:
+                if transformed != source:
+                    print(
+                        f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
+                        f"self-contained Rust harness {inline_harness_path}"
+                    )
+                else:
+                    print(
+                        "[+] No named Rust input parameter remains; validating without "
+                        "direct-input inlining."
+                    )
+        else:
+            language_kwargs = (
+                {"language": language, "input_names": _c_input_names(source)} if language == C else {}
             )
+            try:
+                transformed = _inline_direct_input_source(
+                    source,
+                    DIRECT_INPUT_HEADER_NAME,
+                    **language_kwargs,
+                )
+            except ValueError as exc:
+                transformed = source
+                print(
+                    "[!] Input parameters could not be mapped safely; validating without "
+                    f"direct-input inlining for the {attempt_label} harness: {exc}"
+                )
+            else:
+                if transformed == source:
+                    print(
+                        "[+] No named input parameters remain; validating without "
+                        "direct-input inlining."
+                    )
+
+            if transformed != source:
+                replace_regular_file(header_path, (_direct_input_header_source(crash_bytes, **language_kwargs)).encode("utf-8"))
+                generated_headers = (str(header_path),)
+                print(
+                    f"Inlined direct crash input ({len(crash_bytes)} bytes) into "
+                    f"{inline_harness_path} using {header_path}"
+                )
         replace_regular_file(Path(inline_harness_path), transformed.encode("utf-8"))
         _prepend_additional_headers(inline_harness_path)
 
@@ -1372,13 +1397,25 @@ def reduce_with_config(config: ReductionConfig) -> ReductionResult:
         if not math.isfinite(config.reduction_timeout_seconds) or config.reduction_timeout_seconds <= 0:
             raise ValueError("Reduction timeout must be finite and positive.")
     language = language_for_path(config.harness_path)
-    language.parser()  # Check the grammar dependency before expensive setup.
+    if language.has_tree_sitter:
+        language.parser()  # Check the grammar dependency before expensive setup.
     with language_scope(language), search_budget(config.search_timeout_seconds):
         return _reduce_with_config(config)
 
 
 def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     configure_work_dir(config.work_dir)
+    language = language_for_path(config.harness_path)
+    if language == RUST:
+        effective_tool = "perses" if config.tool == "treereduce" else config.tool
+        config = replace(
+            config,
+            compilation_mode=PHASE3_DIRECT,
+            amortize_link=False,
+            slice_enabled=False,
+            protect_initializers=False,
+            tool=effective_tool,
+        )
     if config.protect_initializers and config.slice_enabled:
         raise ValueError(
             "--protect-initializers cannot currently be combined with --slice; "
@@ -1398,7 +1435,7 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
         raise ValueError("--amortize-link requires split or PCH mode; it cannot be used with direct/single-step mode.")
     if config.amortize_link:
         resolve_amortized_link_inputs(config.link_flags)
-    if has_static_target_libraries(config.link_flags):
+    if language != RUST and has_static_target_libraries(config.link_flags):
         print("[WARN] Static target libraries were detected. Cannot fully guarantee final crash preservation.")
     validation_compilation_mode = PHASE3_DIRECT
     if config.tool == "treereduce":
@@ -1413,6 +1450,13 @@ def _reduce_with_config(config: ReductionConfig) -> ReductionResult:
     harness_path = prepared_source.path
     compile_flags = prepared_source.compile_flags
     check_harness_compilation(harness_path, compile_flags, config.link_flags)
+    if language == RUST:
+        from harnessminimizer.rust_support import RUST_DIRECT_PLAN_FILE
+
+        plan_path = Path(get_work_dir()) / RUST_DIRECT_PLAN_FILE
+        if plan_path.is_file() and "--rust-plan-file" not in (compile_flags or ""):
+            plan_flag = f"--rust-plan-file={plan_path}"
+            compile_flags = f"{compile_flags} {plan_flag}".strip() if compile_flags else plan_flag
     crash_pattern_kwargs = {}
     if config.symbolize:
         crash_pattern_kwargs["record_symbolized_crash_location"] = True

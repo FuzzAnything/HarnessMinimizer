@@ -34,7 +34,7 @@ from harnessminimizer.source_alias import (
 )
 from harnessminimizer.symbolized_trace import TRACE_SET_ENV, SymbolizedTraceReference, extract_stack_trace
 from harnessminimizer.reduction_budget import CHECKPOINT_START_ENV
-from harnessminimizer.source_language import C, CPP, language_for_path
+from harnessminimizer.source_language import C, CPP, RUST, language_for_path
 
 from harnessminimizer.reducer_runner import (
     AMORTIZED_FALLBACK_STATE_SUFFIX,
@@ -388,8 +388,35 @@ def auto_var_init_flags(args: argparse.Namespace) -> list[str]:
 def source_language(args: argparse.Namespace):
     selected = getattr(args, "source_language", None)
     if selected is not None:
-        return C if selected == "c" else CPP
+        if selected == "c":
+            return C
+        if selected == "rust":
+            return RUST
+        return CPP
     return language_for_path(args.source)
+
+
+def compile_rust(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
+    _reset_compile_failure_state(args)
+    from harnessminimizer.rust_support import compile_rust_candidate
+
+    started_ns = time.perf_counter_ns() if getattr(args, "profile_file", None) else None
+    try:
+        rc, compile_cmd, err_msg = compile_rust_candidate(
+            args.source,
+            output_path,
+            args.compile_flags,
+            args.link_flags,
+        )
+    finally:
+        if started_ns is not None:
+            _add_profile_duration(args, "_profile_compile_link_ns", started_ns)
+    if rc != 0:
+        err_text = err_msg or "Unknown Rust compilation error"
+        _remember_compile_failure(args, err_msg=err_text, compile_cmd=compile_cmd)
+        print(f"Rust compilation failed: {compile_cmd} {err_text}", file=sys.stderr)
+        return -1, None
+    return 0, None
 
 
 def compile_direct(args: argparse.Namespace, output_path: str) -> tuple[int, str | None]:
@@ -1168,15 +1195,15 @@ def main() -> int:
         default=None,
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--source-language", choices=("c", "c++"), default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--source-language", choices=("c", "c++", "rust"), default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.source_language is None:
         try:
             args.source_language = language_for_path(args.source).name
         except ValueError as exc:
             parser.error(str(exc))
-    if args.source_language == "c" and args.fdp_trace:
-        parser.error("C harnesses use direct input, not C++ FDP replay")
+    if args.source_language in {"c", "rust"} and args.fdp_trace:
+        parser.error(f"{args.source_language} harnesses use direct input, not C++ FDP replay")
     args._reference_traces = None
     if args.require_reference_traces:
         if not args.symbolize:
@@ -1217,7 +1244,9 @@ def main() -> int:
     args._profile_build_started_ns = time.perf_counter_ns()
 
     try:
-        if args.amortized_runner_socket:
+        if source_language(args) == RUST:
+            compile_status, object_path = compile_rust(args, output_path)
+        elif args.amortized_runner_socket:
             if args.direct:
                 print("Compilation failed: amortized linking does not support direct mode", file=sys.stderr)
                 return _finalize_result(args, -1)
@@ -1241,6 +1270,8 @@ def main() -> int:
         use_symbolize = args.symbolize
 
         env = runtime_library_env(args.link_flags, symbolize=use_symbolize)
+        if source_language(args) == RUST:
+            env["RUST_BACKTRACE"] = "full"
         if use_symbolize:
             env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=True)
             env["UBSAN_OPTIONS"] = "exitcode=77:symbolize=1:halt_on_error=1:print_stacktrace=1"

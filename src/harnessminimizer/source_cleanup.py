@@ -3,7 +3,7 @@
 from collections import deque
 from pathlib import Path
 
-from harnessminimizer.source_language import language_for_path
+from harnessminimizer.source_language import RUST, language_for_path
 
 
 _WHITESPACE = frozenset(b" \t\r\f\v")
@@ -12,12 +12,20 @@ _WHITESPACE = frozenset(b" \t\r\f\v")
 def clean_reduced_source(path: str) -> None:
     """Delete whole comment lines, leaving all existing blank lines untouched.
 
-    Tree-sitter distinguishes comments from comment-shaped text in raw strings.
+    Tree-sitter distinguishes comments from comment-shaped text in raw strings
+    for C/C++, while Rust uses a dedicated pure-Python comment/string scanner.
     A block comment touching code on either end is kept intact, including its
     interior lines, so deleting a line cannot leave a stray ``/*`` or ``*/``.
     """
     source_path = Path(path)
     source = source_path.read_bytes()
+    language = language_for_path(source_path)
+    if language == RUST:
+        from harnessminimizer.rust_support import strip_rust_comment_lines
+        result = strip_rust_comment_lines(source)
+        if result != source:
+            source_path.write_bytes(result)
+        return
     lines = source.split(b"\n")
     final_newline = source.endswith(b"\n")
     if final_newline:
@@ -25,7 +33,7 @@ def clean_reduced_source(path: str) -> None:
     if not lines:
         return
 
-    tree = language_for_path(source_path).parser().parse(source)
+    tree = language.parser().parse(source)
     comment_bytes = bytearray(len(source))
     line_comments: list[list[int]] = [[] for _ in lines]
     comments: list[tuple[int, int]] = []

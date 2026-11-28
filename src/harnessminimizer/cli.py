@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "harness",
-        help="Path to the original harness source file (.c/.cc/.cpp).",
+        help="Path to the original harness source file (.c/.cc/.cpp/.rs).",
     )
     parser.add_argument(
         "--tool", choices=TOOL_CHOICES, default="treereduce",

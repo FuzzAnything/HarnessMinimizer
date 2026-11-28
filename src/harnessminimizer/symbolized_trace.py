@@ -13,6 +13,9 @@ TRACE_SET_ENV = "HARNESSMINIMIZER_SYMBOLIZED_TRACE_SET"
 STACK_FRAME_COUNT_PATTERN = re.compile(r"^\s*#\d+\s+0x[0-9a-fA-F]+\b")
 SOURCE_LOCATION_PATTERN = re.compile(r"(/[^:\s\)]+):(\d+)(?::(\d+))?")
 LLVMFuzzerTestOneInput_PATTERN = re.compile(r"\bLLVMFuzzerTestOneInput\b")
+_RUST_HARNESS_STOP_PATTERN = re.compile(
+    r"\b(?:__hm_run|__hm_macro_entry|__fuzzagent_run|__fuzzagent_macro_entry)\b"
+)
 MEMORY_ADDRESS_PATTERN = re.compile(r"\b0x[0-9a-fA-F]+\b")
 _SIGNATURE_PART_PATTERN = re.compile(
     rf"(?:(?<!\S)[^:\s()/]+)?{SOURCE_LOCATION_PATTERN.pattern}|"
@@ -112,12 +115,20 @@ def extract_stack_trace(output: str, harness_path: str | None = None) -> str | N
                 break
             if LLVMFuzzerTestOneInput_PATTERN.search(line):
                 break
+            if _RUST_HARNESS_STOP_PATTERN.search(line):
+                break
             if is_runtime_frame(line):
                 continue
             frames.append(re.sub(r"^\s*#\d+", f"    #{len(frames)}", line))
         elif in_first_trace:
             break
-    return "\n".join(frames) if frames else None
+    if frames:
+        return "\n".join(frames)
+    from harnessminimizer.rust_support import extract_rust_backtrace_frames
+    rust_frames = extract_rust_backtrace_frames(
+        output, harness_path=harness_path, stop_at_harness=True
+    )
+    return "\n".join(rust_frames) if rust_frames else None
 
 
 @dataclass(frozen=True)

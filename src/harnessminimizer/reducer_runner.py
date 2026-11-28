@@ -9,6 +9,7 @@ import re
 import shutil
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -25,7 +26,7 @@ from harnessminimizer.crash_evidence import (
 
 from harnessminimizer.dynamic_slicer import CoverageMap, slice_source_by_coverage
 from harnessminimizer.pch_prefix import split_source_for_pch
-from harnessminimizer.source_language import C, CPP, SourceLanguage, language_for_path, current_language
+from harnessminimizer.source_language import C, CPP, RUST, SourceLanguage, language_for_path, current_language
 from harnessminimizer.reduction_profile import write_profile_summary
 from harnessminimizer.source_alias import (
     SOURCE_ALIASES_MARKER, SourceAliases, matches_crash_location, matches_crash_pattern,
@@ -2237,13 +2238,29 @@ def reference_harness_compile_command(
     link_flags: str | None,
     output_bin: str,
 ) -> list[str]:
+    language = language_for_path(harness_path)
+    if language == RUST:
+        return [
+            sys.executable,
+            "-m",
+            "harnessminimizer.rust_support",
+            "compile",
+            "--source",
+            harness_path,
+            "--output",
+            output_bin,
+            "--work-dir",
+            get_work_dir(),
+            f"--compile-flags={compile_flags or ''}",
+            f"--link-flags={link_flags or ''}",
+        ]
     return [
-        language_for_path(harness_path).compiler,
+        language.compiler,
         "-fsanitize=address,fuzzer,undefined",
         *PHASE3_DIRECT_OPT_FLAGS,
         *PHASE3_WARNING_FLAGS,
         *_split_flags(compile_flags),
-        *language_for_path(harness_path).source_args(harness_path),
+        *language.source_args(harness_path),
         "-o",
         output_bin,
         *_split_flags(link_flags),
@@ -2258,6 +2275,14 @@ def check_harness_compilation(
     print("[+] Checking harness compilation...")
     work_dir = get_work_dir()
     output_bin = os.path.join(work_dir, "poc.out")
+    if language_for_path(harness_path) == RUST:
+        from harnessminimizer.rust_support import compile_rust_reference
+
+        compile_rust_reference(
+            harness_path, compile_flags, link_flags, output_bin, work_dir
+        )
+        print("[+] Rust harness compiles successfully.")
+        return
     compile_cmd = reference_harness_compile_command(
         harness_path,
         compile_flags,
@@ -2358,12 +2383,11 @@ def _source_location_matches_harness(location: str, harness_path: str | None) ->
 
 
 def extract_first_sanitizer_stack_trace(output: str) -> str | None:
-    """Extract the first contiguous sanitizer-style stack trace block.
+    """Extract the first contiguous sanitizer-style or Rust stack trace block.
 
     This helper is used for frame-depth counting and does not truncate at
     harness frames. It recognizes the common sanitizer frame shape
-    ``#N 0x...`` and therefore works for both symbolized and unsymbolized
-    sanitizer output, including ASan and UBSan traces that use that format.
+    ``#N 0x...`` as well as Rust ``stack backtrace:`` output.
     """
     frames: list[str] = []
     in_first_trace = False
@@ -2373,23 +2397,141 @@ def extract_first_sanitizer_stack_trace(output: str) -> str | None:
             frames.append(line)
         elif in_first_trace:
             break
-    if not frames:
-        return None
-    return "\n".join(frames)
+    if frames:
+        return "\n".join(frames)
+    from harnessminimizer.rust_support import extract_rust_backtrace_frames
+
+    rust_frames = extract_rust_backtrace_frames(output, stop_at_harness=False)
+    return "\n".join(rust_frames) if rust_frames else None
+
+
+_GENERIC_ABORT_FRAME_TOKENS = (
+    " in __pthread_kill_implementation ",
+    " in __pthread_kill_internal ",
+    " in pthread_kill ",
+    " in raise ",
+    " in __GI_raise ",
+    " in gsignal ",
+    " in __GI_gsignal ",
+    " in abort ",
+    " in __GI_abort ",
+    " in __libc_abort ",
+    " in __libc_fatal ",
+    " in __assert_fail ",
+)
+
+_GENERIC_ABORT_LOCATION_SUFFIXES = (
+    "/pthread_kill.c",
+    "/raise.c",
+    "/gsignal.c",
+    "/abort.c",
+    "/assert.c",
+    "/libc_fatal.c",
+)
+
+_GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS = (
+    " in __asan_memset ",
+    " in __asan_memcpy ",
+    " in __asan_memmove ",
+    " in __interceptor_memset ",
+    " in __interceptor_memcpy ",
+    " in __interceptor_memmove ",
+)
+
+_GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES = (
+    "/asan_interceptors_memintrinsics.cpp",
+    "/sanitizer_common_interceptors_memintrinsics.inc",
+    "/asan_malloc_linux.cpp",
+    "/asan_malloc.cpp",
+    "/asan_new_delete.cpp",
+    "/sanitizer_allocator_dlsym.h",
+    "/sanitizer_allocator.cpp",
+    "/sanitizer_allocator.h",
+)
+
+
+def _matches_location_suffix(location_path: str, suffixes: tuple[str, ...]) -> bool:
+    normalized = location_path.replace("\\", "/")
+    return any(
+        normalized == suffix.lstrip("/") or normalized.endswith(suffix)
+        for suffix in suffixes
+    )
+
+
+def _is_generic_abort_frame(line: str, location: str) -> bool:
+    location_path = location.split(":", 1)[0]
+    return any(token in line for token in _GENERIC_ABORT_FRAME_TOKENS) or _matches_location_suffix(
+        location_path, _GENERIC_ABORT_LOCATION_SUFFIXES
+    )
+
+
+def _is_generic_sanitizer_wrapper_frame(line: str, location: str) -> bool:
+    location_path = location.split(":", 1)[0]
+    return any(token in line for token in _GENERIC_SANITIZER_WRAPPER_FRAME_TOKENS) or _matches_location_suffix(
+        location_path, _GENERIC_SANITIZER_WRAPPER_LOCATION_SUFFIXES
+    )
+
+
+_ABSOLUTE_SOURCE_LOCATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])(/[^:\s\)]+):(\d+)(?::(\d+))?"
+)
+_RUST_SOURCE_LOCATION_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_./-])((?:\.\.?/)*[A-Za-z0-9_./-]+\.rs):(\d+)(?::(\d+))?"
+)
+
+
+def _find_frame_source_location(line: str) -> str | None:
+    match = _ABSOLUTE_SOURCE_LOCATION_PATTERN.search(line)
+    if match:
+        return match.group(0)
+    rust_match = _RUST_SOURCE_LOCATION_PATTERN.search(line)
+    if rust_match:
+        return rust_match.group(0)
+    return None
+
+
+def _is_rust_runtime_line(line: str, location: str) -> bool:
+    from harnessminimizer.rust_support import is_rust_runtime_frame
+
+    func = ""
+    if " in " in line:
+        func = line.split(" in ", 1)[1].split(" ", 1)[0]
+    return is_rust_runtime_frame(func, location)
 
 
 def extract_symbolized_crash_location(
     output: str,
     harness_path: str | None = None,
 ) -> str | None:
-    """Return the best source location from the symbolized pre-harness trace."""
+    """Return the best target source location from the symbolized pre-harness trace.
+
+    Traces that contain only generic libc/abort, sanitizer wrapper, or Rust
+    runtime frames provide insufficient target crash evidence and return None.
+    """
     trace = extract_stack_trace(output, harness_path=harness_path)
-    if not trace:
-        return None
-    for line in trace.splitlines():
-        match = SOURCE_LOCATION_PATTERN.search(line)
-        if match:
-            return match.group(0)
+    if trace:
+        for line in trace.splitlines():
+            location = _find_frame_source_location(line)
+            if location:
+                if (
+                    not _is_generic_abort_frame(line, location)
+                    and not _is_generic_sanitizer_wrapper_frame(line, location)
+                    and not _is_rust_runtime_line(line, location)
+                    and not is_runtime_frame(line)
+                ):
+                    return location
+
+    from harnessminimizer.rust_support import extract_rust_panic_location, is_rust_runtime_frame
+
+    panic_loc = extract_rust_panic_location(output)
+    if (
+        panic_loc
+        and not _frame_matches_harness_source(panic_loc, harness_path)
+        and not _is_generic_abort_frame("", panic_loc)
+        and not _is_generic_sanitizer_wrapper_frame("", panic_loc)
+        and not is_rust_runtime_frame("", panic_loc)
+    ):
+        return panic_loc
     return None
 
 
@@ -2410,13 +2552,24 @@ def extract_harness_crash_location(
         ):
             return location_match.group(0)
 
+    from harnessminimizer.rust_support import extract_rust_panic_location
+
+    panic_loc = extract_rust_panic_location(output)
+    if panic_loc and _frame_matches_harness_source(panic_loc, harness_path):
+        return panic_loc
+
     trace = extract_first_sanitizer_stack_trace(output)
     if not trace:
         return None
 
     for line in trace.splitlines():
-        match = SOURCE_LOCATION_PATTERN.search(line)
-        location = match.group(0) if match else ""
+        location = _find_frame_source_location(line) or ""
+        if location and (
+            _is_generic_abort_frame(line, location)
+            or _is_generic_sanitizer_wrapper_frame(line, location)
+            or _is_rust_runtime_line(line, location)
+        ):
+            continue
         if _frame_matches_harness_source(line, harness_path):
             return location or line.strip()
         if is_runtime_frame(line):
@@ -2582,7 +2735,12 @@ def reference_trace_environment(environment: dict[str, str] | None = None) -> di
 
 def get_last_interesting_file(language: SourceLanguage | None = None) -> str:
     language = language or current_language()
-    name = "last_interesting.c" if language == C else LAST_INTERESTING_FILE_NAME
+    if language == C:
+        name = "last_interesting.c"
+    elif language == RUST:
+        name = "last_interesting.rs"
+    else:
+        name = LAST_INTERESTING_FILE_NAME
     return os.path.join(get_work_dir(), name)
 
 
@@ -2889,6 +3047,7 @@ def _run_harness_for_crash_reference(
     symbolized = "1" if symbolize else "0"
     env["UBSAN_OPTIONS"] = f"exitcode=77:halt_on_error=1:print_stacktrace=1:symbolize={symbolized}"
     env["ASAN_OPTIONS"] = sanitizer_asan_options(symbolize=symbolize)
+    env["RUST_BACKTRACE"] = "full"
     return run_command(
         cmd,
         env=env,
@@ -2975,7 +3134,12 @@ def _probe_reference_stack_depth_stability(
     started_ns = time.perf_counter_ns()
     probe_dir = Path(get_work_dir()) / "stack_depth_stability_probes"
     probe_dir.mkdir(parents=True, exist_ok=True)
-    for run_index in range(1, STACK_DEPTH_STABILITY_RUNS + 1):
+    stability_runs = (
+        min(3, STACK_DEPTH_STABILITY_RUNS)
+        if Path(harness_path).suffix == ".rs"
+        else STACK_DEPTH_STABILITY_RUNS
+    )
+    for run_index in range(1, stability_runs + 1):
         output_bin = probe_dir / f"symbolize{int(symbolize)}_{run_index}.out"
         compile_proc = run_command(
             reference_harness_compile_command(
@@ -3100,7 +3264,12 @@ def _collect_symbolized_reference_traces(
         record(initial_output)
         probe_dir = Path(get_work_dir()) / "stack_depth_stability_probes"
         probe_dir.mkdir(parents=True, exist_ok=True)
-        for run_index in range(1, STACK_DEPTH_STABILITY_RUNS + 1):
+        stability_runs = (
+            min(3, STACK_DEPTH_STABILITY_RUNS)
+            if Path(harness_path).suffix == ".rs"
+            else STACK_DEPTH_STABILITY_RUNS
+        )
+        for run_index in range(1, stability_runs + 1):
             failed_run = run_index
             output_bin = probe_dir / f"symbolize1_{run_index}.out"
             try:
@@ -3354,7 +3523,19 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
     # missing SUMMARY also cannot change the identity during evidence retries.
     asan_match = ASAN_SUMMARY_PATTERN.search(output) or ASAN_ERROR_PATTERN.search(output)
     if asan_match:
-        error_type = re.escape(asan_match.group(1))
+        raw_error_type = asan_match.group(1)
+        if raw_error_type.upper() == "ABRT":
+            # Safe Rust panics compiled with -C panic=abort under
+            # ASAN_OPTIONS=handle_abort=1 emit both a specific Rust panic
+            # message and a generic "AddressSanitizer: ABRT" summary. Prefer
+            # the specific Rust panic signature so reduction preserves the exact
+            # panic location/reason, while real ASan memory errors remain primary.
+            from harnessminimizer.rust_support import extract_rust_panic_signature
+
+            rust_panic_sig = extract_rust_panic_signature(output)
+            if rust_panic_sig:
+                return rust_panic_sig
+        error_type = re.escape(raw_error_type)
         return rf"(?:SUMMARY|ERROR):\s*AddressSanitizer:\s*{error_type}(?![\w-])"
 
     leak_match = LEAK_PATTERN.search(output)
@@ -3376,6 +3557,12 @@ def _extract_crash_signature_from_output(output: str) -> str | None:
     libfuzzer_signal_match = LIBFUZZER_SIGNAL_PATTERN.search(output)
     if libfuzzer_signal_match:
         return normalize_crash_signature(libfuzzer_signal_match.group(1))
+
+    from harnessminimizer.rust_support import extract_rust_panic_signature
+
+    rust_panic_sig = extract_rust_panic_signature(output)
+    if rust_panic_sig:
+        return rust_panic_sig
 
     return None
 
@@ -3830,6 +4017,11 @@ def run_treereducer(
     if crash_input:
         crash_input = str(Path(crash_input).resolve())
     link_flags = absolutize_link_flags(link_flags)
+    if language == RUST:
+        compilation_mode = PHASE3_DIRECT
+        amortize_link = False
+        if tool == "treereduce":
+            tool = "perses"
     validate_compilation_mode(compilation_mode)
     if not 1 <= jobs <= MAX_TREEREDUCE_JOBS:
         raise ValueError(
@@ -3926,6 +4118,8 @@ def run_treereducer(
         cmd.extend(["--last-interesting-file", get_last_interesting_file(language)])
     if language == C:
         cmd.append("--source-language=c")
+    elif language == RUST:
+        cmd.append("--source-language=rust")
     cmd.extend(pch_tester_args(pch_artifacts, compilation_mode))
     cmd.extend(auto_var_init_tester_args(auto_var_init_pattern))
     cmd.extend(debug_tester_args("reduction_candidate"))
@@ -4146,6 +4340,16 @@ def run_treereducer(
 
 
 def format_reduced_harness(reduced_harness_path: str) -> None:
+    if language_for_path(reduced_harness_path) == RUST:
+        rustfmt = shutil.which("rustfmt")
+        if rustfmt:
+            print(f"Formatting reduced Rust harness with rustfmt: {reduced_harness_path}")
+            run_command(
+                [rustfmt, reduced_harness_path],
+                "Failed to format reduced Rust harness with rustfmt",
+                ignore_errors=True,
+            )
+        return
     print(f"Formatting reduced harness with clang-format: {reduced_harness_path}")
     run_command(
         ["clang-format", "-i", "--style=LLVM", reduced_harness_path],
