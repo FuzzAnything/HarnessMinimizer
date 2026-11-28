@@ -356,8 +356,10 @@ class TestRustBuildScaffoldingAndCompilation(unittest.TestCase):
         seen_cmds: list[list[str]] = []
 
         def fake_rustc(cmd, **_kwargs):
+            if Path(cmd[0]).name == "rustc" and "-vV" in cmd:
+                return SimpleNamespace(returncode=0, stdout="rustc 1.82.0\nhost: x86_64-unknown-linux-gnu\n", stderr="")
             seen_cmds.append(list(cmd))
-            if cmd[0] == "rustc":
+            if Path(cmd[0]).name == "rustc":
                 out_path = cmd[cmd.index("-o") + 1]
                 Path(out_path).write_bytes(b"ELF-RUSTC")
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -683,7 +685,7 @@ class TestRustApiPipelineMocked(unittest.TestCase):
             out_bin = work / "poc_driver"
             compile_flags = (
                 f"--rust-project-dir={proj} --rust-target-dir={target_dir} "
-                f"--rust-target-triple=x86_64-unknown-linux-gnu"
+                f"--rust-target=x86_64-unknown-linux-gnu"
             )
 
             # Case 1: --offline succeeds on first attempt and Cargo.toml pins arbitrary 1.4.2
